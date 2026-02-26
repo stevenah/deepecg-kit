@@ -4,15 +4,7 @@ import argparse
 import sys
 from typing import Optional
 
-from deepecgkit.cli.commands import (
-    evaluate,
-    list_datasets,
-    list_models,
-    predict,
-    resume,
-    show_info,
-    train,
-)
+import deepecgkit.cli as _cli
 from deepecgkit.cli.config import load_config
 from deepecgkit.cli.logger import CLILogger
 from deepecgkit.cli.registry import DATASET_NAMES, MODEL_NAMES
@@ -386,10 +378,10 @@ Note: Datasets are automatically downloaded when first used.
         for key, value in config.get("train", {}).items():
             if key in train_args and train_args[key] == parser.get_default(key):
                 train_args[key] = value
-        return train(logger=logger, **train_args)
+        return _cli.train(logger=logger, **train_args)
 
     elif args.command == "evaluate":
-        return evaluate(
+        return _cli.evaluate(
             checkpoint=args.checkpoint,
             dataset_name=args.dataset,
             data_dir=args.data_dir,
@@ -403,7 +395,7 @@ Note: Datasets are automatically downloaded when first used.
         )
 
     elif args.command == "predict":
-        return predict(
+        return _cli.predict(
             checkpoint=args.checkpoint,
             input_path=args.input,
             output_path=args.output,
@@ -413,7 +405,7 @@ Note: Datasets are automatically downloaded when first used.
         )
 
     elif args.command == "resume":
-        return resume(
+        return _cli.resume(
             checkpoint=args.checkpoint,
             epochs=args.epochs,
             output_dir=args.output_dir,
@@ -424,14 +416,14 @@ Note: Datasets are automatically downloaded when first used.
         )
 
     elif args.command == "info":
-        return show_info(model_name=args.model, logger=logger)
+        return _cli.show_info(model_name=args.model, logger=logger)
 
     elif args.command == "list-models":
-        list_models()
+        _cli.list_models()
         return 0
 
     elif args.command == "list-datasets":
-        list_datasets()
+        _cli.list_datasets()
         return 0
 
     return 0

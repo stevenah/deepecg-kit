@@ -26,6 +26,7 @@ from deepecgkit.cli.commands import (
 from deepecgkit.cli.config import load_config
 from deepecgkit.cli.logger import CLILogger
 from deepecgkit.cli.main import main
+from deepecgkit.training import ECGLitModel
 from deepecgkit.cli.registry import (
     DATASET_INPUT_CHANNELS,
     DATASET_NAMES,
@@ -33,6 +34,8 @@ from deepecgkit.cli.registry import (
     MODEL_DESCRIPTIONS,
     MODEL_NAMES,
     MODEL_WEIGHTS,
+    _get_dataset_registry,
+    _get_model_registry,
 )
 
 __all__ = [
@@ -43,6 +46,9 @@ __all__ = [
     "MODEL_NAMES",
     "MODEL_WEIGHTS",
     "CLILogger",
+    "ECGLitModel",
+    "_get_dataset_registry",
+    "_get_model_registry",
     "evaluate",
     "list_datasets",
     "list_models",

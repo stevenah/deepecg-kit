@@ -9,8 +9,8 @@ import pandas as pd
 import torch
 import wfdb
 
+import deepecgkit.cli as _cli
 from deepecgkit.cli.logger import CLILogger
-from deepecgkit.training import ECGLitModel
 
 
 def predict(
@@ -36,7 +36,7 @@ def predict(
 
     try:
         logger.info(f"Loading model from {checkpoint}...")
-        lit_model = ECGLitModel.load_from_checkpoint(checkpoint)
+        lit_model = _cli.ECGLitModel.load_from_checkpoint(checkpoint)
         lit_model.eval()
 
         logger.info(f"Loading input data from {input_path}...")
