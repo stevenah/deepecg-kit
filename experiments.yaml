@@ -1,0 +1,62 @@
+defaults:
+  epochs: 50
+  batch_size: 32
+  learning_rate: 0.001
+  val_split: 0.2
+  test_split: 0.1
+  num_workers: 4
+  accelerator: auto
+  devices: 1
+  early_stopping_patience: 10
+  seed: 42
+
+experiments:
+  # ──────────────────────────────────────────────
+  # Dataset: ptbxl (12-lead, 5 superclasses)
+  # Baseline architecture comparison (Table III)
+  # ──────────────────────────────────────────────
+  - model: simple-cnn
+    dataset: ptbxl
+    multi_label: true
+
+  - model: resnet
+    dataset: ptbxl
+    multi_label: true
+
+  - model: se-resnet
+    dataset: ptbxl
+    multi_label: true
+
+  - model: xresnet
+    dataset: ptbxl
+    multi_label: true
+
+  - model: inception-time
+    dataset: ptbxl
+    multi_label: true
+
+  - model: tcn
+    dataset: ptbxl
+    multi_label: true
+
+  - model: kanres
+    dataset: ptbxl
+    multi_label: true
+
+  - model: lstm
+    dataset: ptbxl
+    multi_label: true
+
+  - model: transformer
+    dataset: ptbxl
+    multi_label: true
+
+  - model: deep-res-cnn
+    dataset: ptbxl
+    sampling_rate: 100
+    learning_rate: 0.0005
+    epochs: 100
+    early_stopping_patience: 6
+    val_split: 0.12
+    multi_label: true
+    normalization: none
