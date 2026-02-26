@@ -256,7 +256,7 @@ def main():
         else:
             results.append({"label": label, "status": "FAIL", "duration": elapsed})
             print(f"\n  {label} -> FAIL ({format_duration(elapsed)})")
-            print(f"\n  Stopping. Fix the issue and re-run with --resume to continue.")
+            print("\n  Stopping. Fix the issue and re-run with --resume to continue.")
             print(f"  Progress saved: {_state_path(args.config)}")
             sys.exit(1)
 

@@ -19,8 +19,8 @@ logger = logging.getLogger(__name__)
 # Unified 4-class scheme:     Normal=0, AF=1, AFL=2, J=3
 # "Other" (O) and "Noisy" (~) have no unified equivalent → dropped
 _PHYSIONET2017_LABEL_REMAP = {
-    0: 0,     # N (Normal) → Normal
-    1: 1,     # A (AF) → AF
+    0: 0,  # N (Normal) → Normal
+    1: 1,  # A (AF) → AF
     2: None,  # O (Other) → drop
     3: None,  # ~ (Noisy) → drop
 }
@@ -28,9 +28,9 @@ _PHYSIONET2017_LABEL_REMAP = {
 # Binary scheme: Non-AF=0, AF=1
 # "Other" maps to Non-AF, "Noisy" is still dropped
 _PHYSIONET2017_BINARY_REMAP = {
-    0: 0,     # N (Normal) → Non-AF
-    1: 1,     # A (AF) → AF
-    2: 0,     # O (Other) → Non-AF
+    0: 0,  # N (Normal) → Non-AF
+    1: 1,  # A (AF) → AF
+    2: 0,  # O (Other) → Non-AF
     3: None,  # ~ (Noisy) → drop
 }
 
@@ -54,8 +54,7 @@ class _RemappedDataset(Dataset):
         # Filter out samples whose labels map to None
         if hasattr(dataset, "labels"):
             self._indices = [
-                i for i, lbl in enumerate(dataset.labels)
-                if label_map.get(int(lbl)) is not None
+                i for i, lbl in enumerate(dataset.labels) if label_map.get(int(lbl)) is not None
             ]
             self.labels = [label_map[int(dataset.labels[i])] for i in self._indices]
         else:
@@ -229,10 +228,7 @@ class UnifiedAFDataset(BaseECGDataset):
                     )
                     dropped = original_len - len(dataset)
                     if dropped > 0 and self.verbose:
-                        print(
-                            f"  Dropped {dropped} samples with unmappable "
-                            f"labels (Other/Noisy)"
-                        )
+                        print(f"  Dropped {dropped} samples with unmappable labels (Other/Noisy)")
 
                 self.datasets.append(dataset)
                 self.dataset_sizes.append(len(dataset))
