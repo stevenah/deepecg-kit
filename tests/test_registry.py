@@ -19,16 +19,21 @@ from deepecgkit.registry import (
 class TestModelRegistry:
     def test_all_models_registered(self):
         names = get_model_names()
-        assert len(names) == 16
+        assert len(names) == 21
         expected = [
             "afmodel",
+            "convnext-v2",
+            "crnn",
             "deep-res-cnn",
+            "dualnet",
             "fcn-wang",
             "gru",
             "inception-time",
             "kanres",
             "kanres-deep",
             "lstm",
+            "mamba",
+            "medformer",
             "resnet",
             "resnet-wang",
             "se-resnet",

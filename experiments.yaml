@@ -60,3 +60,28 @@ experiments:
     val_split: 0.12
     multi_label: true
     normalization: none
+
+  # ──────────────────────────────────────────────
+  # Additional architectures (Table IV)
+  # ──────────────────────────────────────────────
+  - model: crnn
+    dataset: ptbxl
+    multi_label: true
+
+  - model: convnext-v2
+    dataset: ptbxl
+    multi_label: true
+
+  - model: dualnet
+    dataset: ptbxl
+    multi_label: true
+
+  - model: medformer
+    dataset: ptbxl
+    multi_label: true
+    learning_rate: 0.0005
+
+  - model: mamba
+    dataset: ptbxl
+    multi_label: true
+    learning_rate: 0.0005
