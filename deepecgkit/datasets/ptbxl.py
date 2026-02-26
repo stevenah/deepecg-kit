@@ -35,9 +35,10 @@ class PTBXLDataset(BaseECGDataset):
     The dataset supports multiple diagnostic classification tasks:
     - Superclass: 5 diagnostic superclasses (NORM, MI, STTC, CD, HYP)
     - Subclass: 23 diagnostic subclasses
+    - Diagnostic: All individual diagnostic SCP codes (~44 statements)
     - Form: 19 form statements
     - Rhythm: 12 rhythm statements
-    - All: All 71 statements
+    - All: All SCP statement codes (~71 statements)
 
     Reference:
         Wagner P, Strodthoff N, Bousseljot RD, Kreiseler D, Lunze FI, Samek W, Schaeffter T.
@@ -153,8 +154,8 @@ class PTBXLDataset(BaseECGDataset):
             data_dir: Directory where the dataset is stored or will be downloaded.
                      If None, uses ~/.deepecgkit/datasets/ptbxldataset
             sampling_rate: Target sampling rate for the ECG signals (Hz)
-            task: Classification task - one of "superclass", "subclass", "form",
-                  "rhythm", or "all"
+            task: Classification task - one of "superclass", "subclass",
+                  "diagnostic", "form", "rhythm", or "all"
             use_high_resolution: Whether to use 500Hz (True) or 100Hz (False) recordings
             folds: List of folds to include (1-10). None means all folds.
                    Recommended: folds 1-8 for training, 9 for validation, 10 for testing
@@ -167,7 +168,7 @@ class PTBXLDataset(BaseECGDataset):
             download: Whether to download the dataset if it doesn't exist
             verbose: Whether to print progress information
         """
-        valid_tasks = ["superclass", "subclass", "form", "rhythm", "all"]
+        valid_tasks = ["superclass", "subclass", "diagnostic", "form", "rhythm", "all"]
         if task not in valid_tasks:
             raise ValueError(f"task must be one of {valid_tasks}, got '{task}'")
 
@@ -354,14 +355,25 @@ class PTBXLDataset(BaseECGDataset):
             return self.CLASS_LABELS_FORM
         elif self.task == "rhythm":
             return self.CLASS_LABELS_RHYTHM
-        else:
+        elif self.task == "diagnostic":
+            if self.scp_statements is not None:
+                diag = self.scp_statements[self.scp_statements.diagnostic == 1.0]
+                return sorted(diag.index.tolist())
+            raise ValueError(
+                "scp_statements.csv is required for the 'diagnostic' task. "
+                "Ensure the dataset is fully downloaded."
+            )
+        else:  # all
+            if self.scp_statements is not None:
+                return sorted(self.scp_statements.index.tolist())
+            # Fallback: union of hardcoded lists
             all_labels = (
                 self.CLASS_LABELS_SUPERCLASS
                 + self.CLASS_LABELS_SUBCLASS
                 + self.CLASS_LABELS_FORM
                 + self.CLASS_LABELS_RHYTHM
             )
-            return list(set(all_labels))
+            return sorted(set(all_labels))
 
     def _extract_labels(self, scp_codes: Dict[str, float], label_columns: List[str]) -> np.ndarray:
         """Extract labels from SCP codes."""

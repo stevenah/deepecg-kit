@@ -161,6 +161,19 @@ class MITBIHAFDBDataset(BaseECGDataset):
                 shutil.move(str(item), str(dest))
             nested_dir.rmdir()
 
+        # PhysioNet zips may nest records inside a files/ subdirectory
+        files_dir = self.data_dir / "files"
+        if files_dir.is_dir() and any(files_dir.glob("*.hea")):
+            for item in files_dir.iterdir():
+                dest = self.data_dir / item.name
+                if dest.exists():
+                    if dest.is_dir():
+                        shutil.rmtree(dest)
+                    else:
+                        dest.unlink()
+                shutil.move(str(item), str(dest))
+            files_dir.rmdir()
+
         zip_path.unlink(missing_ok=True)
 
         if self.verbose:
@@ -169,6 +182,11 @@ class MITBIHAFDBDataset(BaseECGDataset):
     def _load_data(self):
         if self.verbose:
             print("Loading MIT-BIH AFDB data...")
+
+        # PhysioNet zips may nest records inside a files/ subdirectory
+        files_dir = self.data_dir / "files"
+        if not any(self.data_dir.glob("*.hea")) and files_dir.is_dir() and any(files_dir.glob("*.hea")):
+            self.data_dir = files_dir
 
         if not any(self.data_dir.glob("*.hea")):
             raise FileNotFoundError(
