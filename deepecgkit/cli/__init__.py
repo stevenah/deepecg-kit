@@ -26,7 +26,6 @@ from deepecgkit.cli.commands import (
 from deepecgkit.cli.config import load_config
 from deepecgkit.cli.logger import CLILogger
 from deepecgkit.cli.main import main
-from deepecgkit.training import ECGLitModel
 from deepecgkit.cli.registry import (
     DATASET_INPUT_CHANNELS,
     DATASET_NAMES,
@@ -37,6 +36,7 @@ from deepecgkit.cli.registry import (
     _get_dataset_registry,
     _get_model_registry,
 )
+from deepecgkit.training import ECGLitModel
 
 __all__ = [
     "DATASET_INPUT_CHANNELS",
