@@ -2,15 +2,20 @@
 Run multiple training experiments defined in a YAML config file.
 
 Each experiment is executed as a separate `deepecg train` subprocess,
-identical to running the CLI manually.
+identical to running the CLI manually. Stops on first failure; use
+--resume to continue from where it left off.
 
 Usage:
     python scripts/run_experiments.py                       # uses experiments.yaml
     python scripts/run_experiments.py --config my.yaml      # custom config
     python scripts/run_experiments.py --dry-run              # print commands without running
+    python scripts/run_experiments.py --resume               # resume after fixing a failure
+    python scripts/run_experiments.py --reset                # clear saved progress
 """
 
 import argparse
+import hashlib
+import json
 import subprocess
 import sys
 import time
@@ -71,6 +76,35 @@ def load_experiments(config_path: str) -> list:
         experiments.append({"model": model, "dataset": dataset, **params})
 
     return experiments
+
+
+def _state_path(config_path: str) -> Path:
+    """Deterministic state file path derived from the config file."""
+    tag = hashlib.md5(str(Path(config_path).resolve()).encode()).hexdigest()[:8]
+    return Path(config_path).resolve().parent / f".experiments_state_{tag}.json"
+
+
+def _load_state(config_path: str) -> set[int]:
+    """Return set of 0-based indices that already completed successfully."""
+    path = _state_path(config_path)
+    if not path.exists():
+        return set()
+    data = json.loads(path.read_text())
+    return set(data.get("completed", []))
+
+
+def _save_state(config_path: str, completed: set[int]) -> None:
+    path = _state_path(config_path)
+    path.write_text(json.dumps({"completed": sorted(completed)}, indent=2) + "\n")
+
+
+def _clear_state(config_path: str) -> None:
+    path = _state_path(config_path)
+    if path.exists():
+        path.unlink()
+        print(f"Cleared progress state: {path}")
+    else:
+        print("No progress state to clear.")
 
 
 def build_command(exp: dict) -> list[str]:
@@ -147,7 +181,21 @@ def main():
         action="store_true",
         help="Print commands without running them",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume from last failure, skipping completed experiments",
+    )
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="Clear saved progress and exit",
+    )
     args = parser.parse_args()
+
+    if args.reset:
+        _clear_state(args.config)
+        return
 
     experiments = load_experiments(args.config)
 
@@ -155,13 +203,21 @@ def main():
         print("No experiments defined in config.")
         return
 
+    completed = _load_state(args.config) if args.resume else set()
+    remaining = sum(1 for i in range(len(experiments)) if i not in completed)
+
     print(f"{'=' * 60}")
-    print(f"  {len(experiments)} experiments loaded")
+    print(f"  {len(experiments)} experiments loaded", end="")
+    if completed:
+        print(f" ({len(completed)} already done, {remaining} remaining)")
+    else:
+        print()
     print(f"{'=' * 60}")
 
     for i, exp in enumerate(experiments, 1):
         cmd = build_command(exp)
-        print(f"  [{i}] {' '.join(cmd)}")
+        skip = " [SKIP]" if (i - 1) in completed else ""
+        print(f"  [{i}] {' '.join(cmd)}{skip}")
 
     print()
 
@@ -173,7 +229,14 @@ def main():
     total_start = time.time()
 
     for i, exp in enumerate(experiments, 1):
+        idx = i - 1
         label = f"[{i}/{len(experiments)}] {exp['model']} x {exp['dataset']}"
+
+        if idx in completed:
+            results.append({"label": label, "status": "OK", "duration": 0, "skipped": True})
+            print(f"\n  {label} -> SKIP (already completed)")
+            continue
+
         cmd = build_command(exp)
 
         print(f"\n{'=' * 60}")
@@ -185,10 +248,17 @@ def main():
         result = subprocess.run(cmd, check=False)
         elapsed = time.time() - start
 
-        status = "OK" if result.returncode == 0 else "FAIL"
-        results.append({"label": label, "status": status, "duration": elapsed})
-
-        print(f"\n  {label} -> {status} ({format_duration(elapsed)})")
+        if result.returncode == 0:
+            completed.add(idx)
+            _save_state(args.config, completed)
+            results.append({"label": label, "status": "OK", "duration": elapsed})
+            print(f"\n  {label} -> OK ({format_duration(elapsed)})")
+        else:
+            results.append({"label": label, "status": "FAIL", "duration": elapsed})
+            print(f"\n  {label} -> FAIL ({format_duration(elapsed)})")
+            print(f"\n  Stopping. Fix the issue and re-run with --resume to continue.")
+            print(f"  Progress saved: {_state_path(args.config)}")
+            sys.exit(1)
 
     total_elapsed = time.time() - total_start
 
@@ -197,15 +267,13 @@ def main():
     print(f"{'=' * 60}")
 
     for r in results:
-        marker = "PASS" if r["status"] == "OK" else "FAIL"
-        print(f"  [{marker}] {r['label']}  ({format_duration(r['duration'])})")
+        if r.get("skipped"):
+            print(f"  [SKIP] {r['label']}")
+        else:
+            print(f"  [PASS] {r['label']}  ({format_duration(r['duration'])})")
 
-    failed = sum(1 for r in results if r["status"] != "OK")
-    if failed:
-        print(f"\n  {failed}/{len(results)} experiments failed.")
-        sys.exit(1)
-    else:
-        print(f"\n  All {len(results)} experiments passed.")
+    print(f"\n  All {len(experiments)} experiments passed.")
+    _clear_state(args.config)
 
 
 if __name__ == "__main__":
