@@ -130,7 +130,7 @@ class ECGDataModule(pl.LightningDataModule):
                     stratify_labels = stacked
 
                 # Check if we have enough samples per class for stratification
-                unique_labels, counts = np.unique(stratify_labels, return_counts=True)
+                _, counts = np.unique(stratify_labels, return_counts=True)
                 if np.min(counts) < 2:
                     stratify_labels = None  # Disable stratification
             except Exception:

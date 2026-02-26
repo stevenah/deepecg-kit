@@ -28,7 +28,7 @@ def plot_confusion_matrix(
     if class_names is None or len(class_names) != len(labels):
         class_names = [str(lbl) for lbl in labels]
 
-    fig, ax = plt.subplots(figsize=(8, 6))
+    _, ax = plt.subplots(figsize=(8, 6))
 
     sns.heatmap(
         cm,

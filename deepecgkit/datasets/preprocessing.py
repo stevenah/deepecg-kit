@@ -120,7 +120,7 @@ class ECGSegmenter:
         if ecg_signal.ndim == 1:
             ecg_signal = ecg_signal[np.newaxis, :]
 
-        num_leads, signal_length = ecg_signal.shape
+        _, signal_length = ecg_signal.shape
 
         if signal_length < self.segment_length:
             return np.array([]), np.array([])
