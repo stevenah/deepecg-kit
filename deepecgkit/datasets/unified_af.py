@@ -1,9 +1,10 @@
+import logging
 from pathlib import Path
 from typing import ClassVar, Dict, List, Optional, Tuple, Type, Union
 
 import numpy as np
 import torch
-from torch.utils.data import ConcatDataset
+from torch.utils.data import ConcatDataset, Dataset
 
 from deepecgkit.registry import register_dataset
 
@@ -12,10 +13,69 @@ from .base import BaseECGDataset
 from .ltafdb import LTAFDBDataset
 from .mitbih_afdb import MITBIHAFDBDataset
 
+logger = logging.getLogger(__name__)
+
+# PhysioNet 2017 uses labels: N=0, A=1, O=2, ~=3
+# Unified 4-class scheme:     Normal=0, AF=1, AFL=2, J=3
+# "Other" (O) and "Noisy" (~) have no unified equivalent → dropped
+_PHYSIONET2017_LABEL_REMAP = {
+    0: 0,     # N (Normal) → Normal
+    1: 1,     # A (AF) → AF
+    2: None,  # O (Other) → drop
+    3: None,  # ~ (Noisy) → drop
+}
+
+# Binary scheme: Non-AF=0, AF=1
+# "Other" maps to Non-AF, "Noisy" is still dropped
+_PHYSIONET2017_BINARY_REMAP = {
+    0: 0,     # N (Normal) → Non-AF
+    1: 1,     # A (AF) → AF
+    2: 0,     # O (Other) → Non-AF
+    3: None,  # ~ (Noisy) → drop
+}
+
+
+class _RemappedDataset(Dataset):
+    """Wraps a dataset with label remapping and sample filtering.
+
+    Samples whose labels map to None are excluded from the dataset.
+    """
+
+    def __init__(
+        self,
+        dataset,
+        label_map: Dict[int, Optional[int]],
+        target_transform: Optional[callable] = None,
+    ):
+        self._dataset = dataset
+        self._label_map = label_map
+        self._target_transform = target_transform
+
+        # Filter out samples whose labels map to None
+        if hasattr(dataset, "labels"):
+            self._indices = [
+                i for i, lbl in enumerate(dataset.labels)
+                if label_map.get(int(lbl)) is not None
+            ]
+            self.labels = [label_map[int(dataset.labels[i])] for i in self._indices]
+        else:
+            self._indices = list(range(len(dataset)))
+            self.labels = []
+
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        signal, label = self._dataset[self._indices[idx]]
+        new_label = torch.tensor(self._label_map[label.item()], dtype=torch.long)
+        if self._target_transform is not None:
+            new_label = self._target_transform(new_label)
+        return signal, new_label
+
+    def __len__(self) -> int:
+        return len(self._indices)
+
 
 @register_dataset(
     name="unified-af",
-    input_channels=2,
+    input_channels=1,
     num_classes=4,
     description="Unified AF dataset combining PhysioNet 2017, MIT-BIH, LTAFDB",
 )
@@ -25,6 +85,11 @@ class UnifiedAFDataset(BaseECGDataset):
     Combines samples from the PhysioNet 2017 Challenge, MIT-BIH AFDB, and LTAFDB
     into a single dataset for AF classification. Supports both binary (AF vs Non-AF)
     and 4-class (Normal, AF, AFL, J) classification modes.
+
+    PhysioNet 2017 labels are remapped to the unified scheme:
+      - Normal (N) → Normal, AF (A) → AF
+      - Other (O) and Noisy (~) are dropped in 4-class mode
+      - Other (O) → Non-AF and Noisy (~) is dropped in binary mode
     """
 
     CLASS_LABELS: ClassVar[List[str]] = ["Normal", "AF", "AFL", "J"]
@@ -103,6 +168,8 @@ class UnifiedAFDataset(BaseECGDataset):
 
             dataset_dir.mkdir(parents=True, exist_ok=True)
 
+            # Minimal instance for download only — sub-dataset download()
+            # methods only require self.data_dir and self.verbose.
             instance = object.__new__(dataset_class)
             instance.data_dir = dataset_dir
             instance.verbose = self.verbose
@@ -112,13 +179,17 @@ class UnifiedAFDataset(BaseECGDataset):
         base_kwargs = {
             "sampling_rate": self.sampling_rate,
             "transform": self.transform,
-            "target_transform": self.target_transform,
+            "segment_duration_seconds": self.segment_duration_seconds,
             "download": False,
         }
 
         if dataset_name in ["mitbih_afdb", "ltafdb"]:
+            base_kwargs["target_transform"] = self.target_transform
             base_kwargs["binary_classification"] = self.binary_classification
-            base_kwargs["segment_duration_seconds"] = self.segment_duration_seconds
+        elif dataset_name == "physionet2017":
+            # target_transform is omitted — applied after label remapping
+            # in _RemappedDataset (see _load_data)
+            pass
 
         if dataset_name in self.dataset_kwargs:
             base_kwargs.update(self.dataset_kwargs[dataset_name])
@@ -144,6 +215,25 @@ class UnifiedAFDataset(BaseECGDataset):
 
             try:
                 dataset = dataset_class(**kwargs)
+
+                # Remap PhysioNet 2017 labels to the unified scheme
+                if dataset_name == "physionet2017":
+                    remap = (
+                        _PHYSIONET2017_BINARY_REMAP
+                        if self.binary_classification
+                        else _PHYSIONET2017_LABEL_REMAP
+                    )
+                    original_len = len(dataset)
+                    dataset = _RemappedDataset(
+                        dataset, remap, target_transform=self.target_transform
+                    )
+                    dropped = original_len - len(dataset)
+                    if dropped > 0 and self.verbose:
+                        print(
+                            f"  Dropped {dropped} samples with unmappable "
+                            f"labels (Other/Noisy)"
+                        )
+
                 self.datasets.append(dataset)
                 self.dataset_sizes.append(len(dataset))
 
@@ -154,6 +244,7 @@ class UnifiedAFDataset(BaseECGDataset):
                         print(f"Class distribution: {dist}")
 
             except Exception as e:
+                logger.warning("Failed to load %s: %s", dataset_name, e)
                 if self.verbose:
                     print(f"Failed to load {dataset_name}: {e}")
                 continue

@@ -12,11 +12,18 @@ defaults:
 
 experiments:
   # ──────────────────────────────────────────────
-  # Dataset: ptbxl (12-lead, 5 superclasses)
-  # Baseline architecture comparison (Table III)
+  # PTB-XL: 12-lead, 5 diagnostic superclasses
+  # Task: multi-label classification
   # ──────────────────────────────────────────────
+  - model: resnet
+    dataset: ptbxl
+    multi_label: true
 
-  - model: crnn
+  - model: se-resnet
+    dataset: ptbxl
+    multi_label: true
+
+  - model: inception-time
     dataset: ptbxl
     multi_label: true
 
@@ -24,7 +31,7 @@ experiments:
     dataset: ptbxl
     multi_label: true
 
-  - model: dualnet
+  - model: crnn
     dataset: ptbxl
     multi_label: true
 
@@ -37,64 +44,24 @@ experiments:
     dataset: ptbxl
     multi_label: true
     learning_rate: 0.0005
-    
-  - model: simple-cnn
-    dataset: ptbxl
-    multi_label: true
 
+  # ──────────────────────────────────────────────
+  # PhysioNet 2017: 1-lead, 4 classes
+  # Task: single-label multi-class classification
+  # ──────────────────────────────────────────────
   - model: resnet
-    dataset: ptbxl
-    multi_label: true
+    dataset: af-classification
 
   - model: se-resnet
-    dataset: ptbxl
-    multi_label: true
-
-  - model: xresnet
-    dataset: ptbxl
-    multi_label: true
+    dataset: af-classification
 
   - model: inception-time
-    dataset: ptbxl
-    multi_label: true
-
-  - model: tcn
-    dataset: ptbxl
-    multi_label: true
-
-  - model: kanres
-    dataset: ptbxl
-    multi_label: true
-
-  - model: lstm
-    dataset: ptbxl
-    multi_label: true
-
-  - model: transformer
-    dataset: ptbxl
-    multi_label: true
-
-  - model: deep-res-cnn
-    dataset: ptbxl
-    sampling_rate: 100
-    learning_rate: 0.0005
-    epochs: 100
-    early_stopping_patience: 6
-    val_split: 0.12
-    multi_label: true
-    normalization: none
-
-  # ──────────────────────────────────────────────
-  # Dataset: af-classification (1-lead, 4 classes)
-  # PhysioNet 2017 AF Challenge
-  # ──────────────────────────────────────────────
-  - model: crnn
     dataset: af-classification
 
   - model: convnext-v2
     dataset: af-classification
 
-  - model: dualnet
+  - model: crnn
     dataset: af-classification
 
   - model: medformer
@@ -105,125 +72,53 @@ experiments:
     dataset: af-classification
     learning_rate: 0.0005
 
-  - model: simple-cnn
-    dataset: af-classification
-
+  # ──────────────────────────────────────────────
+  # MIT-BIH AFDB: 2-lead, binary AF detection
+  # Task: binary classification (AF vs Non-AF)
+  # ──────────────────────────────────────────────
   - model: resnet
-    dataset: af-classification
+    dataset: mitbih-afdb
+    binary_classification: true
 
   - model: se-resnet
-    dataset: af-classification
-
-  - model: xresnet
-    dataset: af-classification
+    dataset: mitbih-afdb
+    binary_classification: true
 
   - model: inception-time
-    dataset: af-classification
-
-  - model: tcn
-    dataset: af-classification
-
-  - model: kanres
-    dataset: af-classification
-
-  - model: lstm
-    dataset: af-classification
-
-  - model: transformer
-    dataset: af-classification
-
-  # ──────────────────────────────────────────────
-  # Dataset: mitbih-afdb (2-lead, 4 classes)
-  # MIT-BIH Atrial Fibrillation Database
-  # ──────────────────────────────────────────────
-  - model: crnn
     dataset: mitbih-afdb
+    binary_classification: true
 
   - model: convnext-v2
     dataset: mitbih-afdb
+    binary_classification: true
 
-  - model: dualnet
+  - model: crnn
     dataset: mitbih-afdb
+    binary_classification: true
 
   - model: medformer
     dataset: mitbih-afdb
+    binary_classification: true
     learning_rate: 0.0005
 
   - model: mamba
     dataset: mitbih-afdb
+    binary_classification: true
     learning_rate: 0.0005
 
-  - model: simple-cnn
-    dataset: mitbih-afdb
-
+  # ──────────────────────────────────────────────
+  # Unified AF: cross-dataset, 4 classes
+  # Task: single-label multi-class (combined sources)
+  # ──────────────────────────────────────────────
   - model: resnet
-    dataset: mitbih-afdb
-
-  - model: se-resnet
-    dataset: mitbih-afdb
-
-  - model: xresnet
-    dataset: mitbih-afdb
-
-  - model: inception-time
-    dataset: mitbih-afdb
-
-  - model: tcn
-    dataset: mitbih-afdb
-
-  - model: kanres
-    dataset: mitbih-afdb
-
-  - model: lstm
-    dataset: mitbih-afdb
-
-  - model: transformer
-    dataset: mitbih-afdb
-
-  # ──────────────────────────────────────────────
-  # Dataset: ltafdb (2-lead, 4 classes)
-  # Long-Term Atrial Fibrillation Database
-  # ──────────────────────────────────────────────
-  - model: crnn
-    dataset: ltafdb
+    dataset: unified-af
 
   - model: convnext-v2
-    dataset: ltafdb
+    dataset: unified-af
 
-  - model: dualnet
-    dataset: ltafdb
+  - model: crnn
+    dataset: unified-af
 
   - model: medformer
-    dataset: ltafdb
+    dataset: unified-af
     learning_rate: 0.0005
-
-  - model: mamba
-    dataset: ltafdb
-    learning_rate: 0.0005
-
-  - model: simple-cnn
-    dataset: ltafdb
-
-  - model: resnet
-    dataset: ltafdb
-
-  - model: se-resnet
-    dataset: ltafdb
-
-  - model: xresnet
-    dataset: ltafdb
-
-  - model: inception-time
-    dataset: ltafdb
-
-  - model: tcn
-    dataset: ltafdb
-
-  - model: kanres
-    dataset: ltafdb
-
-  - model: lstm
-    dataset: ltafdb
-
-  - model: transformer
-    dataset: ltafdb
