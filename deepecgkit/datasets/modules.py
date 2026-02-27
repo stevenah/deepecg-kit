@@ -136,12 +136,21 @@ class ECGDataModule(pl.LightningDataModule):
             except Exception:
                 stratify_labels = None  # Fallback to no stratification
 
+        # Extract groups for patient-level splitting (prevents data leakage)
+        groups = None
+        if hasattr(self.dataset, "record_names") and self.dataset.record_names:
+            groups = np.array(self.dataset.record_names)
+            if self.verbose:
+                n_groups = len(np.unique(groups))
+                print(f"Using patient-level splitting ({n_groups} groups)")
+
         splitter = DataSplitter(
             dataset=self.dataset,
             val_split=self.val_split,
             test_split=self.test_split,
             seed=self.seed,
             stratify=stratify_labels,
+            groups=groups,
         )
         self.train_dataset, self.val_dataset, self.test_dataset = splitter.split()
 

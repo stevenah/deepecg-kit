@@ -74,7 +74,9 @@ def calculate_classification_metrics(
             if n_classes > MULTICLASS_THRESHOLD:
                 result = roc_auc_score(y_true, y_scores, multi_class="ovr")
             else:
-                result = roc_auc_score(y_true, y_scores)
+                # Binary AUC expects 1D scores (positive class probability)
+                scores = y_scores[:, 1] if y_scores.ndim > 1 else y_scores
+                result = roc_auc_score(y_true, scores)
         elif metric == "mcc":
             result = matthews_corrcoef(y_true, y_pred_labels)
         return result

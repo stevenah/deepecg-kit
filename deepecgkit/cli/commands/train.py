@@ -125,7 +125,9 @@ def train(
         num_classes = 2
 
     # BCE loss expects a single logit output for binary classification
-    model_output_size = 1 if (binary_classification and dataset_name in af_datasets) else num_classes
+    model_output_size = (
+        1 if (binary_classification and dataset_name in af_datasets) else num_classes
+    )
 
     pos_weight = None
     if multi_label:

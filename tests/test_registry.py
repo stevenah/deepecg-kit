@@ -107,7 +107,7 @@ class TestDatasetRegistry:
             "ltafdb": 2,
             "mitbih-afdb": 2,
             "ptbxl": 12,
-            "unified-af": 2,
+            "unified-af": 1,
         }
         for name, channels in expected.items():
             info = get_dataset_info(name)

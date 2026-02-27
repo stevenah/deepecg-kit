@@ -185,7 +185,11 @@ class MITBIHAFDBDataset(BaseECGDataset):
 
         # PhysioNet zips may nest records inside a files/ subdirectory
         files_dir = self.data_dir / "files"
-        if not any(self.data_dir.glob("*.hea")) and files_dir.is_dir() and any(files_dir.glob("*.hea")):
+        if (
+            not any(self.data_dir.glob("*.hea"))
+            and files_dir.is_dir()
+            and any(files_dir.glob("*.hea"))
+        ):
             self.data_dir = files_dir
 
         if not any(self.data_dir.glob("*.hea")):

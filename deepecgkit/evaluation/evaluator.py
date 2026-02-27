@@ -128,7 +128,11 @@ class ECGEvaluator:
             elif metric_name == "auc":
                 if self.y_scores is None:
                     raise ValueError("y_scores required for AUC calculation")
-                metrics[metric_name] = roc_auc_score(targets, self.y_scores)
+                scores = self.y_scores
+                n_classes = len(np.unique(targets))
+                if n_classes <= 2 and scores.ndim > 1:
+                    scores = scores[:, 1]
+                metrics[metric_name] = roc_auc_score(targets, scores)
         return metrics
 
     def _get_predictions(
