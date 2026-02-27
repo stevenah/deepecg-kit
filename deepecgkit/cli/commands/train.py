@@ -124,6 +124,9 @@ def train(
     if binary_classification and dataset_name in af_datasets:
         num_classes = 2
 
+    # BCE loss expects a single logit output for binary classification
+    model_output_size = 1 if (binary_classification and dataset_name in af_datasets) else num_classes
+
     pos_weight = None
     if multi_label:
         try:
@@ -140,7 +143,7 @@ def train(
     logger.info(
         f"Creating {model_name} model with {input_channels} input channel(s) and {num_classes} output classes..."
     )
-    model = model_class(input_channels=input_channels, output_size=num_classes)
+    model = model_class(input_channels=input_channels, output_size=model_output_size)
 
     if weights:
         try:
