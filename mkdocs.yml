@@ -1,6 +1,6 @@
 site_name: DeepECG-Kit
 site_url: https://stevenah.github.io/deepecg-kit/
-site_description: A pure-PyTorch deep learning library for ECG analysis and arrhythmia classification
+site_description: A deep learning library for ECG analysis and arrhythmia classification
 repo_url: https://github.com/stevenah/deepecg-kit
 repo_name: stevenah/deepecg-kit
 edit_uri: edit/main/docs/
