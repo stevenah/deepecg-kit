@@ -1,6 +1,6 @@
 # DeepECG-Kit
 
-A pure-PyTorch deep learning library for ECG analysis and arrhythmia classification.
+A deep learning library for ECG analysis and arrhythmia classification.
 
 DeepECG-Kit provides **21 model architectures**, **5 ECG datasets**, and a complete training/evaluation pipeline — all without framework dependencies beyond PyTorch.
 
