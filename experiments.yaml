@@ -1,0 +1,124 @@
+defaults:
+  epochs: 50
+  batch_size: 32
+  learning_rate: 0.001
+  val_split: 0.2
+  test_split: 0.1
+  num_workers: 4
+  accelerator: auto
+  devices: 1
+  early_stopping_patience: 10
+  seed: 42
+
+experiments:
+  # ──────────────────────────────────────────────
+  # PTB-XL: 12-lead, 5 diagnostic superclasses
+  # Task: multi-label classification
+  # ──────────────────────────────────────────────
+  - model: resnet
+    dataset: ptbxl
+    multi_label: true
+
+  - model: se-resnet
+    dataset: ptbxl
+    multi_label: true
+
+  - model: inception-time
+    dataset: ptbxl
+    multi_label: true
+
+  - model: convnext-v2
+    dataset: ptbxl
+    multi_label: true
+
+  - model: crnn
+    dataset: ptbxl
+    multi_label: true
+
+  - model: medformer
+    dataset: ptbxl
+    multi_label: true
+    learning_rate: 0.0005
+
+  - model: mamba
+    dataset: ptbxl
+    multi_label: true
+    learning_rate: 0.0005
+
+  # ──────────────────────────────────────────────
+  # PhysioNet 2017: 1-lead, 4 classes
+  # Task: single-label multi-class classification
+  # ──────────────────────────────────────────────
+  - model: resnet
+    dataset: af-classification
+
+  - model: se-resnet
+    dataset: af-classification
+
+  - model: inception-time
+    dataset: af-classification
+
+  - model: convnext-v2
+    dataset: af-classification
+
+  - model: crnn
+    dataset: af-classification
+
+  - model: medformer
+    dataset: af-classification
+    learning_rate: 0.0005
+
+  - model: mamba
+    dataset: af-classification
+    learning_rate: 0.0005
+
+  # ──────────────────────────────────────────────
+  # MIT-BIH AFDB: 2-lead, binary AF detection
+  # Task: binary classification (AF vs Non-AF)
+  # ──────────────────────────────────────────────
+  - model: resnet
+    dataset: mitbih-afdb
+    binary_classification: true
+
+  - model: se-resnet
+    dataset: mitbih-afdb
+    binary_classification: true
+
+  - model: inception-time
+    dataset: mitbih-afdb
+    binary_classification: true
+
+  - model: convnext-v2
+    dataset: mitbih-afdb
+    binary_classification: true
+
+  - model: crnn
+    dataset: mitbih-afdb
+    binary_classification: true
+
+  - model: medformer
+    dataset: mitbih-afdb
+    binary_classification: true
+    learning_rate: 0.0005
+
+  - model: mamba
+    dataset: mitbih-afdb
+    binary_classification: true
+    learning_rate: 0.0005
+
+  # ──────────────────────────────────────────────
+  # Unified AF: cross-dataset, 4 classes
+  # Task: single-label multi-class (combined sources)
+  # ──────────────────────────────────────────────
+  - model: resnet
+    dataset: unified-af
+
+  - model: convnext-v2
+    dataset: unified-af
+
+  - model: crnn
+    dataset: unified-af
+
+  - model: medformer
+    dataset: unified-af
+    learning_rate: 0.0005
