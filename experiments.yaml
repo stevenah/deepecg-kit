@@ -9,6 +9,7 @@ defaults:
   devices: 1
   early_stopping_patience: 10
   seed: 42
+  seeds: [42, 43, 44, 45, 46]
 
 experiments:
   # ──────────────────────────────────────────────

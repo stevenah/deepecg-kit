@@ -191,3 +191,7 @@ CLAUDE.md
 *_logs
 *_results
 deepecg-kit-paper/
+
+runs/
+analysis/
+.experiments_state_*.json
