@@ -295,6 +295,102 @@ Note: Datasets are automatically downloaded when first used.
         help="Accelerator to use (default: auto)",
     )
 
+    extract_parser = subparsers.add_parser(
+        "extract-features", help="Extract deep embeddings from ECG data"
+    )
+    extract_weights = extract_parser.add_mutually_exclusive_group(required=True)
+    extract_weights.add_argument(
+        "--checkpoint",
+        type=str,
+        help="Path to a model checkpoint",
+    )
+    extract_weights.add_argument(
+        "--weights",
+        "-w",
+        type=str,
+        help="Pretrained weight name or path to a weights file",
+    )
+    extract_source = extract_parser.add_mutually_exclusive_group(required=True)
+    extract_source.add_argument(
+        "--dataset",
+        "-d",
+        type=str,
+        choices=DATASET_NAMES,
+        help="Dataset to extract features from",
+    )
+    extract_source.add_argument(
+        "--input",
+        "-i",
+        type=str,
+        help="Path to an input ECG file (.npy, .csv, or WFDB .dat/.hea)",
+    )
+    extract_parser.add_argument(
+        "--model",
+        "-m",
+        type=str,
+        required=True,
+        choices=MODEL_NAMES,
+        help="Model architecture to load",
+    )
+    extract_parser.add_argument(
+        "--output",
+        "-o",
+        type=str,
+        required=True,
+        help="Path to save features (.npz, .npy, or .csv)",
+    )
+    extract_parser.add_argument(
+        "--data-dir",
+        type=str,
+        default=None,
+        help="Directory containing the dataset",
+    )
+    extract_parser.add_argument(
+        "--split",
+        type=str,
+        default="test",
+        choices=["train", "val", "test", "all"],
+        help="Dataset split to extract from (default: test)",
+    )
+    extract_parser.add_argument(
+        "--batch-size",
+        "-b",
+        type=int,
+        default=32,
+        help="Batch size (default: 32)",
+    )
+    extract_parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=4,
+        help="Data loading workers (default: 4)",
+    )
+    extract_parser.add_argument(
+        "--accelerator",
+        type=str,
+        default="auto",
+        choices=["auto", "cpu", "gpu", "mps"],
+        help="Accelerator to use (default: auto)",
+    )
+    extract_parser.add_argument(
+        "--dtype",
+        type=str,
+        default="float32",
+        choices=["float32", "float16"],
+        help="Precision of the saved features (default: float32)",
+    )
+    extract_parser.add_argument(
+        "--input-channels",
+        type=int,
+        default=None,
+        help="Lead count, for architectures whose weights do not encode it",
+    )
+    extract_parser.add_argument(
+        "--force-download",
+        action="store_true",
+        help="Force re-download the dataset",
+    )
+
     resume_parser = subparsers.add_parser("resume", help="Resume training from a checkpoint")
     resume_parser.add_argument(
         "--checkpoint",
@@ -427,6 +523,25 @@ Note: Datasets are automatically downloaded when first used.
             batch_size=args.batch_size,
             accelerator=args.accelerator,
             model_name=args.model,
+            logger=logger,
+        )
+
+    elif args.command == "extract-features":
+        return _cli.extract_features(
+            output_path=args.output,
+            model_name=args.model,
+            checkpoint=args.checkpoint,
+            weights=args.weights,
+            dataset_name=args.dataset,
+            input_path=args.input,
+            data_dir=args.data_dir,
+            split=args.split,
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+            accelerator=args.accelerator,
+            dtype=args.dtype,
+            input_channels=args.input_channels,
+            force_download=args.force_download,
             logger=logger,
         )
 

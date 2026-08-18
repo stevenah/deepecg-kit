@@ -22,6 +22,11 @@ from deepecgkit.datasets import (
     UnifiedAFDataset,
 )
 from deepecgkit.datasets.base import BaseECGDataset as BaseECGDatasetDirect
+from deepecgkit.datasets.io import (
+    SUPPORTED_ECG_SUFFIXES,
+    as_model_input,
+    read_ecg_recording,
+)
 
 
 class TestBaseECGDataset:
@@ -634,3 +639,64 @@ class TestDatasetIntegration:
         for dataset_class in datasets:
             assert hasattr(dataset_class, "num_classes")
             assert hasattr(dataset_class, "class_names")
+
+
+class TestECGFileIO:
+    """Reading ECG recordings from files and reshaping them for models."""
+
+    def test_read_npy(self, temp_dir):
+        """A .npy file round-trips."""
+        path = temp_dir / "signal.npy"
+        data = np.random.randn(2, 3000)
+        np.save(str(path), data)
+        assert np.allclose(read_ecg_recording(path), data)
+
+    def test_read_csv(self, temp_dir):
+        """A .csv file is read through its header row."""
+        import pandas as pd
+
+        path = temp_dir / "signal.csv"
+        pd.DataFrame({"I": np.arange(10.0), "II": np.arange(10.0)}).to_csv(str(path), index=False)
+        assert read_ecg_recording(path).shape == (10, 2)
+
+    def test_read_unsupported_suffix(self, temp_dir):
+        """An unknown suffix names the supported formats."""
+        path = temp_dir / "signal.txt"
+        path.write_text("nope")
+        with pytest.raises(ValueError, match="Unsupported input format"):
+            read_ecg_recording(path)
+
+    def test_supported_suffixes(self):
+        """The suffix tuple is what the CLI advertises."""
+        assert SUPPORTED_ECG_SUFFIXES == (".npy", ".csv", ".dat", ".hea")
+
+    def test_one_dimensional_becomes_single_sample(self):
+        """A bare signal becomes one single-lead recording."""
+        assert as_model_input(np.zeros(3000)).shape == (1, 1, 3000)
+
+    def test_two_dimensional_leads_first(self):
+        """A leads-first array keeps its orientation."""
+        assert as_model_input(np.zeros((12, 3000)), input_channels=12).shape == (1, 12, 3000)
+
+    def test_two_dimensional_time_first(self):
+        """A time-first array is transposed."""
+        assert as_model_input(np.zeros((3000, 12)), input_channels=12).shape == (1, 12, 3000)
+
+    def test_two_dimensional_without_lead_count(self):
+        """Without a lead count, rows are independent single-lead recordings."""
+        assert as_model_input(np.zeros((5, 3000))).shape == (5, 1, 3000)
+
+    def test_two_dimensional_incompatible(self):
+        """A mismatch carries the message the predict command reports."""
+        with pytest.raises(ValueError, match="is not compatible with a model expecting 12 leads"):
+            as_model_input(np.zeros((5, 3000)), input_channels=12)
+
+    def test_three_dimensional_passes_through(self):
+        """An already-batched array is returned unchanged."""
+        data = np.zeros((4, 2, 3000))
+        assert as_model_input(data).shape == (4, 2, 3000)
+
+    def test_four_dimensional_rejected(self):
+        """Too many dimensions are reported rather than passed to the model."""
+        with pytest.raises(ValueError, match="expected at most three"):
+            as_model_input(np.zeros((2, 2, 2, 2)))

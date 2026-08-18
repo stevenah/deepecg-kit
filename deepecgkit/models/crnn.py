@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 
+from deepecgkit.models.pretrained import PretrainedMixin
 from deepecgkit.registry import register_model
 
 
@@ -8,7 +9,7 @@ from deepecgkit.registry import register_model
     name="crnn",
     description="CNN-LSTM hybrid for local feature extraction and temporal aggregation",
 )
-class CRNN(nn.Module):
+class CRNN(PretrainedMixin, nn.Module):
     """
     Convolutional Recurrent Neural Network for ECG classification.
 

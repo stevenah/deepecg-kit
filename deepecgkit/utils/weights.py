@@ -5,6 +5,8 @@ import torch
 
 from deepecgkit.utils.download import download_file
 
+_PLACEHOLDER_URL_MARKERS = ("your-org",)
+
 WEIGHTS_REGISTRY: Dict[str, Dict] = {
     "kanres-af-30s": {
         "url": "https://github.com/your-org/deepecg-kit/releases/download/v1.0.0/kanres-af-30s.pt",
@@ -49,13 +51,26 @@ def download_weights(weight_name: str, force: bool = False) -> Path:
 
     Returns:
         Path to the downloaded weights file
+
+    Raises:
+        RuntimeError: If the registry entry is a placeholder rather than a
+            published download URL.
     """
     info = get_weight_info(weight_name)
+    url = info["url"]
+    if any(marker in url for marker in _PLACEHOLDER_URL_MARKERS):
+        raise RuntimeError(
+            f"No public weights have been published for '{weight_name}'; its registry entry "
+            f"is still a placeholder ({url}). Pass a path to a local weights file or an "
+            f"ECGTrainer checkpoint instead, or call register_weights() to point at your own "
+            f"hosted release asset."
+        )
+
     weights_dir = get_weights_dir()
     weight_path = weights_dir / f"{weight_name}.pt"
 
     download_file(
-        url=info["url"],
+        url=url,
         file_path=weight_path,
         desc=f"Downloading {weight_name} weights",
         force=force,

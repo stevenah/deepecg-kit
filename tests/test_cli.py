@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
+import torch
 
 import deepecgkit.cli.commands.predict  # noqa: F401
 from deepecgkit.__main__ import main as main_entry
@@ -31,6 +32,7 @@ from deepecgkit.cli import (
     show_info,
     train,
 )
+from deepecgkit.models.factory import build_model
 
 predict_module = sys.modules["deepecgkit.cli.commands.predict"]
 
@@ -755,3 +757,148 @@ class TestCLIParserDefaults:
             assert call_kwargs["accelerator"] == "auto"
             assert call_kwargs["devices"] == 1
             assert call_kwargs["early_stopping_patience"] == 10
+
+
+class TestExtractFeaturesCommand:
+    """Test the extract-features command."""
+
+    def test_missing_weight_source(self):
+        """Neither a checkpoint nor pretrained weights is a usage error."""
+        with pytest.raises(SystemExit):
+            main(["extract-features", "-m", "kanres", "-i", "input.npy", "-o", "out.npz"])
+
+    def test_missing_data_source(self):
+        """Neither a dataset nor an input file is a usage error."""
+        with pytest.raises(SystemExit):
+            main(["extract-features", "--checkpoint", "m.ckpt", "-m", "kanres", "-o", "out.npz"])
+
+    def test_missing_output(self):
+        """The output path is required."""
+        with pytest.raises(SystemExit):
+            main(["extract-features", "--checkpoint", "m.ckpt", "-m", "kanres", "-i", "in.npy"])
+
+    def test_checkpoint_and_weights_are_exclusive(self):
+        """Only one weight source may be given."""
+        with pytest.raises(SystemExit):
+            main(
+                [
+                    "extract-features",
+                    "--checkpoint",
+                    "m.ckpt",
+                    "-w",
+                    "kanres-af-30s",
+                    "-m",
+                    "kanres",
+                    "-i",
+                    "in.npy",
+                    "-o",
+                    "out.npz",
+                ]
+            )
+
+    def test_checkpoint_not_found(self, capsys, temp_dir):
+        """A missing checkpoint exits non-zero with a clear message."""
+        input_file = temp_dir / "in.npy"
+        np.save(str(input_file), np.random.randn(1, 1, 3000))
+
+        exit_code = main(
+            [
+                "extract-features",
+                "--checkpoint",
+                str(temp_dir / "absent.ckpt"),
+                "-m",
+                "kanres",
+                "-i",
+                str(input_file),
+                "-o",
+                str(temp_dir / "out.npz"),
+            ]
+        )
+
+        assert exit_code == 1
+        assert "Checkpoint not found" in capsys.readouterr().err
+
+    def test_input_not_found(self, capsys, temp_dir):
+        """A missing input file exits non-zero with a clear message."""
+        checkpoint = temp_dir / "m.ckpt"
+        model = build_model("kanres", input_channels=1, output_size=4)
+        torch.save({"model_state_dict": model.state_dict()}, str(checkpoint))
+
+        exit_code = main(
+            [
+                "extract-features",
+                "--checkpoint",
+                str(checkpoint),
+                "-m",
+                "kanres",
+                "-i",
+                str(temp_dir / "absent.npy"),
+                "-o",
+                str(temp_dir / "out.npz"),
+            ]
+        )
+
+        assert exit_code == 1
+        assert "Input file not found" in capsys.readouterr().err
+
+    def test_weights_model_mismatch(self, capsys, temp_dir):
+        """Pretrained weights belonging to another model are rejected early."""
+        input_file = temp_dir / "in.npy"
+        np.save(str(input_file), np.random.randn(1, 1, 3000))
+
+        exit_code = main(
+            [
+                "extract-features",
+                "-w",
+                "kanres-af-30s",
+                "-m",
+                "simple-cnn",
+                "-i",
+                str(input_file),
+                "-o",
+                str(temp_dir / "out.npz"),
+            ]
+        )
+
+        assert exit_code == 1
+        assert "belong to model 'kanres'" in capsys.readouterr().err
+
+    def test_end_to_end_writes_features(self, temp_dir):
+        """A checkpoint and a .npy file produce a readable .npz."""
+        checkpoint = temp_dir / "m.ckpt"
+        model = build_model("kanres", input_channels=1, output_size=4)
+        torch.save(
+            {
+                "model_state_dict": model.state_dict(),
+                "model_config": {"name": "kanres", "input_channels": 1, "output_size": 4},
+            },
+            str(checkpoint),
+        )
+        input_file = temp_dir / "in.npy"
+        np.save(str(input_file), np.random.randn(6, 1, 3000))
+        output_file = temp_dir / "features.npz"
+
+        exit_code = main(
+            [
+                "--quiet",
+                "extract-features",
+                "--checkpoint",
+                str(checkpoint),
+                "-m",
+                "kanres",
+                "-i",
+                str(input_file),
+                "-o",
+                str(output_file),
+                "--accelerator",
+                "cpu",
+            ]
+        )
+
+        assert exit_code == 0
+        assert output_file.exists()
+
+        loaded = np.load(str(output_file), allow_pickle=True)
+        assert loaded["features"].shape == (6, 64)
+        assert int(loaded["feature_dim"]) == 64
+        assert str(loaded["model_name"]) == "kanres"

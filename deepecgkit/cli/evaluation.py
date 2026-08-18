@@ -14,6 +14,7 @@ from deepecgkit.cli.logger import CLILogger
 from deepecgkit.evaluation.metrics import (
     calculate_classification_metrics,
     confusion_matrix_analysis,
+    resolve_average,
 )
 from deepecgkit.evaluation.visualization import (
     plot_calibration_curve,
@@ -90,6 +91,7 @@ def _save_single_label_evaluation(
     logger.info("=" * 60)
 
     cls_metrics = calculate_classification_metrics(y_true, y_prob)
+    averaging = resolve_average(y_true)
     metrics_df = pd.DataFrame(
         [
             {
@@ -101,6 +103,7 @@ def _save_single_label_evaluation(
                 "f1": cls_metrics.get("f1", np.nan),
                 "auroc": cls_metrics.get("auc", np.nan),
                 "mcc": cls_metrics.get("mcc", np.nan),
+                "average": averaging,
             }
         ]
     )

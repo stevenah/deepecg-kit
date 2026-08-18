@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 
+from deepecgkit.models.pretrained import PretrainedMixin
 from deepecgkit.registry import register_model
 
 
@@ -121,7 +122,7 @@ class InterGranularityAttention(nn.Module):
     name="medformer",
     description="Multi-granularity patching Transformer for medical time series (NeurIPS 2024)",
 )
-class Medformer(nn.Module):
+class Medformer(PretrainedMixin, nn.Module):
     """
     Medformer: Multi-Granularity Patching Transformer for medical time series.
 

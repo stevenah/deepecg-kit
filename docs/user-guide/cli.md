@@ -81,6 +81,39 @@ deepecg predict --checkpoint model.pt -m kanres --input ecg.npy
 | `--batch-size`, `-b` | 1 | Batch size |
 | `--accelerator` | auto | Device selection |
 
+### `deepecg extract-features`
+
+Extract deep embeddings and write them to disk. See
+[Feature Extraction](feature-extraction.md) for what the embeddings represent.
+
+```bash
+deepecg extract-features --checkpoint model.ckpt -m kanres -d af-classification -o features.npz
+deepecg extract-features --checkpoint model.ckpt -m kanres -i ecg.npy -o features.csv
+```
+
+Exactly one weight source (`--checkpoint` or `--weights`) and one data source (`--dataset` or
+`--input`) are required.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--checkpoint` | *one required* | Path to a model checkpoint |
+| `--weights`, `-w` | *one required* | Pretrained weight name or path to a weights file |
+| `--dataset`, `-d` | *one required* | Dataset to extract features from |
+| `--input`, `-i` | *one required* | Input ECG file (`.npy`, `.csv`, WFDB `.dat`/`.hea`) |
+| `--model`, `-m` | *required* | Model architecture |
+| `--output`, `-o` | *required* | Output path (`.npz`, `.npy`, or `.csv`) |
+| `--data-dir` | None | Directory containing the dataset |
+| `--split` | `test` | Split to extract: `train`, `val`, `test`, `all` |
+| `--batch-size`, `-b` | 32 | Batch size |
+| `--num-workers` | 4 | Data loading workers |
+| `--accelerator` | auto | Device: `auto`, `cpu`, `gpu`, `mps` |
+| `--dtype` | `float32` | Saved precision: `float32` or `float16` |
+| `--input-channels` | auto | Lead count, for models whose weights do not encode it |
+| `--force-download` | false | Force re-download the dataset |
+
+Output format follows the extension: `.npz` keeps features, labels and metadata; `.npy` stores
+features only; `.csv` writes columns `f0..fN` plus a label column.
+
 ### `deepecg resume`
 
 Resume training from a checkpoint.

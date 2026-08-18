@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 
+from deepecgkit.models.pretrained import PretrainedMixin
 from deepecgkit.registry import register_model
 
 
@@ -8,7 +9,7 @@ from deepecgkit.registry import register_model
     name="simple-cnn",
     description="Lightweight CNN for fast inference",
 )
-class SimpleCNN(nn.Module):
+class SimpleCNN(PretrainedMixin, nn.Module):
     """
     Simple CNN model for ECG signal classification.
 
@@ -77,6 +78,5 @@ class SimpleCNN(nn.Module):
         return torch.flatten(x, 1)
 
     def forward(self, x):
-        x = self.features(x)
-        x = self.classifier(x)
-        return x
+        x = self.extract_features(x)
+        return self.classifier(x)

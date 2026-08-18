@@ -61,6 +61,12 @@ class _RemappedDataset(Dataset):
             self._indices = list(range(len(dataset)))
             self.labels = []
 
+        source_records = getattr(dataset, "record_names", None)
+        if source_records:
+            self.record_names = [source_records[i] for i in self._indices]
+        else:
+            self.record_names = []
+
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
         signal, label = self._dataset[self._indices[idx]]
         new_label = torch.tensor(self._label_map[label.item()], dtype=torch.long)
@@ -137,6 +143,8 @@ class UnifiedAFDataset(BaseECGDataset):
         self.dataset_names = datasets
         self.datasets = []
         self.dataset_sizes = []
+        self.loaded_dataset_names = []
+        self.record_names = []
 
         super().__init__(
             data_dir=data_dir,
@@ -232,6 +240,7 @@ class UnifiedAFDataset(BaseECGDataset):
 
                 self.datasets.append(dataset)
                 self.dataset_sizes.append(len(dataset))
+                self.loaded_dataset_names.append(dataset_name)
 
                 if self.verbose:
                     print(f"Loaded {len(dataset)} samples from {dataset_name}")
@@ -249,6 +258,7 @@ class UnifiedAFDataset(BaseECGDataset):
             raise RuntimeError("No datasets were successfully loaded")
 
         self.concat_dataset = ConcatDataset(self.datasets)
+        self._collect_record_names()
 
         if self.verbose:
             print(f"\n{'=' * 60}")
@@ -257,6 +267,33 @@ class UnifiedAFDataset(BaseECGDataset):
             print(f"Total samples: {len(self.concat_dataset)}")
             print(f"{'=' * 60}")
             self._print_overall_distribution()
+
+    def _collect_record_names(self):
+        """Build globally unique record identifiers across the merged source datasets.
+
+        Record names are namespaced by source dataset so that identically named
+        records in different sources are never treated as the same group. These
+        identifiers are what ECGDataModule uses to keep every segment of a
+        recording inside a single split; without them the merged dataset would be
+        split at segment level and leak between train and test.
+
+        Raises:
+            RuntimeError: If any source dataset does not expose usable record names.
+        """
+        record_names = []
+        for dataset_name, dataset in zip(self.loaded_dataset_names, self.datasets):
+            source_records = getattr(dataset, "record_names", None)
+            if not source_records or len(source_records) != len(dataset):
+                raise RuntimeError(
+                    f"Source dataset '{dataset_name}' exposes "
+                    f"{0 if not source_records else len(source_records)} record names for "
+                    f"{len(dataset)} samples. Record-level splitting cannot be performed "
+                    "safely, and segment-level splitting would leak recordings between "
+                    "train and test."
+                )
+            record_names.extend(f"{dataset_name}/{name}" for name in source_records)
+
+        self.record_names = record_names
 
     def _print_overall_distribution(self):
         if len(self.datasets) == 0:

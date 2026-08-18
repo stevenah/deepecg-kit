@@ -9,6 +9,12 @@ from deepecgkit.models.convnext_v2_1d import ConvNeXtV21D
 from deepecgkit.models.crnn import CRNN
 from deepecgkit.models.deep_res_cnn import DeepResCNN
 from deepecgkit.models.ecg_dualnet import ECGDualNet
+from deepecgkit.models.factory import (
+    build_model,
+    build_model_from_checkpoint,
+    infer_input_channels,
+    infer_output_size,
+)
 from deepecgkit.models.fcn_wang import FCNWang
 from deepecgkit.models.gru_model import GRUECG
 from deepecgkit.models.inception_time import InceptionTime1D
@@ -48,4 +54,8 @@ __all__ = [
     "TransformerECG",
     "XResNet1D",
     "XResNet1dBenchmark",
+    "build_model",
+    "build_model_from_checkpoint",
+    "infer_input_channels",
+    "infer_output_size",
 ]

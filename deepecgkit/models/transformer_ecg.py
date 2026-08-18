@@ -3,6 +3,7 @@ import math
 import torch
 from torch import nn
 
+from deepecgkit.models.pretrained import PretrainedMixin
 from deepecgkit.registry import register_model
 
 
@@ -36,7 +37,7 @@ class PositionalEncoding(nn.Module):
     name="transformer",
     description="Transformer-based ECG classifier",
 )
-class TransformerECG(nn.Module):
+class TransformerECG(PretrainedMixin, nn.Module):
     """
     Transformer-based model for ECG signal classification.
 

@@ -1,11 +1,8 @@
-from pathlib import Path
-from typing import Optional, Union
-
 import torch
 from torch import nn
 
+from deepecgkit.models.pretrained import PretrainedMixin
 from deepecgkit.registry import register_model
-from deepecgkit.utils.weights import get_weight_info, load_pretrained_weights
 
 
 class ConvBlock(nn.Module):
@@ -49,7 +46,7 @@ class ConvBlock(nn.Module):
     description="Atrial Fibrillation model optimized for 30s ECG segments",
     default_kwargs={"recording_length": 30},
 )
-class AFModel(nn.Module):
+class AFModel(PretrainedMixin, nn.Module):
     """
     Atrial Fibrillation classification model.
 
@@ -118,7 +115,53 @@ class AFModel(nn.Module):
     def feature_dim(self) -> int:
         return self._feature_dim
 
+    @property
+    def min_input_length(self) -> int:
+        """Smallest signal length the convolutional stack accepts.
+
+        Each block narrows the signal by ``kernel_size - 1`` and optionally
+        halves it, so the bound is obtained by walking the stack backwards from
+        a single remaining sample.
+
+        Returns:
+            Minimum number of samples per lead.
+        """
+        required = 1
+        for block in reversed(self.conv_layers):
+            if block.use_pooling:
+                required *= 2
+            required += block.conv.kernel_size[0] - 1
+        return required
+
     def extract_features(self, data: torch.Tensor) -> torch.Tensor:
+        """Return the pooled representation preceding dropout and the head.
+
+        Args:
+            data: Input of shape (batch, leads, time)
+
+        Returns:
+            Tensor of shape (batch, feature_dim).
+
+        Raises:
+            ValueError: If the signal is shorter than :attr:`min_input_length`.
+                ``recording_length`` selects the convolution kernel size but is
+                never compared against the data, so without this check a short
+                signal fails deep inside the stack with an opaque kernel-size
+                error.
+        """
+        if data.dim() != 3:
+            raise ValueError(
+                f"{type(self).__name__} expects input of shape (batch, leads, time), "
+                f"got a {data.dim()}-D tensor of shape {tuple(data.shape)}."
+            )
+        if data.shape[-1] < self.min_input_length:
+            raise ValueError(
+                f"{type(self).__name__}(recording_length={self.recording_length}) needs at "
+                f"least {self.min_input_length} samples per lead but received "
+                f"{data.shape[-1]}. Pass longer signals, or build the model with a "
+                f"recording_length matching the data."
+            )
+
         for conv_layer in self.conv_layers:
             data = conv_layer(data)
         data = self.adaptive_pool(data)
@@ -138,40 +181,3 @@ class AFModel(nn.Module):
                 dummy_input = conv_layer(dummy_input)
 
             return dummy_input.shape[-1]
-
-    @classmethod
-    def from_pretrained(
-        cls,
-        weights: str,
-        map_location: Optional[Union[str, torch.device]] = None,
-        force_download: bool = False,
-        **kwargs,
-    ) -> "AFModel":
-        """Load a pretrained AFModel.
-
-        Args:
-            weights: Name of pretrained weights (e.g., "afmodel-30s") or path to weights file
-            map_location: Device to map weights to (e.g., "cpu", "cuda")
-            force_download: If True, re-download weights even if cached
-            **kwargs: Override default model parameters from the weight registry
-
-        Returns:
-            Model with pretrained weights loaded
-
-        Example:
-            >>> model = AFModel.from_pretrained("afmodel-30s")
-            >>> model = AFModel.from_pretrained("afmodel-30s", map_location="cuda")
-            >>> model = AFModel.from_pretrained("/path/to/weights.pt", recording_length=30)
-        """
-        weight_path = Path(weights)
-        if weight_path.exists():
-            state_dict = torch.load(weight_path, map_location=map_location, weights_only=True)
-            model = cls(**kwargs)
-        else:
-            info = get_weight_info(weights)
-            model_kwargs = {**info["model_kwargs"], **kwargs}
-            model = cls(**model_kwargs)
-            state_dict = load_pretrained_weights(weights, map_location, force_download)
-
-        model.load_state_dict(state_dict)
-        return model

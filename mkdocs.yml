@@ -43,6 +43,7 @@ nav:
       - Datasets: user-guide/datasets.md
       - Model Zoo: user-guide/model-zoo.md
       - Evaluation: user-guide/evaluation.md
+      - Feature Extraction: user-guide/feature-extraction.md
   - Examples:
       - Basic Training: examples/train-basic.md
       - Advanced Training: examples/train-advanced.md
@@ -53,6 +54,7 @@ nav:
       - models: api/models.md
       - training: api/training.md
       - evaluation: api/evaluation.md
+      - features: api/features.md
       - registry: api/registry.md
       - utils: api/utils.md
 

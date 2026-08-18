@@ -61,6 +61,8 @@ def show_info(model_name: str, logger: Optional[CLILogger] = None) -> int:
         print(f"Description: {MODEL_DESCRIPTIONS.get(model_name, 'N/A')}")
         print(f"Total parameters: {total_params:,}")
         print(f"Trainable parameters: {trainable_params:,}")
+        if hasattr(model, "feature_dim"):
+            print(f"Feature dimension: {model.feature_dim}")
         print(f"Pretrained weights: {', '.join(MODEL_WEIGHTS.get(model_name, ['None']))}")
         print()
         print("Architecture:")

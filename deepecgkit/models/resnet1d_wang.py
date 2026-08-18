@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as func
 from torch import nn
 
+from deepecgkit.models.pretrained import PretrainedMixin
 from deepecgkit.registry import register_model
 
 
@@ -69,7 +70,7 @@ class BasicBlock1DWang(nn.Module):
     name="resnet-wang",
     description="ResNet (Wang et al.) for time series classification",
 )
-class ResNetWang(nn.Module):
+class ResNetWang(PretrainedMixin, nn.Module):
     """
     ResNet model based on Wang et al.'s architecture for time series classification.
 

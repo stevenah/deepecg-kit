@@ -28,7 +28,7 @@ class TestPackageStructure:
         """Test package metadata."""
         assert hasattr(deepecgkit, "__author__")
         assert hasattr(deepecgkit, "__license__")
-        assert deepecgkit.__license__ == "MIT"
+        assert deepecgkit.__license__ == "Apache-2.0"
 
     def test_main_imports(self):
         """Test that main components can be imported from deepecgkit."""

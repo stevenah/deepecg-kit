@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as func
 from torch import nn
 
+from deepecgkit.models.pretrained import PretrainedMixin
 from deepecgkit.registry import register_model
 
 
@@ -119,7 +120,7 @@ class InceptionResidualBlock1D(nn.Module):
     name="inception-time",
     description="Multi-scale temporal CNN inspired by InceptionTime",
 )
-class InceptionTime1D(nn.Module):
+class InceptionTime1D(PretrainedMixin, nn.Module):
     """
     InceptionTime model adapted for 1D ECG signal classification.
 

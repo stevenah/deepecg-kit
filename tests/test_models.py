@@ -10,6 +10,9 @@ from deepecgkit.models import AFModel, KanResWideX
 from deepecgkit.models.af_classifier import ConvBlock
 from deepecgkit.models.kanres_x import ConvBlock as KanResConvBlock
 from deepecgkit.models.kanres_x import KanResModule
+from deepecgkit.models.pretrained import from_pretrained, model_name_for_weights
+from deepecgkit.registry import get_model, get_model_names
+from deepecgkit.utils.weights import download_weights
 
 
 class TestConvBlock:
@@ -232,3 +235,89 @@ class TestModelIntegration:
         output_eval = model(af_input)
 
         assert output_train.shape == output_eval.shape
+
+
+class TestPretrainedMixin:
+    """Loading pretrained weights, shared across every registered model."""
+
+    @pytest.mark.parametrize("model_name", get_model_names())
+    def test_every_model_supports_from_pretrained(self, model_name):
+        """The mixin is applied to all registered architectures."""
+        model_class = get_model(model_name)
+        assert hasattr(model_class, "from_pretrained")
+        assert callable(model_class.from_pretrained)
+
+    def test_load_bare_state_dict(self, temp_dir, sample_batch_ecg):
+        """A plain state dict file round-trips."""
+        model = KanResWideX(input_channels=1, output_size=4)
+        path = temp_dir / "weights.pt"
+        torch.save(model.state_dict(), str(path))
+
+        loaded = KanResWideX.from_pretrained(str(path), input_channels=1, output_size=4)
+        model.eval()
+        loaded.eval()
+        with torch.no_grad():
+            assert torch.allclose(model(sample_batch_ecg), loaded(sample_batch_ecg))
+
+    def test_load_trainer_checkpoint(self, temp_dir, sample_batch_ecg):
+        """An ECGTrainer checkpoint is unwrapped and its shapes recovered."""
+        model = KanResWideX(input_channels=1, output_size=4)
+        path = temp_dir / "trainer.ckpt"
+        torch.save(
+            {
+                "model_state_dict": model.state_dict(),
+                "model_config": {"name": "kanres", "input_channels": 1, "output_size": 4},
+            },
+            str(path),
+        )
+
+        loaded = KanResWideX.from_pretrained(str(path))
+        model.eval()
+        loaded.eval()
+        with torch.no_grad():
+            assert torch.allclose(model(sample_batch_ecg), loaded(sample_batch_ecg))
+
+    def test_load_legacy_lightning_checkpoint(self, temp_dir, sample_batch_ecg):
+        """A checkpoint whose keys carry the Lightning wrapper prefix loads."""
+        model = KanResWideX(input_channels=1, output_size=4)
+        prefixed = {f"model.{key}": value for key, value in model.state_dict().items()}
+        path = temp_dir / "lightning.ckpt"
+        torch.save({"state_dict": prefixed, "epoch": 3}, str(path))
+
+        loaded = KanResWideX.from_pretrained(str(path), input_channels=1, output_size=4)
+        model.eval()
+        loaded.eval()
+        with torch.no_grad():
+            assert torch.allclose(model(sample_batch_ecg), loaded(sample_batch_ecg))
+
+    def test_unknown_weight_name(self):
+        """An unregistered weight name is rejected."""
+        with pytest.raises(ValueError, match="Unknown weight"):
+            KanResWideX.from_pretrained("no-such-weights")
+
+    def test_placeholder_url_is_reported(self):
+        """Unpublished registry entries fail with an explanation, not a 404."""
+        with pytest.raises(RuntimeError, match="No public weights have been published"):
+            download_weights("kanres-af-30s")
+
+    def test_checkpoint_without_weights(self, temp_dir):
+        """A file holding no weights is reported clearly."""
+        path = temp_dir / "empty.ckpt"
+        torch.save({"epoch": 1}, str(path))
+        with pytest.raises(ValueError, match="contains no weights"):
+            KanResWideX.from_pretrained(str(path))
+
+    def test_model_name_for_weights(self):
+        """Weight entries resolve to their registered model name."""
+        assert model_name_for_weights("kanres-af-30s") == "kanres"
+        assert model_name_for_weights("afmodel-30s") == "afmodel"
+        assert model_name_for_weights("no-such-weights") is None
+
+    def test_module_level_from_pretrained(self, temp_dir):
+        """Callers holding a registry name can load without the class."""
+        model = KanResWideX(input_channels=1, output_size=4)
+        path = temp_dir / "weights.pt"
+        torch.save(model.state_dict(), str(path))
+
+        loaded = from_pretrained("kanres", str(path), input_channels=1, output_size=4)
+        assert isinstance(loaded, KanResWideX)

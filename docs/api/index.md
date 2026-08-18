@@ -8,5 +8,8 @@ Top-level exports from the DeepECG-Kit package.
       members:
         - ECGDataModule
         - ECGTrainer
+        - FeatureExtractor
+        - FeatureSet
         - KanResWideX
+        - extract_features
         - read_csv

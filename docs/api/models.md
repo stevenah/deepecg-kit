@@ -56,3 +56,11 @@ with a consistent interface: `__init__(input_channels, output_size, **kwargs)`.
 ::: deepecgkit.models.ecg_dualnet.ECGDualNet
 
 ::: deepecgkit.models.mamba1d.Mamba1D
+
+## Pretrained Weights
+
+::: deepecgkit.models.pretrained.PretrainedMixin
+
+::: deepecgkit.models.pretrained.from_pretrained
+
+::: deepecgkit.models.pretrained.model_name_for_weights

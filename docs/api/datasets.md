@@ -35,3 +35,9 @@ Dataset classes, data modules, and preprocessing utilities for ECG analysis.
 ::: deepecgkit.datasets.ptbxl.PTBXLDataset
 
 ::: deepecgkit.datasets.unified_af.UnifiedAFDataset
+
+## File Reading
+
+::: deepecgkit.datasets.io.read_ecg_recording
+
+::: deepecgkit.datasets.io.as_model_input

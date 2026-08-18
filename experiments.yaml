@@ -35,16 +35,6 @@ experiments:
     dataset: ptbxl
     multi_label: true
 
-  - model: medformer
-    dataset: ptbxl
-    multi_label: true
-    learning_rate: 0.0005
-
-  - model: mamba
-    dataset: ptbxl
-    multi_label: true
-    learning_rate: 0.0005
-
   # ──────────────────────────────────────────────
   # PhysioNet 2017: 1-lead, 4 classes
   # Task: single-label multi-class classification
@@ -63,14 +53,6 @@ experiments:
 
   - model: crnn
     dataset: af-classification
-
-  - model: medformer
-    dataset: af-classification
-    learning_rate: 0.0005
-
-  - model: mamba
-    dataset: af-classification
-    learning_rate: 0.0005
 
   # ──────────────────────────────────────────────
   # MIT-BIH AFDB: 2-lead, binary AF detection
@@ -96,16 +78,6 @@ experiments:
     dataset: mitbih-afdb
     binary_classification: true
 
-  - model: medformer
-    dataset: mitbih-afdb
-    binary_classification: true
-    learning_rate: 0.0005
-
-  - model: mamba
-    dataset: mitbih-afdb
-    binary_classification: true
-    learning_rate: 0.0005
-
   # ──────────────────────────────────────────────
   # Unified AF: cross-dataset, 4 classes
   # Task: single-label multi-class (combined sources)
@@ -119,6 +91,3 @@ experiments:
   - model: crnn
     dataset: unified-af
 
-  - model: medformer
-    dataset: unified-af
-    learning_rate: 0.0005

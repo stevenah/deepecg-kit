@@ -5,6 +5,7 @@ Usage:
     deepecg train --model <model> --dataset <dataset> [options]
     deepecg evaluate --checkpoint <path> --dataset <dataset> [options]
     deepecg predict --checkpoint <path> --input <file> [options]
+    deepecg extract-features --checkpoint <path> --model <model> --dataset <dataset> --output <file> [options]
     deepecg resume --checkpoint <path> [options]
     deepecg list-models
     deepecg list-datasets
@@ -16,6 +17,7 @@ Use --force-download to re-download an existing dataset.
 
 from deepecgkit.cli.commands import (
     evaluate,
+    extract_features,
     list_datasets,
     list_models,
     predict,
@@ -50,6 +52,7 @@ __all__ = [
     "_get_dataset_registry",
     "_get_model_registry",
     "evaluate",
+    "extract_features",
     "list_datasets",
     "list_models",
     "load_config",
