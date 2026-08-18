@@ -1,8 +1,9 @@
 """Train and resume commands."""
 
+import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import matplotlib
 import torch
@@ -21,6 +22,50 @@ from deepecgkit.datasets import ECGDataModule
 from deepecgkit.evaluation.visualization import plot_training_curves
 from deepecgkit.training import ECGTrainer
 from deepecgkit.utils.weights import load_pretrained_weights
+
+
+def _write_split_info(data_module: Any, output_path: Path, seed: int, logger: CLILogger) -> None:
+    """Record the split this run trained and evaluated on.
+
+    The number of independent units in the test partition, not the number of
+    samples, governs whether any later comparison can support a confidence
+    interval. Grouped datasets hold entire recordings out, so a large sample
+    count can rest on very few subjects: MIT-BIH AFDB has 23 records, and a
+    ten percent test fraction yields two. Nothing else records this.
+
+    Args:
+        data_module: The configured data module, already set up.
+        output_path: Run directory.
+        seed: Seed that produced the split.
+        logger: CLI logger.
+    """
+    try:
+        n_train = len(data_module.train_dataset) if data_module.train_dataset is not None else 0
+        n_val = len(data_module.val_dataset) if data_module.val_dataset is not None else 0
+        n_test = len(data_module.test_dataset) if data_module.test_dataset is not None else 0
+
+        group_ids = list(getattr(data_module.dataset, "group_ids", None) or [])
+        test_groups: List[str] = []
+        test_subset = data_module.test_dataset
+        if group_ids and test_subset is not None and hasattr(test_subset, "indices"):
+            test_groups = sorted({str(group_ids[index]) for index in test_subset.indices})
+
+        payload = {
+            "seed": seed,
+            "n_train": n_train,
+            "n_val": n_val,
+            "n_test": n_test,
+            "n_test_groups": len(test_groups) if test_groups else n_test,
+            "grouped": bool(test_groups),
+            "test_groups": test_groups,
+        }
+        (output_path / "split_info.json").write_text(json.dumps(payload, indent=2) + "\n")
+        logger.info(
+            f"Split: {n_train} train, {n_val} val, {n_test} test across "
+            f"{payload['n_test_groups']} independent unit(s)"
+        )
+    except Exception as e:
+        logger.warning(f"Could not record split info: {e}")
 
 
 def train(
@@ -115,6 +160,8 @@ def train(
     except Exception as e:
         logger.error(f"Failed to create data module: {e}")
         return 1
+
+    _write_split_info(data_module, output_path, seed, logger)
 
     sample_signal, _ = data_module.dataset[0]
     input_channels = sample_signal.shape[0]

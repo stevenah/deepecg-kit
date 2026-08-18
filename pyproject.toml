@@ -55,8 +55,9 @@ docs = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 python_files = ["test_*.py"]
-addopts = "-v --cov=deepecgkit --cov-report=term-missing"
+addopts = "-v --cov=deepecgkit --cov=scripts --cov-report=term-missing"
 filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::UserWarning",
@@ -84,7 +85,7 @@ exclude_lines = [
 [tool.ruff]
 line-length = 100
 target-version = "py38"
-lint.select = ["E", "F", "B", "I", "N", "UP", "PL", "RUF"]
+lint.select = ["E", "F", "B", "I", "N", "UP", "PL", "RUF", "W"]
 lint.ignore = ["E501", "PLR0911", "PLR0913", "PLR0915", "PLR2004", "PLR0912", "E712", "RUF015"]
 lint.isort.known-first-party = ["deepecgkit"]
 
