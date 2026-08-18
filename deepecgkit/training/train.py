@@ -1,6 +1,7 @@
 import csv
 import os
 import random
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -83,6 +84,7 @@ class ECGTrainer:
         self.log_dir = None
         self.best_checkpoint_path = None
         self.best_val_loss = float("inf")
+        self.model_config = {}
 
     @property
     def _is_binary(self):
@@ -172,8 +174,14 @@ class ECGTrainer:
         progress_bar=True,
         gradient_clip_val=None,
         save_top_k=3,
+        restore_best=True,
     ):
         """Train the model.
+
+        On completion the weights achieving the lowest validation loss are restored,
+        so any subsequent test() or validate() call evaluates the selected model
+        rather than the final epoch. Requires checkpoint_dir to be set; without it
+        no checkpoint exists to restore and the final-epoch weights are kept.
 
         Args:
             data_module: ECGDataModule (or any object with train_dataloader/val_dataloader)
@@ -184,6 +192,7 @@ class ECGTrainer:
             progress_bar: Whether to show a tqdm progress bar
             gradient_clip_val: Max gradient norm for clipping (None to disable)
             save_top_k: Number of best checkpoints to keep
+            restore_best: Reload the best-validation-loss checkpoint when training ends
         """
         self._gradient_clip_val = gradient_clip_val
         self._setup_optimizer()
@@ -271,6 +280,30 @@ class ECGTrainer:
         finally:
             if csv_file is not None:
                 csv_file.close()
+
+        if restore_best:
+            self.restore_best_checkpoint()
+
+    def restore_best_checkpoint(self):
+        """Reload the weights of the best-validation-loss checkpoint written during fit.
+
+        Returns:
+            True if a checkpoint was restored, False if none was available.
+        """
+        if self.best_checkpoint_path is None or not os.path.exists(self.best_checkpoint_path):
+            if self.best_checkpoint_path is not None:
+                warnings.warn(
+                    f"Best checkpoint {self.best_checkpoint_path} is missing; "
+                    "evaluation will use final-epoch weights.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+            return False
+
+        checkpoint = torch.load(self.best_checkpoint_path, map_location="cpu", weights_only=False)
+        self.model.load_state_dict(checkpoint["model_state_dict"])
+        self.model.to(self.device)
+        return True
 
     def test(self, data_module):
         """Evaluate the model on the test set.
@@ -378,6 +411,7 @@ class ECGTrainer:
         checkpoint = {
             "model_state_dict": self.model.state_dict(),
             "train_config": self.train_config,
+            "model_config": self.model_config,
             "epoch": epoch,
             "best_val_loss": self.best_val_loss,
         }

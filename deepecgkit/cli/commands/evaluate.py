@@ -11,6 +11,7 @@ from deepecgkit.cli.registry import (
     _get_model_registry,
 )
 from deepecgkit.datasets import ECGDataModule
+from deepecgkit.models.factory import build_model_from_checkpoint
 from deepecgkit.training import ECGTrainer
 
 
@@ -49,11 +50,6 @@ def evaluate(
         return 1
 
     try:
-        logger.info(f"Loading model from {checkpoint}...")
-        model_class = model_registry[model_name]
-        model = model_class(input_channels=1, output_size=4)
-        trainer = ECGTrainer.load_checkpoint(checkpoint, model=model, device=accelerator)
-
         dataset_class = dataset_registry[dataset_name]
         dataset_kwargs: Dict[str, Any] = {"force_download": force_download}
         if data_dir:
@@ -67,6 +63,16 @@ def evaluate(
             download=True,
             dataset_kwargs=dataset_kwargs,
         )
+        data_module.setup()
+
+        sample_signal, _ = data_module.dataset[0]
+        input_channels = int(sample_signal.shape[0])
+
+        logger.info(f"Loading model from {checkpoint}...")
+        model, _ = build_model_from_checkpoint(
+            checkpoint, name=model_name, input_channels=input_channels
+        )
+        trainer = ECGTrainer.load_checkpoint(checkpoint, model=model, device=accelerator)
 
         logger.info(f"Running evaluation on {split} split...")
         if split == "test":

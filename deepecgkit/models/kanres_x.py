@@ -1,12 +1,9 @@
-from pathlib import Path
-from typing import Optional, Union
-
 import torch
 import torch.nn.functional as func
 from torch import nn
 
+from deepecgkit.models.pretrained import PretrainedMixin
 from deepecgkit.registry import register_model
-from deepecgkit.utils.weights import get_weight_info, load_pretrained_weights
 
 
 class ConvBlock(nn.Module):
@@ -40,7 +37,7 @@ class KanResModule(nn.Module):
     name="kanres",
     description="KAN-ResNet architecture with wide layers",
 )
-class KanResWideX(nn.Module):
+class KanResWideX(PretrainedMixin, nn.Module):
     """
     KanRes-Wide-X model for ECG signal classification.
 
@@ -87,40 +84,3 @@ class KanResWideX(nn.Module):
     def forward(self, x):
         x = self.extract_features(x)
         return self.classifier(x)
-
-    @classmethod
-    def from_pretrained(
-        cls,
-        weights: str,
-        map_location: Optional[Union[str, torch.device]] = None,
-        force_download: bool = False,
-        **kwargs,
-    ) -> "KanResWideX":
-        """Load a pretrained KanResWideX model.
-
-        Args:
-            weights: Name of pretrained weights (e.g., "kanres-af-30s") or path to weights file
-            map_location: Device to map weights to (e.g., "cpu", "cuda")
-            force_download: If True, re-download weights even if cached
-            **kwargs: Override default model parameters from the weight registry
-
-        Returns:
-            Model with pretrained weights loaded
-
-        Example:
-            >>> model = KanResWideX.from_pretrained("kanres-af-30s")
-            >>> model = KanResWideX.from_pretrained("kanres-af-30s", map_location="cuda")
-            >>> model = KanResWideX.from_pretrained("/path/to/weights.pt", output_size=2)
-        """
-        weight_path = Path(weights)
-        if weight_path.exists():
-            state_dict = torch.load(weight_path, map_location=map_location, weights_only=True)
-            model = cls(**kwargs)
-        else:
-            info = get_weight_info(weights)
-            model_kwargs = {**info["model_kwargs"], **kwargs}
-            model = cls(**model_kwargs)
-            state_dict = load_pretrained_weights(weights, map_location, force_download)
-
-        model.load_state_dict(state_dict)
-        return model

@@ -193,6 +193,7 @@ class PTBXLDataset(BaseECGDataset):
         self.signals: List[np.ndarray] = []
         self.labels: List[np.ndarray] = []
         self.record_names: List[str] = []
+        self.patient_ids: List[str] = []
         self.metadata_df: Optional[pd.DataFrame] = None
         self.scp_statements: Optional[pd.DataFrame] = None
         self.source_sampling_rate = source_sampling_rate
@@ -335,6 +336,7 @@ class PTBXLDataset(BaseECGDataset):
                 self.signals.append(signal.astype(np.float32))
                 self.labels.append(labels)
                 self.record_names.append(str(ecg_id))
+                self.patient_ids.append(str(row.patient_id))
 
             except Exception as e:
                 if self.verbose:
@@ -475,6 +477,19 @@ class PTBXLDataset(BaseECGDataset):
     def class_names(self) -> List[str]:
         """Get the names of the classes in the dataset."""
         return self._get_label_columns()
+
+    @property
+    def group_ids(self) -> List[str]:
+        """Patient identifiers, used so a patient never spans multiple splits.
+
+        PTB-XL contains multiple ECGs for some patients, so grouping by ecg_id
+        would place different recordings of the same patient in train and test.
+        The official strat_fold assignment is likewise made per patient.
+
+        Returns:
+            One patient identifier per loaded record.
+        """
+        return list(self.patient_ids)
 
     def get_record_info(self, idx: int) -> Dict:
         """Get record information for a specific sample.

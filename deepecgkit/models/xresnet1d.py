@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as func
 from torch import nn
 
+from deepecgkit.models.pretrained import PretrainedMixin
 from deepecgkit.registry import register_model
 
 
@@ -113,7 +114,7 @@ class XResBlock1D(nn.Module):
     name="xresnet",
     description="Improved ResNet with Mish activation and blur-pool downsampling",
 )
-class XResNet1D(nn.Module):
+class XResNet1D(PretrainedMixin, nn.Module):
     """
     XResNet model for ECG signal classification.
 

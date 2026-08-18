@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 
+from deepecgkit.models.pretrained import PretrainedMixin
 from deepecgkit.registry import register_model
 
 
@@ -8,7 +9,7 @@ from deepecgkit.registry import register_model
     name="gru",
     description="GRU-based model for sequential ECG analysis",
 )
-class GRUECG(nn.Module):
+class GRUECG(PretrainedMixin, nn.Module):
     """
     GRU-based model for ECG signal classification.
 

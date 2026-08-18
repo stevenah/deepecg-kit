@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as func
 from torch import nn
 
+from deepecgkit.models.pretrained import PretrainedMixin
 from deepecgkit.registry import register_model
 
 
@@ -104,7 +105,7 @@ class PreActResBlock2D(nn.Module):
     name="deep-res-cnn",
     description="Deep Residual 2D CNN (Elyamani et al. 2022) for multi-lead ECG classification",
 )
-class DeepResCNN(nn.Module):
+class DeepResCNN(PretrainedMixin, nn.Module):
     """
     Deep Residual 2D CNN for ECG classification.
 
@@ -152,6 +153,7 @@ class DeepResCNN(nn.Module):
         self.block3 = PreActResBlock2D(64, 128, dropout_rate=dropout_rate)
         self.block4 = PreActResBlock2D(128, 128, dropout_rate=dropout_rate)
 
+        self.input_channels = input_channels
         self.lead_fusion = nn.Conv2d(128, 128, kernel_size=(input_channels, 1))
         self.lead_fusion_bn = nn.BatchNorm2d(128)
         self.pool = nn.AdaptiveAvgPool2d(1)
@@ -181,6 +183,32 @@ class DeepResCNN(nn.Module):
         return 0.005 * self.fc1.weight.pow(2).sum() + 0.009 * self.fc2.weight.pow(2).sum()
 
     def extract_features(self, x: torch.Tensor) -> torch.Tensor:
+        """Return the pooled representation preceding the classifier head.
+
+        Args:
+            x: Input of shape (batch, leads, time)
+
+        Returns:
+            Tensor of shape (batch, feature_dim).
+
+        Raises:
+            ValueError: If the lead count differs from the configured one. The
+                lead-fusion convolution slides along the lead axis and the
+                adaptive pool absorbs the remainder, so a mismatch would
+                otherwise produce a correctly shaped but meaningless embedding.
+        """
+        if x.dim() != 3:
+            raise ValueError(
+                f"{type(self).__name__} expects input of shape (batch, leads, time), "
+                f"got a {x.dim()}-D tensor of shape {tuple(x.shape)}."
+            )
+        if x.shape[1] != self.input_channels:
+            raise ValueError(
+                f"{type(self).__name__} was built for {self.input_channels} leads but "
+                f"received {x.shape[1]}. Rebuild the model with "
+                f"input_channels={x.shape[1]} or pass matching data."
+            )
+
         x = x.unsqueeze(1)
 
         x = self.stem_conv(x)

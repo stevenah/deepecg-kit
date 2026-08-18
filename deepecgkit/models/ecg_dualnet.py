@@ -3,6 +3,7 @@ import math
 import torch
 from torch import nn
 
+from deepecgkit.models.pretrained import PretrainedMixin
 from deepecgkit.registry import register_model
 
 
@@ -146,7 +147,7 @@ class TransformerBranch(nn.Module):
     name="dualnet",
     description="Dual-path architecture with CNN-LSTM and Transformer branches for ECG",
 )
-class ECGDualNet(nn.Module):
+class ECGDualNet(PretrainedMixin, nn.Module):
     """
     Dual-path ECG classification network.
 

@@ -175,6 +175,11 @@ def train(
     }
 
     trainer = ECGTrainer(model=model, train_config=train_config, device=accelerator)
+    trainer.model_config = {
+        "name": model_name,
+        "input_channels": int(input_channels),
+        "output_size": int(model_output_size),
+    }
 
     checkpoint_dir = output_path / "checkpoints"
     log_dir = output_path / "training_logs"
@@ -196,13 +201,13 @@ def train(
 
         logger.info(f"Training complete. Checkpoints saved to {output_path}")
 
+        matplotlib.use("Agg")
+
+        class_names = None
+        if hasattr(data_module, "dataset") and hasattr(data_module.dataset, "class_names"):
+            class_names = data_module.dataset.class_names
+
         try:
-            matplotlib.use("Agg")
-
-            class_names = None
-            if hasattr(data_module, "dataset") and hasattr(data_module.dataset, "class_names"):
-                class_names = data_module.dataset.class_names
-
             metrics_file = log_dir / "metrics.csv"
             if metrics_file.exists():
                 plot_training_curves(
@@ -211,37 +216,41 @@ def train(
                 )
                 logger.info(f"Loss plot saved to {output_path / 'loss.png'}")
                 logger.info(f"Accuracy plot saved to {output_path / 'accuracy.png'}")
-
-            y_pred, y_true, y_prob = trainer.get_test_results()
-
-            if y_pred is not None:
-                is_multi_label = y_true.ndim > 1
-
-                if is_multi_label:
-                    _save_multi_label_evaluation(
-                        y_true,
-                        y_pred,
-                        y_prob,
-                        model_name,
-                        dataset_name,
-                        class_names,
-                        output_path,
-                        logger,
-                    )
-                else:
-                    _save_single_label_evaluation(
-                        y_true,
-                        y_pred,
-                        y_prob,
-                        model_name,
-                        dataset_name,
-                        class_names,
-                        output_path,
-                        logger,
-                    )
-
         except Exception as e:
-            logger.warning(f"Post-training evaluation failed: {e}")
+            logger.warning(f"Training curve plotting failed: {e}")
+
+        y_pred, y_true, y_prob = trainer.get_test_results()
+
+        if y_pred is not None:
+            is_multi_label = y_true.ndim > 1
+
+            if is_multi_label:
+                _save_multi_label_evaluation(
+                    y_true,
+                    y_pred,
+                    y_prob,
+                    model_name,
+                    dataset_name,
+                    class_names,
+                    output_path,
+                    logger,
+                )
+            else:
+                _save_single_label_evaluation(
+                    y_true,
+                    y_pred,
+                    y_prob,
+                    model_name,
+                    dataset_name,
+                    class_names,
+                    output_path,
+                    logger,
+                )
+        elif data_module.test_dataset is not None and len(data_module.test_dataset) > 0:
+            raise RuntimeError(
+                "Test evaluation produced no predictions, so no metrics were written. "
+                "The run is incomplete and must not be treated as successful."
+            )
 
         return 0
     except KeyboardInterrupt:

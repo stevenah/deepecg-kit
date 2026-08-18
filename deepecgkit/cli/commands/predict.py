@@ -4,13 +4,12 @@ import json
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
-import pandas as pd
 import torch
-import wfdb
 
 from deepecgkit.cli.logger import CLILogger
 from deepecgkit.cli.registry import _get_model_registry
+from deepecgkit.datasets.io import SUPPORTED_ECG_SUFFIXES, as_model_input, read_ecg_recording
+from deepecgkit.models.factory import build_model_from_checkpoint, infer_input_channels
 
 
 def predict(
@@ -36,9 +35,6 @@ def predict(
         return 1
 
     try:
-        logger.info(f"Loading model from {checkpoint}...")
-        ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False)
-
         if model_name is None:
             logger.error("--model is required for predict command")
             return 1
@@ -48,28 +44,34 @@ def predict(
             logger.error(f"Unknown model: {model_name}")
             return 1
 
-        model_class = model_registry[model_name]
-        model = model_class(input_channels=1, output_size=4)
-        model.load_state_dict(ckpt["model_state_dict"])
-        model.eval()
-
-        logger.info(f"Loading input data from {input_path}...")
-        if input_file.suffix == ".npy":
-            data = np.load(input_path)
-        elif input_file.suffix == ".csv":
-            data = pd.read_csv(input_path).values
-        elif input_file.suffix in (".dat", ".hea"):
-            record = wfdb.rdrecord(str(input_file.with_suffix("")))
-            data = record.p_signal
-        else:
+        if input_file.suffix not in SUPPORTED_ECG_SUFFIXES:
             logger.error(f"Unsupported input format: {input_file.suffix}")
             logger.info("Supported formats: .npy, .csv, .dat/.hea (WFDB)")
             return 1
 
-        if data.ndim == 1:
-            data = data.reshape(1, 1, -1)
-        elif data.ndim == 2:
-            data = data.reshape(data.shape[0], 1, -1)
+        logger.info(f"Loading model from {checkpoint}...")
+        ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False)
+
+        train_config = ckpt.get("train_config") or {}
+        multi_label = bool(train_config.get("multi_label", False))
+        binary_classification = bool(train_config.get("binary_classification", False))
+
+        recorded = ckpt.get("model_config") or {}
+        input_channels = recorded.get("input_channels") or infer_input_channels(
+            ckpt["model_state_dict"]
+        )
+        model, _ = build_model_from_checkpoint(
+            checkpoint, name=model_name, input_channels=input_channels
+        )
+        model.eval()
+
+        logger.info(f"Loading input data from {input_path}...")
+        data = read_ecg_recording(input_file)
+        try:
+            data = as_model_input(data, input_channels)
+        except ValueError as shape_error:
+            logger.error(str(shape_error))
+            return 1
 
         tensor = torch.tensor(data, dtype=torch.float32)
 
@@ -82,8 +84,17 @@ def predict(
             outputs = model(tensor)
             if hasattr(outputs, "logits"):
                 outputs = outputs.logits
-            probabilities = torch.softmax(outputs, dim=-1)
-            predictions = torch.argmax(probabilities, dim=-1)
+
+            if multi_label:
+                probabilities = torch.sigmoid(outputs)
+                predictions = (probabilities > 0.5).int()
+            elif binary_classification and outputs.shape[-1] == 1:
+                positive = torch.sigmoid(outputs.squeeze(-1))
+                probabilities = torch.stack([1 - positive, positive], dim=-1)
+                predictions = (positive > 0.5).int()
+            else:
+                probabilities = torch.softmax(outputs, dim=-1)
+                predictions = torch.argmax(probabilities, dim=-1)
 
         results = {
             "predictions": predictions.cpu().numpy().tolist(),

@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as func
 from torch import nn
 
+from deepecgkit.models.pretrained import PretrainedMixin
 from deepecgkit.registry import register_model
 
 
@@ -102,7 +103,7 @@ class SEResidualBlock1D(nn.Module):
     name="se-resnet",
     description="ResNet with Squeeze-and-Excitation channel attention for ECG",
 )
-class SEResNet1D(nn.Module):
+class SEResNet1D(PretrainedMixin, nn.Module):
     """
     SE-ResNet model for ECG signal classification.
 

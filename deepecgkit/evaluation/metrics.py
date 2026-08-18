@@ -20,8 +20,31 @@ BINARY_THRESHOLD = 0.5
 MULTICLASS_THRESHOLD = 2
 
 
+def resolve_average(y_true: np.ndarray, average: str = "auto") -> str:
+    """Resolve the averaging mode applied to precision, recall and F1.
+
+    Precision, recall and F1 are not comparable across averaging modes, so the
+    mode in force must be recorded alongside the values rather than inferred.
+    Under "auto" a two-class problem yields positive-class ("binary") values,
+    not macro-averaged ones.
+
+    Args:
+        y_true: True labels, used only to count classes under "auto"
+        average: One of "auto", "binary", "macro", "micro", "weighted"
+
+    Returns:
+        The concrete averaging mode to pass to scikit-learn.
+    """
+    if average != "auto":
+        return average
+    return "binary" if len(np.unique(y_true)) <= MULTICLASS_THRESHOLD else "macro"
+
+
 def calculate_classification_metrics(
-    y_true: np.ndarray, y_pred: np.ndarray, metrics: Optional[List[str]] = None
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    metrics: Optional[List[str]] = None,
+    average: str = "auto",
 ) -> Dict[str, float]:
     """
     Calculate classification metrics.
@@ -30,6 +53,10 @@ def calculate_classification_metrics(
         y_true: True labels
         y_pred: Predicted labels or probabilities
         metrics: List of metrics to compute
+        average: Averaging for precision/recall/f1. "auto" selects positive-class
+            values for two-class problems and macro averaging otherwise. Pass an
+            explicit mode to make the choice independent of the label set. Use
+            resolve_average to obtain the mode actually applied.
 
     Returns:
         Dictionary of computed metrics
@@ -54,7 +81,7 @@ def calculate_classification_metrics(
         y_scores = y_pred
 
     n_classes = len(np.unique(y_true))
-    avg = "binary" if n_classes <= MULTICLASS_THRESHOLD else "macro"
+    avg = resolve_average(y_true, average)
 
     def _compute_metric(metric):
         result = np.nan

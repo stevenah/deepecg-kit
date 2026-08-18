@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 
+from deepecgkit.models.pretrained import PretrainedMixin
 from deepecgkit.registry import register_model
 
 
@@ -88,7 +89,7 @@ class KanResModule(nn.Module):
     name="kanres-deep",
     description="Deep KAN-ResNet architecture",
 )
-class KanResDeepX(nn.Module):
+class KanResDeepX(PretrainedMixin, nn.Module):
     """KanRes-Deep-X model for ECG signal classification.
 
     A deep residual convolutional neural network architecture designed for ECG

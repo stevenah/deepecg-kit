@@ -14,6 +14,7 @@ from deepecgkit.evaluation.metrics import (
     calculate_classification_metrics,
     calculate_regression_metrics,
     confusion_matrix_analysis,
+    resolve_average,
     roc_auc_score,
 )
 from deepecgkit.evaluation.visualization import (
@@ -36,5 +37,6 @@ __all__ = [
     "plot_predictions",
     "plot_roc_curve",
     "plot_training_curves",
+    "resolve_average",
     "roc_auc_score",
 ]

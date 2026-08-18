@@ -16,7 +16,7 @@ deepecg list-datasets
 deepecg info -m kanres
 ```
 
-**Models:** `afmodel`, `convnext-v2`, `crnn`, `deep-res-cnn`, `dualnet`, `fcn-wang`, `gru`, `inception-time`, `kanres`, `kanres-deep`, `lstm`, `mamba`, `medformer`, `resnet`, `resnet-wang`, `se-resnet`, `simple-cnn`, `tcn`, `transformer`, `xresnet`, `xresnet1d-benchmark`
+**Models:** `afmodel`, `convnext-v2`, `crnn`, `deep-res-cnn`, `dualnet`, `fcn-wang`, `gru`, `inception-time`, `kanres`, `kanres-deep`, `lstm`, `resnet`, `resnet-wang`, `se-resnet`, `simple-cnn`, `tcn`, `transformer`, `xresnet`, `xresnet1d-benchmark`
 
 **Datasets:** `af-classification` (1-lead, 4-class, PhysioNet 2017), `ptbxl` (12-lead, 5 superclasses, multi-label), `mitbih-afdb` (2-lead, binary/4-class, MIT-BIH AFDB), `ltafdb` (2-lead, binary/4-class, Long-Term AFDB), `unified-af` (1-lead, 4-class, combined cross-dataset).
 
@@ -60,8 +60,4 @@ Experiments are defined in `experiments.yaml` and run via `python scripts/run_ex
 
 8. **inception-time** — Fawaz HI, Lucas B, Forestier G, Pelletier C, Schmidt DF, Weber J, Webb GI, Idoumghar L, Muller PA, Petitjean F. "InceptionTime: Finding AlexNet for Time Series Classification." *Data Mining and Knowledge Discovery*, 34:1936–1962, 2020. [[GitHub]](https://github.com/hfawaz/InceptionTime)
 
-9.  **mamba** — Gu A, Dao T. "Mamba: Linear-Time Sequence Modeling with Selective State Spaces." *arXiv:2312.00752*, 2023. [[GitHub]](https://github.com/state-spaces/mamba)
-
-10. **medformer** — Wang N, Liang X, Wang Z, Zhao J, Liu Y, Peng L, Miao C. "MedFormer: A Multi-Granularity Patching Transformer for Medical Time-Series Classification." *NeurIPS*, 2024. [[GitHub]](https://github.com/DL4mHealth/Medformer)
-
-11. **xresnet / xresnet1d-benchmark** — Strodthoff N, Wagner P, Schaeffter T, Samek W. "Deep Learning for ECG Analysis: Benchmarks and Insights from PTB-XL." *IEEE Journal of Biomedical and Health Informatics*, 25(5):1519–1528, 2021. [[GitHub]](https://github.com/helme/ecg_ptbxl_benchmarking)
+9. **xresnet / xresnet1d-benchmark** — Strodthoff N, Wagner P, Schaeffter T, Samek W. "Deep Learning for ECG Analysis: Benchmarks and Insights from PTB-XL." *IEEE Journal of Biomedical and Health Informatics*, 25(5):1519–1528, 2021. [[GitHub]](https://github.com/helme/ecg_ptbxl_benchmarking)

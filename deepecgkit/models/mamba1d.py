@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as func
 from torch import nn
 
+from deepecgkit.models.pretrained import PretrainedMixin
 from deepecgkit.registry import register_model
 
 
@@ -35,7 +36,7 @@ class SelectiveSSM(nn.Module):
         self.dt_proj = nn.Linear(1, d_inner, bias=True)
 
         a_log = torch.log(torch.arange(1, d_state + 1, dtype=torch.float32))
-        a_log = a_log.unsqueeze(0).expand(d_inner, -1)
+        a_log = a_log.unsqueeze(0).expand(d_inner, -1).contiguous()
         self.a_log = nn.Parameter(a_log)
 
         self.D = nn.Parameter(torch.ones(d_inner))
@@ -142,7 +143,7 @@ class BidirectionalMamba(nn.Module):
     name="mamba",
     description="Bidirectional Mamba state space model with linear complexity for ECG",
 )
-class Mamba1D(nn.Module):
+class Mamba1D(PretrainedMixin, nn.Module):
     """
     Bidirectional Mamba model for ECG classification.
 

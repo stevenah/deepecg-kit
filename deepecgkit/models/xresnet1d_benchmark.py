@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 
+from deepecgkit.models.pretrained import PretrainedMixin
 from deepecgkit.registry import register_model
 
 
@@ -82,7 +83,7 @@ class XResBlock(nn.Module):
     name="xresnet1d-benchmark",
     description="XResNet1d from PTB-XL benchmark (fixed feature dim, concat pooling)",
 )
-class XResNet1dBenchmark(nn.Module):
+class XResNet1dBenchmark(PretrainedMixin, nn.Module):
     """
     XResNet1d adapted from the PTB-XL benchmarking repository.
 

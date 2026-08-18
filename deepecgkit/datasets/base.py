@@ -110,6 +110,20 @@ class BaseECGDataset(Dataset, ABC):
         """Get the names of the classes in the dataset."""
         pass
 
+    @property
+    def group_ids(self) -> List[str]:
+        """Identifiers used to keep correlated samples inside a single split.
+
+        Defaults to record_names, which is correct whenever one record corresponds
+        to one subject. Datasets where a single subject contributes several records
+        must override this to return subject-level identifiers, otherwise samples
+        from the same subject can be divided across train and test.
+
+        Returns:
+            One identifier per sample, or an empty list if grouping is unavailable.
+        """
+        return list(getattr(self, "record_names", []) or [])
+
     def get_class_distribution(self) -> Dict[str, int]:
         """Get the distribution of classes in the dataset."""
         return {}

@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 
+from deepecgkit.models.pretrained import PretrainedMixin
 from deepecgkit.registry import register_model
 
 
@@ -88,7 +89,7 @@ class ConvNeXtV2Block1D(nn.Module):
     name="convnext-v2",
     description="Modern ConvNet with depthwise convolutions and Global Response Normalization for ECG",
 )
-class ConvNeXtV21D(nn.Module):
+class ConvNeXtV21D(PretrainedMixin, nn.Module):
     """
     ConvNeXtV2 adapted for 1D ECG signals.
 

@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 
+from deepecgkit.models.pretrained import PretrainedMixin
 from deepecgkit.registry import register_model
 
 
@@ -8,7 +9,7 @@ from deepecgkit.registry import register_model
     name="fcn-wang",
     description="Fully Convolutional Network (Wang et al.) for time series classification",
 )
-class FCNWang(nn.Module):
+class FCNWang(PretrainedMixin, nn.Module):
     """
     Fully Convolutional Network for ECG signal classification.
 

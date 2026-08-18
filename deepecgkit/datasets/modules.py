@@ -2,6 +2,7 @@
 Data module for ECG datasets.
 """
 
+import warnings
 from typing import Dict, Optional, Type, Union
 
 import numpy as np
@@ -139,11 +140,29 @@ class ECGDataModule:
 
         # Extract groups for patient-level splitting (prevents data leakage)
         groups = None
-        if hasattr(self.dataset, "record_names") and self.dataset.record_names:
-            groups = np.array(self.dataset.record_names)
+        group_ids = getattr(self.dataset, "group_ids", None) or getattr(
+            self.dataset, "record_names", None
+        )
+        if group_ids:
+            if len(group_ids) != len(self.dataset):
+                raise ValueError(
+                    f"{type(self.dataset).__name__} exposes {len(group_ids)} group ids "
+                    f"for {len(self.dataset)} samples. Grouped splitting cannot be "
+                    "performed safely."
+                )
+            groups = np.array(group_ids)
             if self.verbose:
                 n_groups = len(np.unique(groups))
-                print(f"Using patient-level splitting ({n_groups} groups)")
+                print(f"Using grouped splitting ({n_groups} groups)")
+        else:
+            warnings.warn(
+                f"{type(self.dataset).__name__} exposes no group ids, so the split is "
+                "performed at sample level. If samples are segments of longer recordings, "
+                "segments of the same recording will appear in both train and test and the "
+                "reported scores will be optimistically biased.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
         splitter = DataSplitter(
             dataset=self.dataset,

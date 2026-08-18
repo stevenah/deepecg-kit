@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as func
 from torch import nn
 
+from deepecgkit.models.pretrained import PretrainedMixin
 from deepecgkit.registry import register_model
 
 
@@ -101,7 +102,7 @@ class TemporalBlock(nn.Module):
     name="tcn",
     description="Temporal Convolutional Network with dilated causal convolutions",
 )
-class TCN(nn.Module):
+class TCN(PretrainedMixin, nn.Module):
     """
     Temporal Convolutional Network for ECG signal classification.
 

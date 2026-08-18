@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as func
 from torch import nn
 
+from deepecgkit.models.pretrained import PretrainedMixin
 from deepecgkit.registry import register_model
 
 
@@ -72,7 +73,7 @@ class ResidualBlock1D(nn.Module):
     name="resnet",
     description="1D ResNet architecture adapted for ECG",
 )
-class ResNet1D(nn.Module):
+class ResNet1D(PretrainedMixin, nn.Module):
     """
     1D ResNet model for ECG signal classification.
 
