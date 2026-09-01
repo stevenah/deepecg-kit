@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 
-from deepecgkit.models.pretrained import PretrainedMixin
+from deepecgkit.models.base import ECGModelBase
 from deepecgkit.registry import register_model
 
 
@@ -121,8 +121,10 @@ class InterGranularityAttention(nn.Module):
 @register_model(
     name="medformer",
     description="Multi-granularity patching Transformer for medical time series (NeurIPS 2024)",
+    min_input_length=50,
+    max_input_length=5009,
 )
-class Medformer(PretrainedMixin, nn.Module):
+class Medformer(ECGModelBase):
     """
     Medformer: Multi-Granularity Patching Transformer for medical time series.
 
@@ -203,28 +205,18 @@ class Medformer(PretrainedMixin, nn.Module):
 
         self.classifier = nn.Linear(self._feature_dim, output_size)
 
-    @property
-    def feature_dim(self) -> int:
-        return self._feature_dim
-
     def extract_features(self, x: torch.Tensor) -> torch.Tensor:
         granularity_features = []
-        for patch_emb, pos_emb in zip(self.patch_embeddings, self.pos_embeddings):
+        for patch_emb, pos_emb in zip(self.patch_embeddings, self.pos_embeddings, strict=False):
             patches = patch_emb(x)
             num_patches = patches.size(1)
             patches = patches + pos_emb[:, :num_patches]
             granularity_features.append(patches)
 
-        for intra_layer, inter_layer in zip(self.intra_blocks, self.inter_blocks):
+        for intra_layer, inter_layer in zip(self.intra_blocks, self.inter_blocks, strict=False):
             for i, intra_block in enumerate(intra_layer):
                 granularity_features[i] = intra_block(granularity_features[i])
             granularity_features = inter_layer(granularity_features)
 
         pooled = [f.mean(dim=1) for f in granularity_features]
         return torch.cat(pooled, dim=1)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.extract_features(x)
-        x = self.dropout(x)
-        x = self.classifier(x)
-        return x

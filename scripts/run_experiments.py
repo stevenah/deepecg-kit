@@ -25,23 +25,20 @@ import json
 import subprocess
 import sys
 import time
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Set
+from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
-DEFAULTS = {
-    "epochs": 50,
-    "batch_size": 32,
-    "learning_rate": 1e-3,
-    "val_split": 0.2,
-    "test_split": 0.1,
-    "num_workers": 4,
-    "accelerator": "auto",
-    "devices": 1,
-    "early_stopping_patience": 10,
-    "seed": 42,
-}
+from deepecgkit.analysis.aggregation import (
+    METADATA_FILENAME,
+    METRICS_FILENAME,
+    SPLIT_INFO_FILENAME,
+)
+from deepecgkit.cli.defaults import TRAIN_DEFAULTS
+
+DEFAULTS = dict(TRAIN_DEFAULTS)
 
 PARAM_KEYS = set(DEFAULTS.keys()) | {
     "data_dir",
@@ -58,13 +55,10 @@ SEEDS_KEY = "seeds"
 RUNS_DIR_DEFAULT = "runs"
 STATE_VERSION = 2
 MAX_SEED = 2**32 - 1
-METRICS_FILENAME = "classification_metrics.csv"
-METADATA_FILENAME = "run_metadata.json"
-SPLIT_INFO_FILENAME = "split_info.json"
 FINGERPRINT_LENGTH = 8
 
 
-def validate_seeds(value: Any, source: str) -> List[int]:
+def validate_seeds(value: Any, source: str) -> list[int]:
     """Validate and normalise a configured seed list.
 
     Seeds are never coerced. A scalar is rejected rather than wrapped and
@@ -81,13 +75,13 @@ def validate_seeds(value: Any, source: str) -> List[int]:
     Raises:
         ValueError: If the value is not a list of distinct in-range integers.
     """
-    if not isinstance(value, (list, tuple)):
+    if not isinstance(value, list | tuple):
         raise ValueError(f"{source}: seeds must be a list, got {type(value).__name__}")
     seeds = list(value)
     if not seeds:
         raise ValueError(f"{source}: seeds must not be empty")
 
-    validated: List[int] = []
+    validated: list[int] = []
     for entry in seeds:
         if isinstance(entry, bool) or not isinstance(entry, int):
             raise ValueError(
@@ -104,11 +98,11 @@ def validate_seeds(value: Any, source: str) -> List[int]:
 
 
 def resolve_seeds(
-    experiment: Dict[str, Any],
-    file_defaults: Dict[str, Any],
+    experiment: dict[str, Any],
+    file_defaults: dict[str, Any],
     resolved_seed: int,
-    seeds_override: Optional[Sequence[int]] = None,
-) -> List[int]:
+    seeds_override: Sequence[int] | None = None,
+) -> list[int]:
     """Choose the seed list for one experiment.
 
     Precedence runs from the command line, through a per-experiment key, to a
@@ -139,8 +133,8 @@ def resolve_seeds(
 
 
 def load_experiments(
-    config_path: str, seeds_override: Optional[Sequence[int]] = None
-) -> List[Dict[str, Any]]:
+    config_path: str, seeds_override: Sequence[int] | None = None
+) -> list[dict[str, Any]]:
     """Read the config into experiment mappings carrying a resolved seed list.
 
     Args:
@@ -180,7 +174,7 @@ def load_experiments(
     return experiments
 
 
-def params_fingerprint(experiment: Dict[str, Any]) -> str:
+def params_fingerprint(experiment: dict[str, Any]) -> str:
     """Stable short hash of everything that affects a run except its seed.
 
     Args:
@@ -209,7 +203,7 @@ def run_key(model: str, dataset: str, seed: int) -> str:
     return f"{model}|{dataset}|{seed}"
 
 
-def _output_dir_for(experiment: Dict[str, Any], seed: int, n_seeds: int, runs_dir: str) -> str:
+def _output_dir_for(experiment: dict[str, Any], seed: int, n_seeds: int, runs_dir: str) -> str:
     """Choose the run directory for one expanded run.
 
     An explicit output_dir is left untouched when the experiment has a single
@@ -234,10 +228,10 @@ def _output_dir_for(experiment: Dict[str, Any], seed: int, n_seeds: int, runs_di
 
 
 def expand_runs(
-    experiments: Sequence[Dict[str, Any]],
+    experiments: Sequence[dict[str, Any]],
     runs_dir: str = RUNS_DIR_DEFAULT,
-    only: Optional[Sequence[str]] = None,
-) -> List[Dict[str, Any]]:
+    only: Sequence[str] | None = None,
+) -> list[dict[str, Any]]:
     """Expand each experiment into one run per seed, experiment-major.
 
     The "seeds" key is removed and a scalar "seed" set, so a run mapping is
@@ -255,7 +249,7 @@ def expand_runs(
         ValueError: If two runs would still share an output directory.
     """
     wanted = set(only) if only else None
-    runs: List[Dict[str, Any]] = []
+    runs: list[dict[str, Any]] = []
     for index, experiment in enumerate(experiments):
         pairing = f"{experiment['model']}:{experiment['dataset']}"
         if wanted is not None and pairing not in wanted:
@@ -275,7 +269,7 @@ def expand_runs(
     return runs
 
 
-def _disambiguate_output_dirs(runs: List[Dict[str, Any]]) -> None:
+def _disambiguate_output_dirs(runs: list[dict[str, Any]]) -> None:
     """Append a fingerprint wherever two distinct runs would collide.
 
     Two experiments differing only in a hyperparameter share a model, dataset
@@ -288,7 +282,7 @@ def _disambiguate_output_dirs(runs: List[Dict[str, Any]]) -> None:
     Raises:
         ValueError: If a collision survives disambiguation.
     """
-    seen: Dict[str, int] = {}
+    seen: dict[str, int] = {}
     for run in runs:
         seen[run["output_dir"]] = seen.get(run["output_dir"], 0) + 1
 
@@ -297,7 +291,7 @@ def _disambiguate_output_dirs(runs: List[Dict[str, Any]]) -> None:
             run["output_dir"] = f"{run['output_dir']}-{run['params_fingerprint']}"
             run["key"] = f"{run['key']}|{run['params_fingerprint']}"
 
-    final: Set[str] = set()
+    final: set[str] = set()
     for run in runs:
         if run["output_dir"] in final:
             raise ValueError(
@@ -333,7 +327,7 @@ def run_is_complete(output_dir: str) -> bool:
     return isinstance(metadata, dict) and metadata.get("returncode") == 0
 
 
-def write_run_metadata(run: Dict[str, Any], returncode: int, duration: float) -> None:
+def write_run_metadata(run: dict[str, Any], returncode: int, duration: float) -> None:
     """Record what produced a run directory, next to its metrics.
 
     Args:
@@ -355,7 +349,19 @@ def write_run_metadata(run: Dict[str, Any], returncode: int, duration: float) ->
         "duration_seconds": round(duration, 3),
         "command": build_command(run),
     }
-    (directory / METADATA_FILENAME).write_text(json.dumps(payload, indent=2) + "\n")
+    # Merge into what `deepecg train` wrote for the same run rather than
+    # clobbering it.
+    metadata_path = directory / METADATA_FILENAME
+    existing: dict[str, Any] = {}
+    if metadata_path.exists():
+        try:
+            loaded = json.loads(metadata_path.read_text())
+            if isinstance(loaded, dict):
+                existing = loaded
+        except (ValueError, OSError):
+            pass
+    existing.update(payload)
+    metadata_path.write_text(json.dumps(existing, indent=2) + "\n")
 
 
 def clear_stale_outputs(output_dir: str) -> None:
@@ -384,7 +390,7 @@ def _state_path(config_path: str) -> Path:
     return Path(config_path).resolve().parent / f".experiments_state_{tag}.json"
 
 
-def _load_state(config_path: str, runs_dir: str = RUNS_DIR_DEFAULT) -> Dict[str, Dict[str, Any]]:
+def _load_state(config_path: str, runs_dir: str = RUNS_DIR_DEFAULT) -> dict[str, dict[str, Any]]:
     """Load the progress cache keyed by model, dataset and seed.
 
     Args:
@@ -423,7 +429,7 @@ def _load_state(config_path: str, runs_dir: str = RUNS_DIR_DEFAULT) -> Dict[str,
 
 
 def _save_state(
-    config_path: str, completed: Dict[str, Dict[str, Any]], runs_dir: str = RUNS_DIR_DEFAULT
+    config_path: str, completed: dict[str, dict[str, Any]], runs_dir: str = RUNS_DIR_DEFAULT
 ) -> None:
     """Write the progress cache.
 
@@ -456,7 +462,7 @@ def _clear_state(config_path: str) -> None:
         print("No progress state to clear.")
 
 
-def build_command(exp: Dict[str, Any]) -> List[str]:
+def build_command(exp: dict[str, Any]) -> list[str]:
     """Build the `deepecg train` command for one run.
 
     Args:
@@ -599,7 +605,7 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _echo_plan(runs: Sequence[Dict[str, Any]], completed: Dict[str, Dict[str, Any]]) -> None:
+def _echo_plan(runs: Sequence[dict[str, Any]], completed: dict[str, dict[str, Any]]) -> None:
     """Print the resolved seeds and the commands that will run.
 
     The seed list is always echoed. YAML resolves a zero-padded literal such
@@ -624,8 +630,8 @@ def _echo_plan(runs: Sequence[Dict[str, Any]], completed: Dict[str, Dict[str, An
 
 
 def _reconcile_with_disk(
-    runs: Sequence[Dict[str, Any]], completed: Dict[str, Dict[str, Any]]
-) -> Dict[str, Dict[str, Any]]:
+    runs: Sequence[dict[str, Any]], completed: dict[str, dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
     """Trust the run directories over the cache.
 
     A cached entry whose directory no longer holds metrics is dropped, and a
@@ -640,7 +646,7 @@ def _reconcile_with_disk(
     Returns:
         The reconciled records.
     """
-    reconciled: Dict[str, Dict[str, Any]] = {}
+    reconciled: dict[str, dict[str, Any]] = {}
     for run in runs:
         key = run["key"]
         if run_is_complete(run["output_dir"]):
@@ -666,7 +672,7 @@ def _reconcile_with_disk(
     return reconciled
 
 
-def _print_summary(results: Sequence[Dict[str, Any]], total_elapsed: float) -> None:
+def _print_summary(results: Sequence[dict[str, Any]], total_elapsed: float) -> None:
     """Print the per-run outcome table.
 
     Args:
@@ -690,8 +696,8 @@ def _print_summary(results: Sequence[Dict[str, Any]], total_elapsed: float) -> N
 
 
 def _execute(
-    runs: Sequence[Dict[str, Any]],
-    completed: Dict[str, Dict[str, Any]],
+    runs: Sequence[dict[str, Any]],
+    completed: dict[str, dict[str, Any]],
     args: argparse.Namespace,
 ) -> int:
     """Run the expanded list, recording progress as it goes.
@@ -704,7 +710,7 @@ def _execute(
     Returns:
         Process exit status.
     """
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     total_start = time.time()
     attempted = 0
     failed = 0
@@ -779,7 +785,7 @@ def _execute(
     return 1 if failed else 0
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     """Entry point.
 
     Args:
@@ -814,7 +820,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("No runs selected.")
         return 0
 
-    completed: Dict[str, Dict[str, Any]] = {}
+    completed: dict[str, dict[str, Any]] = {}
     if args.resume:
         try:
             completed = _load_state(args.config, runs_dir=args.runs_dir)

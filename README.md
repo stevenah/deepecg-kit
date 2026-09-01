@@ -1,30 +1,66 @@
 # DeepECG-Kit
 
-A deep learning library for ECG analysis and arrhythmia classification. Provides a CLI for training, evaluation, and inference across multiple model architectures and ECG datasets.
+A deep learning library for ECG analysis and arrhythmia classification. Provides a CLI for
+training, evaluation, inference, feature extraction, and explainability across 21 model
+architectures and 5 ECG datasets.
 
-Install with `pip install deepecgkit`, or for local development clone the repo and run `pip install -e ".[dev]"`.
+**Documentation:** https://stevenah.github.io/deepecg-kit/
+
+## Installation
+
+```bash
+pip install deepecgkit
+```
+
+For local development (Python ≥ 3.10):
+
+```bash
+uv sync --group dev        # blessed path
+pip install -e ".[dev]"    # pip alternative
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow.
 
 ## Usage
 
 ```bash
-deepecg train -m kanres -d af-classification    # train (auto-downloads dataset)
-deepecg evaluate --checkpoint model.ckpt -d af-classification
-deepecg predict --checkpoint model.ckpt --input ecg.npy
-deepecg resume --checkpoint model.ckpt --epochs 100
-deepecg list-models                              # list available models/datasets
+deepecg train -m kanres -d af-classification        # train (auto-downloads dataset)
+deepecg evaluate --checkpoint model.pt -m kanres -d af-classification
+deepecg predict --checkpoint model.pt -m kanres --input ecg.npy
+deepecg extract-features --checkpoint model.pt -m kanres -d af-classification -o features.npz
+deepecg explain --checkpoint model.pt -m kanres --input ecg.npy -o explanations/
+deepecg list-models                                  # all 21 architectures
 deepecg list-datasets
 deepecg info -m kanres
 ```
 
-**Models:** `afmodel`, `convnext-v2`, `crnn`, `deep-res-cnn`, `dualnet`, `fcn-wang`, `gru`, `inception-time`, `kanres`, `kanres-deep`, `lstm`, `resnet`, `resnet-wang`, `se-resnet`, `simple-cnn`, `tcn`, `transformer`, `xresnet`, `xresnet1d-benchmark`
+Training writes a run directory `runs/{timestamp}-{model}-{dataset}-seed{seed}/` containing
+checkpoints (top 3 by validation loss), training plots, test metrics
+(`classification_metrics.csv`, confusion matrix, calibration curve), and run metadata.
+`deepecg evaluate` automatically picks up the recorded split configuration from the run
+directory; pass `-o` to write the same artifact set for an existing checkpoint.
 
-**Datasets:** `af-classification` (1-lead, 4-class, PhysioNet 2017), `ptbxl` (12-lead, 5 superclasses, multi-label), `mitbih-afdb` (2-lead, binary/4-class, MIT-BIH AFDB), `ltafdb` (2-lead, binary/4-class, Long-Term AFDB), `unified-af` (1-lead, 4-class, combined cross-dataset).
+Run `deepecg list-models` and `deepecg list-datasets` for the full catalogs — datasets cover
+PhysioNet 2017 (`af-classification`), PTB-XL (`ptbxl`), MIT-BIH AFDB (`mitbih-afdb`),
+Long-Term AFDB (`ltafdb`), and the combined `unified-af`.
 
 ## Experiments
 
-Experiments are defined in `experiments.yaml` and run via `python scripts/run_experiments.py`. Each experiment trains a model on a dataset using the CLI under the hood. Results save to `runs/{timestamp}-{model}-{dataset}/` with checkpoints (top 3 by val_loss), training plots, and test evaluation (confusion matrix, classification report).
+Experiment sweeps are defined in `experiments.yaml` and run via
+`python scripts/run_experiments.py`. Each experiment trains every configured model on every
+dataset across multiple seeds (default `seeds: [42, 43, 44, 45, 46]` — 5 runs per
+model/dataset pair), saving to `runs/{model}-{dataset}-seed{seed}/`.
+
+Aggregate and analyse finished runs with:
+
+```bash
+deepecg aggregate --runs-dir runs --output-dir analysis --emit-latex
+deepecg rank --runs-dir runs --metric f1
+```
 
 ### Default Training Parameters
+
+Defined once in `deepecgkit/cli/defaults.py`:
 
 | Parameter | Value |
 |-----------|-------|

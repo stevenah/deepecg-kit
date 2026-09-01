@@ -1,7 +1,9 @@
+from typing import ClassVar
+
 import torch
 from torch import nn
 
-from deepecgkit.models.pretrained import PretrainedMixin
+from deepecgkit.models.base import ECGModelBase
 from deepecgkit.registry import register_model
 
 
@@ -29,7 +31,7 @@ class ConvBlock(nn.Module):
         if use_pooling:
             self.pool = nn.MaxPool1d(kernel_size=2, stride=2)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.conv(x)
         x = self.relu(self.batch_norm(x))
 
@@ -45,8 +47,9 @@ class ConvBlock(nn.Module):
     name="afmodel",
     description="Atrial Fibrillation model optimized for 30s ECG segments",
     default_kwargs={"recording_length": 30},
+    min_input_length=7971,
 )
-class AFModel(PretrainedMixin, nn.Module):
+class AFModel(ECGModelBase):
     """
     Atrial Fibrillation classification model.
 
@@ -68,6 +71,8 @@ class AFModel(PretrainedMixin, nn.Module):
         >>> print(features.shape)  # (32, 196)
     """
 
+    HEAD_ATTR: ClassVar[str] = "output"
+
     def __init__(
         self,
         input_channels: int = 1,
@@ -75,9 +80,8 @@ class AFModel(PretrainedMixin, nn.Module):
         recording_length: int = 30,
     ):
         super().__init__()
-        assert recording_length in [6, 10, 30], (
-            f"Recording length must be 6, 10, or 30, got {recording_length}"
-        )
+        if recording_length not in (6, 10, 30):
+            raise ValueError(f"Recording length must be 6, 10, or 30, got {recording_length}")
 
         self.recording_length = recording_length
         kernel_size = 6 if recording_length in [6, 10] else 32
@@ -110,10 +114,6 @@ class AFModel(PretrainedMixin, nn.Module):
         self._feature_dim = 196
         self.dropout = nn.Dropout(0.3)
         self.output = nn.Linear(in_features=self._feature_dim, out_features=output_size)
-
-    @property
-    def feature_dim(self) -> int:
-        return self._feature_dim
 
     @property
     def min_input_length(self) -> int:
@@ -167,17 +167,3 @@ class AFModel(PretrainedMixin, nn.Module):
         data = self.adaptive_pool(data)
         data = self.flatten(data)
         return data
-
-    def forward(self, data):
-        data = self.extract_features(data)
-        data = self.dropout(data)
-        return self.output(data)
-
-    def get_feature_size(self, input_size: int) -> int:
-        with torch.no_grad():
-            dummy_input = torch.randn(1, 1, input_size)
-
-            for conv_layer in self.conv_layers:
-                dummy_input = conv_layer(dummy_input)
-
-            return dummy_input.shape[-1]

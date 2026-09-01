@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as func
 from torch import nn
 
-from deepecgkit.models.pretrained import PretrainedMixin
+from deepecgkit.models.base import ECGModelBase
 from deepecgkit.registry import register_model
 
 
@@ -142,8 +142,10 @@ class BidirectionalMamba(nn.Module):
 @register_model(
     name="mamba",
     description="Bidirectional Mamba state space model with linear complexity for ECG",
+    min_input_length=50,
+    max_input_length=25049,
 )
-class Mamba1D(PretrainedMixin, nn.Module):
+class Mamba1D(ECGModelBase):
     """
     Bidirectional Mamba model for ECG classification.
 
@@ -209,10 +211,6 @@ class Mamba1D(PretrainedMixin, nn.Module):
 
         self.classifier = nn.Linear(d_model, output_size)
 
-    @property
-    def feature_dim(self) -> int:
-        return self._feature_dim
-
     def extract_features(self, x: torch.Tensor) -> torch.Tensor:
         x = self.patch_embed(x)
         x = x.transpose(1, 2)
@@ -224,10 +222,4 @@ class Mamba1D(PretrainedMixin, nn.Module):
 
         x = self.norm(x)
         x = x.mean(dim=1)
-        return x
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.extract_features(x)
-        x = self.dropout(x)
-        x = self.classifier(x)
         return x

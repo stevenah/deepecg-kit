@@ -1,7 +1,8 @@
 import torch
 from torch import nn
 
-from deepecgkit.models.pretrained import PretrainedMixin
+from deepecgkit.models.base import ECGModelBase
+from deepecgkit.models.layers import lstm_final_hidden
 from deepecgkit.registry import register_model
 
 
@@ -9,7 +10,7 @@ from deepecgkit.registry import register_model
     name="lstm",
     description="LSTM-based model for sequential ECG analysis",
 )
-class LSTMECG(PretrainedMixin, nn.Module):
+class LSTMECG(ECGModelBase):
     """
     LSTM-based model for ECG signal classification.
 
@@ -70,28 +71,18 @@ class LSTMECG(PretrainedMixin, nn.Module):
             nn.Linear(64, output_size),
         )
 
-    @property
-    def feature_dim(self) -> int:
-        return self._feature_dim
-
     def _extract_lstm_features(self, x: torch.Tensor) -> torch.Tensor:
         batch_size = x.size(0)
         x = x.transpose(1, 2)
         _, (h_n, _) = self.lstm(x)
 
-        if self.bidirectional:
-            h_n = h_n.view(self.num_layers, 2, batch_size, self.hidden_size)
-            h_n = h_n[-1]
-            h_n = torch.cat([h_n[0], h_n[1]], dim=1)
-        else:
-            h_n = h_n[-1]
-
-        return h_n
+        return lstm_final_hidden(
+            h_n,
+            num_layers=self.num_layers,
+            batch_size=batch_size,
+            hidden_size=self.hidden_size,
+            bidirectional=self.bidirectional,
+        )
 
     def extract_features(self, x: torch.Tensor) -> torch.Tensor:
         return self._extract_lstm_features(x)
-
-    def forward(self, x):
-        x = self.extract_features(x)
-        x = self.dropout(x)
-        return self.classifier(x)

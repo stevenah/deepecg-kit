@@ -1,7 +1,7 @@
 """Tests for the representation-quality protocol."""
 
 import json
-from typing import ClassVar, List
+from typing import ClassVar
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -48,7 +48,7 @@ def headless_matplotlib():
 class ToyECGDataset(Dataset):
     """A small in-memory single-lead dataset whose class shifts the signal's frequency."""
 
-    CLASS_LABELS: ClassVar[List[str]] = ["slow", "medium", "fast", "very fast"]
+    CLASS_LABELS: ClassVar[list[str]] = ["slow", "medium", "fast", "very fast"]
 
     def __init__(self, seed: int, n_samples: int = TOY_SAMPLES, offset: float = 0.0):
         rng = np.random.default_rng(seed)
@@ -64,7 +64,7 @@ class ToyECGDataset(Dataset):
         self.signals = signals
 
     @property
-    def class_names(self) -> List[str]:
+    def class_names(self) -> list[str]:
         """Names of the four classes."""
         return self.CLASS_LABELS
 

@@ -3,7 +3,6 @@ Visualization functions for ECG evaluation.
 """
 
 from pathlib import Path
-from typing import List, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -12,14 +11,16 @@ import seaborn as sns
 from sklearn.calibration import calibration_curve
 from sklearn.metrics import auc, confusion_matrix, roc_curve
 
+from deepecgkit.utils.plotting import finalize_figure
+
 
 def plot_confusion_matrix(
     y_true: np.ndarray,
     y_pred: np.ndarray,
-    class_names: Optional[List[str]] = None,
+    class_names: list[str] | None = None,
     title: str = "Confusion Matrix",
-    save_path: Optional[str] = None,
-):
+    save_path: str | None = None,
+) -> None:
     """Plot confusion matrix."""
     labels = sorted(set(y_true) | set(y_pred))
     cm = confusion_matrix(y_true, y_pred, labels=labels)
@@ -43,19 +44,15 @@ def plot_confusion_matrix(
     ax.set_ylabel("True Label")
     ax.set_xlabel("Predicted Label")
 
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches="tight")
-        plt.close()
-    else:
-        plt.show()
+    finalize_figure(save_path)
 
 
 def plot_roc_curve(
     y_true: np.ndarray,
     y_scores: np.ndarray,
     title: str = "ROC Curve",
-    save_path: Optional[str] = None,
-):
+    save_path: str | None = None,
+) -> None:
     """Plot ROC curve."""
     fpr, tpr, _ = roc_curve(y_true, y_scores)
     roc_auc = auc(fpr, tpr)
@@ -76,19 +73,15 @@ def plot_roc_curve(
     plt.title(title)
     plt.legend(loc="lower right")
 
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches="tight")
-        plt.close()
-    else:
-        plt.show()
+    finalize_figure(save_path)
 
 
 def plot_predictions(
     y_true: np.ndarray,
     y_pred: np.ndarray,
     title: str = "Predictions vs True Values",
-    save_path: Optional[str] = None,
-):
+    save_path: str | None = None,
+) -> None:
     """Plot predictions vs true values."""
     plt.figure(figsize=(8, 6))
     plt.scatter(y_true, y_pred, alpha=0.6)
@@ -97,20 +90,16 @@ def plot_predictions(
     plt.ylabel("Predictions")
     plt.title(title)
 
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches="tight")
-        plt.close()
-    else:
-        plt.show()
+    finalize_figure(save_path)
 
 
 def plot_ecg_signals(
     data: np.ndarray,
     sampling_rate: float = 500.0,
-    leads: Optional[List[str]] = None,
+    leads: list[str] | None = None,
     title: str = "ECG Signals",
-    save_path: Optional[str] = None,
-):
+    save_path: str | None = None,
+) -> None:
     """Plot ECG signals."""
     if data.ndim == 1:
         data = data.reshape(-1, 1)
@@ -134,18 +123,14 @@ def plot_ecg_signals(
     plt.suptitle(title)
     plt.tight_layout()
 
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches="tight")
-        plt.close()
-    else:
-        plt.show()
+    finalize_figure(save_path)
 
 
 def plot_training_curves(
     metrics_path: str,
-    save_dir: Optional[str] = None,
-    save_path: Optional[str] = None,
-):
+    save_dir: str | None = None,
+    save_path: str | None = None,
+) -> None:
     """Plot training and validation loss and accuracy as separate figures.
 
     Args:
@@ -207,12 +192,12 @@ def plot_training_curves(
 def plot_calibration_curve(
     y_true: np.ndarray,
     y_prob: np.ndarray,
-    class_names: Optional[List[str]] = None,
+    class_names: list[str] | None = None,
     n_bins: int = 10,
     title: str = "Calibration Plot",
-    save_dir: Optional[str] = None,
-    save_path: Optional[str] = None,
-):
+    save_dir: str | None = None,
+    save_path: str | None = None,
+) -> None:
     """Plot reliability diagram and prediction distribution as separate figures.
 
     Args:
@@ -282,13 +267,13 @@ def plot_calibration_curve(
 
 def plot_transfer_matrix(
     values: np.ndarray,
-    sources: List[str],
-    targets: List[str],
+    sources: list[str],
+    targets: list[str],
     metric: str = "auroc_macro",
     baseline_rows: int = 0,
     title: str = "Cross-Dataset Transfer",
-    save_path: Optional[str] = None,
-):
+    save_path: str | None = None,
+) -> None:
     """Plot probe performance for every encoder source against every probe target.
 
     Args:
@@ -325,20 +310,16 @@ def plot_transfer_matrix(
     ax.set_ylabel("Encoder source")
     plt.tight_layout()
 
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches="tight")
-        plt.close()
-    else:
-        plt.show()
+    finalize_figure(save_path)
 
 
 def plot_embedding(
     embedding: np.ndarray,
-    labels: Optional[np.ndarray] = None,
-    class_names: Optional[List[str]] = None,
+    labels: np.ndarray | None = None,
+    class_names: list[str] | None = None,
     title: str = "Embedding",
-    save_path: Optional[str] = None,
-):
+    save_path: str | None = None,
+) -> None:
     """Scatter a two-dimensional embedding, coloured by class.
 
     Args:
@@ -401,8 +382,102 @@ def plot_embedding(
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
 
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches="tight")
-        plt.close()
-    else:
-        plt.show()
+    finalize_figure(save_path)
+
+
+def plot_multilabel_confusion_matrices(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    class_names: list[str] | None = None,
+    title: str | None = None,
+    save_path: str | None = None,
+) -> None:
+    """Plot one binary confusion matrix per label of a multi-label problem.
+
+    Args:
+        y_true: Multi-hot true labels, shape (n_samples, n_classes)
+        y_pred: Multi-hot predicted labels, same shape
+        class_names: One name per label
+        title: Figure title
+        save_path: Where to save the figure; None shows it instead
+    """
+    from sklearn.metrics import confusion_matrix as _confusion_matrix
+
+    num_classes = y_true.shape[1]
+    display_names = class_names or [f"Class {i}" for i in range(num_classes)]
+
+    ncols = min(num_classes, 3)
+    nrows = (num_classes + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 4 * nrows))
+    axes_flat = np.array(axes).flatten() if num_classes > 1 else [axes]
+
+    for i in range(num_classes):
+        cm = _confusion_matrix(y_true[:, i], y_pred[:, i], labels=[0, 1])
+        sns.heatmap(
+            cm,
+            annot=True,
+            fmt="d",
+            cmap="Blues",
+            xticklabels=["Neg", "Pos"],
+            yticklabels=["Neg", "Pos"],
+            ax=axes_flat[i],
+        )
+        axes_flat[i].set_title(display_names[i])
+        axes_flat[i].set_ylabel("True")
+        axes_flat[i].set_xlabel("Predicted")
+
+    for i in range(num_classes, len(axes_flat)):
+        axes_flat[i].set_visible(False)
+
+    if title:
+        fig.suptitle(title)
+    fig.tight_layout()
+    finalize_figure(save_path)
+
+
+def plot_multilabel_calibration_curve(
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+    class_names: list[str] | None = None,
+    title: str | None = None,
+    n_bins: int = 10,
+    save_path: str | None = None,
+) -> None:
+    """Plot per-label reliability curves for a multi-label problem.
+
+    Args:
+        y_true: Multi-hot true labels, shape (n_samples, n_classes)
+        y_prob: Predicted probabilities, same shape
+        class_names: One name per label
+        title: Figure title
+        n_bins: Reliability-curve bin count
+        save_path: Where to save the figure; None shows it instead
+    """
+    from sklearn.calibration import calibration_curve as _calibration_curve
+
+    num_classes = y_true.shape[1]
+    display_names = class_names or [f"Class {i}" for i in range(num_classes)]
+
+    plt.figure(figsize=(8, 6))
+    for i in range(num_classes):
+        if y_true[:, i].sum() == 0:
+            continue
+        try:
+            fraction_pos, mean_pred = _calibration_curve(
+                y_true[:, i],
+                y_prob[:, i],
+                n_bins=n_bins,
+                strategy="uniform",
+            )
+            plt.plot(mean_pred, fraction_pos, "s-", label=display_names[i])
+        except ValueError:
+            continue
+    plt.plot([0, 1], [0, 1], "k--", label="Perfectly calibrated")
+    plt.xlabel("Mean Predicted Probability")
+    plt.ylabel("Fraction of Positives")
+    if title:
+        plt.title(title)
+    plt.legend(loc="lower right", fontsize="small")
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    finalize_figure(save_path)

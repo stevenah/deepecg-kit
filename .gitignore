@@ -14,8 +14,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -73,7 +73,7 @@ docs/_build/
 
 # PyBuilder
 .pybuilder/
-target/
+/target/
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -174,24 +174,23 @@ cython_debug/
 .pypirc
 
 # Checkpoints
-checkpoints/
+/checkpoints/
 
 # Logs
-logs/
+/logs/
 
 # Data
-data/
+/data/
 
 # Results
-results/
+/results/
 
 .DS_Store
 lightning_logs/
-CLAUDE.md
 *_logs
 *_results
 deepecg-kit-paper/
 
-runs/
-analysis/
+/runs/
+/analysis/
 .experiments_state_*.json

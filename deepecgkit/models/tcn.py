@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as func
 from torch import nn
 
-from deepecgkit.models.pretrained import PretrainedMixin
+from deepecgkit.models.base import ECGModelBase
 from deepecgkit.registry import register_model
 
 
@@ -102,7 +102,7 @@ class TemporalBlock(nn.Module):
     name="tcn",
     description="Temporal Convolutional Network with dilated causal convolutions",
 )
-class TCN(PretrainedMixin, nn.Module):
+class TCN(ECGModelBase):
     """
     Temporal Convolutional Network for ECG signal classification.
 
@@ -162,18 +162,8 @@ class TCN(PretrainedMixin, nn.Module):
         self.dropout = nn.Dropout(dropout_rate)
         self.classifier = nn.Linear(self._feature_dim, output_size)
 
-    @property
-    def feature_dim(self) -> int:
-        return self._feature_dim
-
     def extract_features(self, x: torch.Tensor) -> torch.Tensor:
         x = self.network(x)
         x = self.global_pool(x)
         x = torch.flatten(x, 1)
-        return x
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.extract_features(x)
-        x = self.dropout(x)
-        x = self.classifier(x)
         return x

@@ -1,36 +1,9 @@
-import math
-
 import torch
 from torch import nn
 
-from deepecgkit.models.pretrained import PretrainedMixin
+from deepecgkit.models.base import ECGModelBase
+from deepecgkit.models.layers import PositionalEncoding, lstm_final_hidden
 from deepecgkit.registry import register_model
-
-
-class PositionalEncoding(nn.Module):
-    """
-    Sinusoidal positional encoding for transformer branch.
-
-    Args:
-        d_model: Dimension of the model
-        max_len: Maximum sequence length (default: 5000)
-        dropout: Dropout probability (default: 0.1)
-    """
-
-    def __init__(self, d_model: int, max_len: int = 5000, dropout: float = 0.1):
-        super().__init__()
-        self.dropout = nn.Dropout(p=dropout)
-
-        position = torch.arange(max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
-        pe = torch.zeros(1, max_len, d_model)
-        pe[0, :, 0::2] = torch.sin(position * div_term)
-        pe[0, :, 1::2] = torch.cos(position * div_term)
-        self.register_buffer("pe", pe)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.pe[:, : x.size(1)]
-        return self.dropout(x)
 
 
 class CNNLSTMBranch(nn.Module):
@@ -89,9 +62,12 @@ class CNNLSTMBranch(nn.Module):
         x = self.cnn(x)
         x = x.transpose(1, 2)
         _, (h_n, _) = self.lstm(x)
-        h_n = h_n.view(-1, 2, batch_size, self.lstm_hidden)
-        h_n = h_n[-1]
-        return torch.cat([h_n[0], h_n[1]], dim=1)
+        return lstm_final_hidden(
+            h_n,
+            num_layers=self.lstm.num_layers,
+            batch_size=batch_size,
+            hidden_size=self.lstm_hidden,
+        )
 
 
 class TransformerBranch(nn.Module):
@@ -146,8 +122,10 @@ class TransformerBranch(nn.Module):
 @register_model(
     name="dualnet",
     description="Dual-path architecture with CNN-LSTM and Transformer branches for ECG",
+    min_input_length=8,
+    max_input_length=5000,
 )
-class ECGDualNet(PretrainedMixin, nn.Module):
+class ECGDualNet(ECGModelBase):
     """
     Dual-path ECG classification network.
 
@@ -217,15 +195,7 @@ class ECGDualNet(PretrainedMixin, nn.Module):
             nn.Linear(128, output_size),
         )
 
-    @property
-    def feature_dim(self) -> int:
-        return self._feature_dim
-
     def extract_features(self, x: torch.Tensor) -> torch.Tensor:
         cnn_lstm_out = self.cnn_lstm_branch(x)
         transformer_out = self.transformer_branch(x)
         return torch.cat([cnn_lstm_out, transformer_out], dim=1)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.extract_features(x)
-        return self.classifier(x)

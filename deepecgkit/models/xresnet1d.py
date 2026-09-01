@@ -1,8 +1,10 @@
+from typing import ClassVar
+
 import torch
 import torch.nn.functional as func
 from torch import nn
 
-from deepecgkit.models.pretrained import PretrainedMixin
+from deepecgkit.models.base import ECGModelBase
 from deepecgkit.registry import register_model
 
 
@@ -113,8 +115,9 @@ class XResBlock1D(nn.Module):
 @register_model(
     name="xresnet",
     description="Improved ResNet with Mish activation and blur-pool downsampling",
+    min_input_length=17,
 )
-class XResNet1D(PretrainedMixin, nn.Module):
+class XResNet1D(ECGModelBase):
     """
     XResNet model for ECG signal classification.
 
@@ -140,6 +143,8 @@ class XResNet1D(PretrainedMixin, nn.Module):
         >>> features = model.extract_features(x)
         >>> print(features.shape)  # (32, 512) with base_channels=64
     """
+
+    HEAD_ATTR: ClassVar[str] = "fc"
 
     def __init__(
         self,
@@ -207,7 +212,7 @@ class XResNet1D(PretrainedMixin, nn.Module):
         self._feature_dim = base_channels * 8
         self.fc = nn.Linear(self._feature_dim, output_size)
 
-    def _make_layer(self, out_channels: int, num_blocks: int, stride: int = 1):
+    def _make_layer(self, out_channels: int, num_blocks: int, stride: int = 1) -> nn.Sequential:
         downsample = None
         if stride != 1 or self.in_channels != out_channels:
             ds_layers: list[nn.Module] = []
@@ -242,10 +247,6 @@ class XResNet1D(PretrainedMixin, nn.Module):
 
         return nn.Sequential(*layers)
 
-    @property
-    def feature_dim(self) -> int:
-        return self._feature_dim
-
     def extract_features(self, x: torch.Tensor) -> torch.Tensor:
         x = self.stem(x)
         x = self.stem_pool(x)
@@ -257,10 +258,4 @@ class XResNet1D(PretrainedMixin, nn.Module):
 
         x = self.avgpool(x)
         x = torch.flatten(x, 1)
-        return x
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.extract_features(x)
-        x = self.dropout(x)
-        x = self.fc(x)
         return x

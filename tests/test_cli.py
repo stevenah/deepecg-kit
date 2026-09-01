@@ -4,7 +4,8 @@ Tests for deepecgkit.cli module.
 
 import json
 import sys
-from unittest.mock import MagicMock, patch
+from typing import ClassVar
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -20,8 +21,6 @@ from deepecgkit.cli import (
     MODEL_NAMES,
     MODEL_WEIGHTS,
     CLILogger,
-    _get_dataset_registry,
-    _get_model_registry,
     evaluate,
     explain,
     list_datasets,
@@ -30,7 +29,6 @@ from deepecgkit.cli import (
     main,
     predict,
     probe,
-    resume,
     show_info,
     train,
 )
@@ -39,6 +37,7 @@ from deepecgkit.cli.commands.evaluate import (
     _read_train_config,
 )
 from deepecgkit.cli.commands.probe import parse_source_checkpoints
+from deepecgkit.cli.registry import _get_dataset_registry, _get_model_registry
 from deepecgkit.models.factory import build_model
 
 predict_module = sys.modules["deepecgkit.cli.commands.predict"]
@@ -143,7 +142,6 @@ class TestLoadConfig:
 
     def test_load_yaml_config(self, temp_dir):
         """Test loading YAML configuration."""
-        pytest.importorskip("yaml")
         config_file = temp_dir / "config.yaml"
         config_file.write_text("verbose: true\ntrain:\n  epochs: 100\n")
 
@@ -153,7 +151,6 @@ class TestLoadConfig:
 
     def test_load_yml_config(self, temp_dir):
         """Test loading .yml configuration."""
-        pytest.importorskip("yaml")
         config_file = temp_dir / "config.yml"
         config_file.write_text("model: kanres\n")
 
@@ -469,23 +466,6 @@ class TestPredictCommand:
         assert "Input file not found" in captured.err
 
 
-class TestResumeCommand:
-    """Test the resume command."""
-
-    def test_resume_missing_checkpoint(self):
-        """Test resume command with missing checkpoint."""
-        with pytest.raises(SystemExit):
-            main(["resume"])
-
-    def test_resume_checkpoint_not_found(self, capsys):
-        """Test resume command with non-existent checkpoint."""
-        result = main(["resume", "--checkpoint", "/nonexistent/model.ckpt", "-m", "kanres"])
-
-        assert result == 1
-        captured = capsys.readouterr()
-        assert "Checkpoint not found" in captured.err
-
-
 class TestTrainFunction:
     """Test the train function directly."""
 
@@ -646,14 +626,11 @@ class TestPredictFunction:
         input_file = temp_dir / "input.xyz"
         input_file.write_text("data")
 
-        mock_model = MagicMock()
-        mock_model_class = MagicMock(return_value=mock_model)
-
-        with patch.object(predict_module, "torch") as mock_torch, patch.object(
-            predict_module, "_get_model_registry"
-        ) as mock_registry:
+        with (
+            patch.object(predict_module, "torch") as mock_torch,
+            patch.object(predict_module, "require_model", return_value=None),
+        ):
             mock_torch.load.return_value = {"model_state_dict": {}}
-            mock_registry.return_value = {"kanres": mock_model_class}
 
             result = predict(
                 checkpoint=str(checkpoint_file),
@@ -664,18 +641,6 @@ class TestPredictFunction:
         assert result == 1
         captured = capsys.readouterr()
         assert "Unsupported input format" in captured.err
-
-
-class TestResumeFunction:
-    """Test the resume function directly."""
-
-    def test_resume_checkpoint_not_found(self, capsys):
-        """Test resume with non-existent checkpoint."""
-        result = resume(checkpoint="/nonexistent/model.ckpt", model_name="kanres")
-
-        assert result == 1
-        captured = capsys.readouterr()
-        assert "Checkpoint not found" in captured.err
 
 
 class TestCLIIntegration:
@@ -874,22 +839,6 @@ class TestCLIParserDefaults:
             assert call_kwargs["batch_size"] == 1
             assert call_kwargs["accelerator"] == "auto"
             assert call_kwargs["output_path"] is None
-
-    def test_resume_default_values(self, temp_dir):
-        """Test resume command default argument values."""
-        checkpoint_file = temp_dir / "model.ckpt"
-        checkpoint_file.touch()
-
-        with patch("deepecgkit.cli.resume") as mock_resume:
-            mock_resume.return_value = 0
-            main(["resume", "--checkpoint", str(checkpoint_file), "-m", "kanres"])
-
-            call_kwargs = mock_resume.call_args[1]
-            assert call_kwargs["epochs"] is None
-            assert call_kwargs["output_dir"] is None
-            assert call_kwargs["accelerator"] == "auto"
-            assert call_kwargs["devices"] == 1
-            assert call_kwargs["early_stopping_patience"] == 10
 
 
 class TestProbeCommand:
@@ -1462,3 +1411,185 @@ class TestExplainCommand:
         assert call_kwargs["sampling_rate"] == 500.0
         assert call_kwargs["plots"] is True
         assert call_kwargs["target_class"] is None
+
+
+class TestConfigMerge:
+    """--config values must actually reach the command (regression).
+
+    The old merge compared against the top-level parser's defaults (always
+    None), silently discarding every config key whose CLI default was
+    non-None: epochs, batch_size, learning_rate, seed, val_split, ...
+    """
+
+    def test_config_overrides_non_none_defaults(self, temp_dir):
+        config_file = temp_dir / "config.yaml"
+        config_file.write_text(
+            "train:\n  epochs: 100\n  batch_size: 64\n  learning_rate: 0.01\n  seed: 7\n"
+        )
+        with patch("deepecgkit.cli.train") as mock_train:
+            mock_train.return_value = 0
+            result = main(
+                ["--config", str(config_file), "train", "-m", "kanres", "-d", "af-classification"]
+            )
+        assert result == 0
+        kwargs = mock_train.call_args[1]
+        assert kwargs["epochs"] == 100
+        assert kwargs["batch_size"] == 64
+        assert kwargs["learning_rate"] == 0.01
+        assert kwargs["seed"] == 7
+
+    def test_explicit_flag_beats_config(self, temp_dir):
+        config_file = temp_dir / "config.yaml"
+        config_file.write_text("train:\n  epochs: 100\n")
+        with patch("deepecgkit.cli.train") as mock_train:
+            mock_train.return_value = 0
+            main(
+                [
+                    "--config",
+                    str(config_file),
+                    "train",
+                    "-m",
+                    "kanres",
+                    "-d",
+                    "af-classification",
+                    "--epochs",
+                    "7",
+                ]
+            )
+        assert mock_train.call_args[1]["epochs"] == 7
+
+    def test_unknown_config_key_warns(self, temp_dir, capsys):
+        config_file = temp_dir / "config.yaml"
+        config_file.write_text("train:\n  epochz: 3\n")
+        with patch("deepecgkit.cli.train") as mock_train:
+            mock_train.return_value = 0
+            main(["--config", str(config_file), "train", "-m", "kanres", "-d", "af-classification"])
+        assert "epochz" in capsys.readouterr().err
+
+    def test_config_applies_to_other_commands(self, temp_dir):
+        """--config was previously honoured only by train."""
+        config_file = temp_dir / "config.yaml"
+        config_file.write_text("evaluate:\n  batch_size: 16\n  seed: 9\n")
+        with patch("deepecgkit.cli.evaluate") as mock_evaluate:
+            mock_evaluate.return_value = 0
+            main(
+                [
+                    "--config",
+                    str(config_file),
+                    "evaluate",
+                    "--checkpoint",
+                    "model.pt",
+                    "-m",
+                    "kanres",
+                    "-d",
+                    "af-classification",
+                ]
+            )
+        kwargs = mock_evaluate.call_args[1]
+        assert kwargs["batch_size"] == 16
+        assert kwargs["seed"] == 9
+
+    def test_null_config_file_is_handled(self, temp_dir):
+        """A YAML file holding just 'null' used to crash with AttributeError."""
+        config_file = temp_dir / "config.yaml"
+        config_file.write_text("null\n")
+        with patch("deepecgkit.cli.train") as mock_train:
+            mock_train.return_value = 0
+            result = main(
+                ["--config", str(config_file), "train", "-m", "kanres", "-d", "af-classification"]
+            )
+        assert result == 0
+
+
+class TestRunDirContract:
+    """run_metadata.json ties `deepecg train` output to the analysis pipeline."""
+
+    def test_write_run_metadata_merges(self, temp_dir):
+        from deepecgkit.cli.run_dir import write_run_metadata
+
+        write_run_metadata(temp_dir, {"model": "kanres", "seed": 7})
+        write_run_metadata(temp_dir, {"returncode": 0})
+        payload = json.loads((temp_dir / "run_metadata.json").read_text())
+        assert payload["model"] == "kanres"
+        assert payload["seed"] == 7
+        assert payload["returncode"] == 0
+        assert payload["schema_version"] == 1
+
+    def test_load_run_context_from_metadata(self, temp_dir):
+        from deepecgkit.cli.run_dir import load_run_context, write_run_metadata
+
+        run_dir = temp_dir / "run"
+        checkpoints = run_dir / "checkpoints"
+        checkpoints.mkdir(parents=True)
+        checkpoint = checkpoints / "epoch=01-val_loss=0.5.pt"
+        checkpoint.touch()
+        write_run_metadata(run_dir, {"seed": 11, "val_split": 0.25, "test_split": 0.15})
+
+        context = load_run_context(checkpoint)
+        assert context.source == "run_metadata"
+        assert context.seed == 11
+        assert context.val_split == 0.25
+        assert context.test_split == 0.15
+        assert context.run_dir == run_dir.resolve()
+
+    def test_load_run_context_falls_back_to_split_info(self, temp_dir):
+        from deepecgkit.cli.run_dir import load_run_context
+
+        run_dir = temp_dir / "run"
+        checkpoints = run_dir / "checkpoints"
+        checkpoints.mkdir(parents=True)
+        checkpoint = checkpoints / "model.pt"
+        checkpoint.touch()
+        (run_dir / "split_info.json").write_text('{"seed": 3, "n_train": 10}')
+
+        context = load_run_context(checkpoint)
+        assert context.source == "split_info"
+        assert context.seed == 3
+
+    def test_load_run_context_without_metadata(self, temp_dir):
+        from deepecgkit.cli.run_dir import load_run_context
+
+        checkpoint = temp_dir / "model.pt"
+        checkpoint.touch()
+        assert load_run_context(checkpoint).source == "none"
+
+    def test_verify_split_warns_on_mismatch(self, temp_dir, capsys):
+        from deepecgkit.cli.run_dir import verify_split
+
+        (temp_dir / "split_info.json").write_text('{"n_train": 100, "n_val": 20, "n_test": 10}')
+
+        class _Module:
+            train_dataset: ClassVar[list[int]] = list(range(90))
+            val_dataset: ClassVar[list[int]] = list(range(20))
+            test_dataset: ClassVar[list[int]] = list(range(10))
+
+        verify_split(_Module(), temp_dir, CLILogger())
+        assert "does not match" in capsys.readouterr().err
+
+
+class TestAnalysisCommands:
+    """deepecg aggregate / rank wrap the analysis pipeline."""
+
+    def test_aggregate_reports_no_runs(self, temp_dir, capsys):
+        result = main(["aggregate", "--runs-dir", str(temp_dir)])
+        assert result == 1
+        assert "No usable runs" in capsys.readouterr().err
+
+    def test_rank_reports_no_runs(self, temp_dir, capsys):
+        result = main(["rank", "--runs-dir", str(temp_dir)])
+        assert result == 1
+        assert "No usable runs" in capsys.readouterr().err
+
+    def test_aggregate_consumes_seeded_run_dirs(self, temp_dir, capsys):
+        for seed in (1, 2):
+            run_dir = temp_dir / f"kanres-af-classification-seed{seed}"
+            run_dir.mkdir()
+            (run_dir / "classification_metrics.csv").write_text(
+                "model,dataset,accuracy,precision,recall,f1,auroc,mcc,average\n"
+                f"kanres,af-classification,0.9,0.8,0.7,0.7{seed},0.95,0.6,macro\n"
+            )
+        result = main(["aggregate", "--runs-dir", str(temp_dir)])
+        assert result == 0
+        out = capsys.readouterr().out
+        assert "2 runs across 1 dataset(s)" in out
+        assert "f1" in out

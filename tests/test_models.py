@@ -59,7 +59,7 @@ class TestAFModel:
 
     def test_af_model_invalid_recording_length(self):
         """Test AFModel with invalid recording length."""
-        with pytest.raises(AssertionError, match="Recording length must be 6, 10, or 30"):
+        with pytest.raises(ValueError, match="Recording length must be 6, 10, or 30"):
             AFModel(recording_length=15)
 
     @pytest.mark.parametrize(
@@ -78,15 +78,12 @@ class TestAFModel:
         probs = torch.softmax(output, dim=1)
         assert torch.allclose(probs.sum(dim=1), torch.ones(batch_size), atol=1e-6)
 
-    def test_af_model_get_features(self):
-        """Test AFModel feature extraction."""
+    def test_af_model_feature_dim(self):
+        """AFModel reports its embedding width through the shared feature_dim."""
         model = AFModel(recording_length=10)
 
-        # AFModel doesn't have get_features method, using get_feature_size instead
-        feature_size = model.get_feature_size(5000)
-
-        assert isinstance(feature_size, int)
-        assert feature_size > 0
+        assert isinstance(model.feature_dim, int)
+        assert model.feature_dim > 0
 
     def test_af_model_weight_initialization(self):
         """Test that model weights are properly initialized."""

@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import Dict, Optional, Union
 
 import torch
 
@@ -7,7 +6,7 @@ from deepecgkit.utils.download import download_file
 
 _PLACEHOLDER_URL_MARKERS = ("your-org",)
 
-WEIGHTS_REGISTRY: Dict[str, Dict] = {
+WEIGHTS_REGISTRY: dict[str, dict] = {
     "kanres-af-30s": {
         "url": "https://github.com/your-org/deepecg-kit/releases/download/v1.0.0/kanres-af-30s.pt",
         "model_class": "KanResWideX",
@@ -24,17 +23,18 @@ WEIGHTS_REGISTRY: Dict[str, Dict] = {
 
 
 def get_weights_dir() -> Path:
+    """Return (and create) the local cache directory for downloaded weights."""
     cache_dir = Path.home() / ".cache" / "deepecgkit" / "weights"
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir
 
 
-def list_pretrained_weights() -> Dict[str, str]:
+def list_pretrained_weights() -> dict[str, str]:
     """List all available pretrained weights with descriptions."""
     return {name: info["description"] for name, info in WEIGHTS_REGISTRY.items()}
 
 
-def get_weight_info(weight_name: str) -> Dict:
+def get_weight_info(weight_name: str) -> dict:
     """Get information about a specific pretrained weight."""
     if weight_name not in WEIGHTS_REGISTRY:
         available = ", ".join(WEIGHTS_REGISTRY.keys())
@@ -81,9 +81,9 @@ def download_weights(weight_name: str, force: bool = False) -> Path:
 
 def load_pretrained_weights(
     weight_name: str,
-    map_location: Optional[Union[str, torch.device]] = None,
+    map_location: str | torch.device | None = None,
     force_download: bool = False,
-) -> Dict:
+) -> dict:
     """Load pretrained weights by name.
 
     Args:
@@ -102,7 +102,7 @@ def register_weights(
     name: str,
     url: str,
     model_class: str,
-    model_kwargs: Dict,
+    model_kwargs: dict,
     description: str = "",
 ) -> None:
     """Register custom pretrained weights.

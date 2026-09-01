@@ -1,7 +1,5 @@
 """Registry helpers and constants for the CLI."""
 
-from typing import Dict, List
-
 import deepecgkit.datasets
 import deepecgkit.models  # noqa: F401
 from deepecgkit.models.pretrained import model_name_for_weights
@@ -21,9 +19,9 @@ DATASET_INPUT_CHANNELS = {n: info["input_channels"] for n, info in _DATASET_REGI
 MODEL_DESCRIPTIONS = {n: info["description"] for n, info in _MODEL_REGISTRY.items()}
 
 
-def _build_model_weights() -> Dict[str, List[str]]:
+def _build_model_weights() -> dict[str, list[str]]:
     """Map each registered model to the pretrained weights that target it."""
-    mapping: Dict[str, List[str]] = {}
+    mapping: dict[str, list[str]] = {}
     for weight_name in WEIGHTS_REGISTRY:
         model_name = model_name_for_weights(weight_name)
         if model_name is not None:
@@ -34,11 +32,11 @@ def _build_model_weights() -> Dict[str, List[str]]:
 MODEL_WEIGHTS = _build_model_weights()
 
 
-def _get_model_registry():
+def _get_model_registry() -> dict[str, type]:
     """Return model registry mapping names to classes."""
     return {name: info["class"] for name, info in _MODEL_REGISTRY.items()}
 
 
-def _get_dataset_registry():
+def _get_dataset_registry() -> dict[str, type]:
     """Return dataset registry mapping names to classes."""
     return {name: info["class"] for name, info in _DATASET_REGISTRY.items()}

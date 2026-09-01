@@ -7,7 +7,6 @@ how they interpret the same file.
 """
 
 from pathlib import Path
-from typing import Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -19,10 +18,10 @@ __all__ = [
     "read_ecg_recording",
 ]
 
-SUPPORTED_ECG_SUFFIXES: Tuple[str, ...] = (".npy", ".csv", ".dat", ".hea")
+SUPPORTED_ECG_SUFFIXES: tuple[str, ...] = (".npy", ".csv", ".dat", ".hea")
 
 
-def read_ecg_recording(path: Union[str, Path]) -> np.ndarray:
+def read_ecg_recording(path: str | Path) -> np.ndarray:
     """Read an ECG recording from a supported file format.
 
     Args:
@@ -51,7 +50,7 @@ def read_ecg_recording(path: Union[str, Path]) -> np.ndarray:
     return record.p_signal.T
 
 
-def as_model_input(data: np.ndarray, input_channels: Optional[int] = None) -> np.ndarray:
+def as_model_input(data: np.ndarray, input_channels: int | None = None) -> np.ndarray:
     """Reshape an ECG array to the (batch, leads, time) layout models expect.
 
     A one-dimensional array is treated as a single single-lead recording. A

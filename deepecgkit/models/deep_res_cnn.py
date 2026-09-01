@@ -1,8 +1,10 @@
+from typing import ClassVar
+
 import torch
 import torch.nn.functional as func
 from torch import nn
 
-from deepecgkit.models.pretrained import PretrainedMixin
+from deepecgkit.models.base import ECGModelBase
 from deepecgkit.registry import register_model
 
 
@@ -104,8 +106,9 @@ class PreActResBlock2D(nn.Module):
 @register_model(
     name="deep-res-cnn",
     description="Deep Residual 2D CNN (Elyamani et al. 2022) for multi-lead ECG classification",
+    min_input_length=127,
 )
-class DeepResCNN(PretrainedMixin, nn.Module):
+class DeepResCNN(ECGModelBase):
     """
     Deep Residual 2D CNN for ECG classification.
 
@@ -136,6 +139,8 @@ class DeepResCNN(PretrainedMixin, nn.Module):
         >>> features = model.extract_features(x)
         >>> print(features.shape)  # (32, 128)
     """
+
+    HEAD_ATTR: ClassVar[str] = "fc_out"
 
     def __init__(
         self,
@@ -169,10 +174,6 @@ class DeepResCNN(PretrainedMixin, nn.Module):
         self.fc2_drop = nn.Dropout(0.15)
 
         self.fc_out = nn.Linear(64, output_size)
-
-    @property
-    def feature_dim(self) -> int:
-        return self._feature_dim
 
     def l2_regularization_loss(self) -> torch.Tensor:
         """Return the L2 penalty for the classifier head weights.

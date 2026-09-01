@@ -42,7 +42,7 @@ def make_runs(specification, metric="f1", n_test_groups=500, averaging="macro"):
     rows = []
     for dataset, models in specification.items():
         for model, values in models.items():
-            for seed, value in zip(SEEDS, values):
+            for seed, value in zip(SEEDS, values, strict=False):
                 rows.append(
                     {
                         "run_dir": f"{model}-{dataset}-seed{seed}",

@@ -4,6 +4,7 @@ site_description: A deep learning library for ECG analysis and arrhythmia classi
 repo_url: https://github.com/stevenah/deepecg-kit
 repo_name: stevenah/deepecg-kit
 edit_uri: edit/main/docs/
+strict: true
 
 theme:
   name: material
@@ -57,6 +58,7 @@ nav:
       - models: api/models.md
       - training: api/training.md
       - evaluation: api/evaluation.md
+      - analysis: api/analysis.md
       - features: api/features.md
       - explainability: api/explainability.md
       - registry: api/registry.md

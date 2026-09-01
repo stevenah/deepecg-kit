@@ -8,7 +8,6 @@ Usage:
     deepecg extract-features --checkpoint <path> --model <model> --dataset <dataset> --output <file> [options]
     deepecg explain --checkpoint <path> --model <model> --input <file> --output <dir> [options]
     deepecg probe --model <model> --source-checkpoint <dataset>=<path> --output <dir> [options]
-    deepecg resume --checkpoint <path> [options]
     deepecg list-models
     deepecg list-datasets
     deepecg info --model <model>
@@ -18,6 +17,7 @@ Use --force-download to re-download an existing dataset.
 """
 
 from deepecgkit.cli.commands import (
+    aggregate,
     evaluate,
     explain,
     extract_features,
@@ -25,7 +25,7 @@ from deepecgkit.cli.commands import (
     list_models,
     predict,
     probe,
-    resume,
+    rank,
     show_info,
     train,
 )
@@ -39,8 +39,6 @@ from deepecgkit.cli.registry import (
     MODEL_DESCRIPTIONS,
     MODEL_NAMES,
     MODEL_WEIGHTS,
-    _get_dataset_registry,
-    _get_model_registry,
 )
 from deepecgkit.training import ECGTrainer
 
@@ -53,8 +51,7 @@ __all__ = [
     "MODEL_WEIGHTS",
     "CLILogger",
     "ECGTrainer",
-    "_get_dataset_registry",
-    "_get_model_registry",
+    "aggregate",
     "evaluate",
     "explain",
     "extract_features",
@@ -64,7 +61,7 @@ __all__ = [
     "main",
     "predict",
     "probe",
-    "resume",
+    "rank",
     "show_info",
     "train",
 ]

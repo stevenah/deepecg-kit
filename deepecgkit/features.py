@@ -7,22 +7,26 @@ that obtaining embeddings for clustering, visualisation, transfer learning, or
 a linear probe is a single call.
 """
 
-import warnings
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
+from typing import Any
 
 import numpy as np
 import torch
 from sklearn.base import BaseEstimator, TransformerMixin
 from torch import nn
-from torch.utils.data import DataLoader, Dataset, RandomSampler, TensorDataset
+from torch.utils.data import DataLoader, Dataset
 
-from deepecgkit.datasets.io import as_model_input, read_ecg_recording
+from deepecgkit._batching import as_inference_dataloader, unpack_batch
+from deepecgkit._model_loading import (
+    load_pretrained_resolving_name,
+    model_input_channels,
+    split_wrapper_kwargs,
+)
 from deepecgkit.datasets.modules import ECGDataModule
-from deepecgkit.models.factory import build_model_from_checkpoint, infer_input_channels
-from deepecgkit.models.pretrained import from_pretrained as _load_pretrained
-from deepecgkit.models.pretrained import model_name_for_weights
+from deepecgkit.models.factory import build_model_from_checkpoint
+from deepecgkit.utils.device import resolve_device as _resolve_device
 
 try:
     from tqdm import tqdm
@@ -35,32 +39,11 @@ __all__ = [
     "extract_features",
 ]
 
-FeatureInput = Union[np.ndarray, torch.Tensor, str, Path, Dataset, DataLoader, ECGDataModule]
+FeatureInput = np.ndarray | torch.Tensor | str | Path | Dataset | DataLoader | ECGDataModule
 
 SPLITS = ("train", "val", "test", "all")
 
-_DTYPES: Dict[str, torch.dtype] = {"float32": torch.float32, "float16": torch.float16}
-
-
-def _resolve_device(device: str = "auto") -> torch.device:
-    """Resolve a device name, including the CLI's accelerator vocabulary.
-
-    Args:
-        device: One of auto, cpu, cuda, gpu, mps, or any string torch accepts
-
-    Returns:
-        The resolved device. "auto" prefers CUDA, then MPS, then CPU, matching
-        ECGTrainer; "gpu" is accepted as an alias for CUDA.
-    """
-    if device == "auto":
-        if torch.cuda.is_available():
-            return torch.device("cuda")
-        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            return torch.device("mps")
-        return torch.device("cpu")
-    if device == "gpu":
-        return torch.device("cuda")
-    return torch.device(device)
+_DTYPES: dict[str, torch.dtype] = {"float32": torch.float32, "float16": torch.float16}
 
 
 @dataclass
@@ -76,8 +59,8 @@ class FeatureSet:
     """
 
     features: np.ndarray
-    labels: Optional[np.ndarray] = None
-    model_name: Optional[str] = field(default=None)
+    labels: np.ndarray | None = None
+    model_name: str | None = field(default=None)
 
     @property
     def feature_dim(self) -> int:
@@ -88,13 +71,13 @@ class FeatureSet:
         """Number of samples."""
         return int(self.features.shape[0])
 
-    def __array__(self, dtype: Optional[Any] = None) -> np.ndarray:
+    def __array__(self, dtype: Any | None = None) -> np.ndarray:
         """Expose the features to numpy so the object can stand in for an array."""
         if dtype is None:
             return self.features
         return self.features.astype(dtype)
 
-    def save(self, path: Union[str, Path]) -> None:
+    def save(self, path: str | Path) -> None:
         """Write the features to disk, choosing the format from the suffix.
 
         Args:
@@ -113,7 +96,7 @@ class FeatureSet:
             return
 
         if out_path.suffix == ".npz":
-            payload: Dict[str, Any] = {
+            payload: dict[str, Any] = {
                 "features": self.features,
                 "feature_dim": np.asarray(self.feature_dim),
             }
@@ -169,7 +152,7 @@ class FeatureExtractor(TransformerMixin, BaseEstimator):
     def __init__(
         self,
         model: nn.Module,
-        model_name: Optional[str] = None,
+        model_name: str | None = None,
         batch_size: int = 32,
         device: str = "auto",
         dtype: str = "float32",
@@ -187,10 +170,10 @@ class FeatureExtractor(TransformerMixin, BaseEstimator):
     @classmethod
     def from_checkpoint(
         cls,
-        checkpoint: Union[str, Path],
+        checkpoint: str | Path,
         model_name: str,
-        input_channels: Optional[int] = None,
-        output_size: Optional[int] = None,
+        input_channels: int | None = None,
+        output_size: int | None = None,
         **kwargs: Any,
     ) -> "FeatureExtractor":
         """Build an extractor from a saved checkpoint.
@@ -218,8 +201,8 @@ class FeatureExtractor(TransformerMixin, BaseEstimator):
     @classmethod
     def from_pretrained(
         cls,
-        weights: Union[str, Path],
-        model_name: Optional[str] = None,
+        weights: str | Path,
+        model_name: str | None = None,
         **kwargs: Any,
     ) -> "FeatureExtractor":
         """Build an extractor from registered pretrained weights or a weights file.
@@ -237,16 +220,8 @@ class FeatureExtractor(TransformerMixin, BaseEstimator):
         Raises:
             ValueError: If the model name is neither given nor inferable.
         """
-        resolved = model_name or model_name_for_weights(str(weights))
-        if resolved is None:
-            raise ValueError(
-                f"Could not determine which model '{weights}' belongs to. Pass model_name "
-                f"explicitly."
-            )
-        extractor_keys = {"batch_size", "device", "dtype", "num_workers", "progress"}
-        extractor_kwargs = {k: v for k, v in kwargs.items() if k in extractor_keys}
-        model_kwargs = {k: v for k, v in kwargs.items() if k not in extractor_keys}
-        model = _load_pretrained(resolved, weights, **model_kwargs)
+        extractor_kwargs, model_kwargs = split_wrapper_kwargs(cls, kwargs)
+        model, resolved = load_pretrained_resolving_name(weights, model_name, **model_kwargs)
         return cls(model, model_name=resolved, **extractor_kwargs)
 
     @property
@@ -264,12 +239,9 @@ class FeatureExtractor(TransformerMixin, BaseEstimator):
         return int(self.model.feature_dim)
 
     @property
-    def input_channels(self) -> Optional[int]:
+    def input_channels(self) -> int | None:
         """Lead count recovered from the weights, or None when unrecoverable."""
-        declared = getattr(self.model, "input_channels", None)
-        if isinstance(declared, int):
-            return declared
-        return infer_input_channels(self.model.state_dict())
+        return model_input_channels(self.model)
 
     def extract(self, data: FeatureInput, split: str = "test") -> FeatureSet:
         """Run the model's feature path over the data.
@@ -302,15 +274,15 @@ class FeatureExtractor(TransformerMixin, BaseEstimator):
         self.model.eval()
         self.model.to(device)
 
-        feature_chunks: List[torch.Tensor] = []
-        label_chunks: List[torch.Tensor] = []
+        feature_chunks: list[torch.Tensor] = []
+        label_chunks: list[torch.Tensor] = []
         try:
             iterator: Any = loader
             if self.progress and tqdm is not None:
                 iterator = tqdm(loader, desc="Extracting features")
             with torch.no_grad():
                 for batch in iterator:
-                    signals, labels = _unpack_batch(batch)
+                    signals, labels = unpack_batch(batch)
                     signals = signals.to(device=device, dtype=torch.float32)
                     features = self.model.extract_features(signals)
                     if features.dim() != 2:
@@ -360,7 +332,7 @@ class FeatureExtractor(TransformerMixin, BaseEstimator):
         """
         return self.extract(X).features
 
-    def get_feature_names_out(self, input_features: Optional[Any] = None) -> np.ndarray:
+    def get_feature_names_out(self, input_features: Any | None = None) -> np.ndarray:
         """Return names for the embedding dimensions.
 
         Args:
@@ -373,111 +345,18 @@ class FeatureExtractor(TransformerMixin, BaseEstimator):
         return np.asarray([f"{prefix}_{i}" for i in range(self.feature_dim)], dtype=object)
 
     def _as_dataloader(self, data: FeatureInput, split: str) -> DataLoader:
-        """Normalise any supported input to a non-shuffling DataLoader.
-
-        Args:
-            data: Any supported input
-            split: Split name, used only for an ECGDataModule
-
-        Returns:
-            A loader yielding either signals alone or (signals, labels).
-
-        Raises:
-            TypeError: If the input type is not supported.
-            RuntimeError: If a data module split is unavailable.
-        """
-        if isinstance(data, ECGDataModule):
-            return self._loader_for_module(data, split)
-
-        if isinstance(data, DataLoader):
-            if isinstance(data.sampler, RandomSampler):
-                warnings.warn(
-                    "The supplied DataLoader shuffles, so extracted rows will not follow "
-                    "dataset order and cannot be joined to external metadata. Pass "
-                    "shuffle=False for a reproducible ordering.",
-                    RuntimeWarning,
-                    stacklevel=3,
-                )
-            return data
-
-        if isinstance(data, Dataset):
-            return self._build_loader(data)
-
-        if isinstance(data, (str, Path)):
-            array = as_model_input(read_ecg_recording(data), self.input_channels)
-            return self._build_loader(TensorDataset(torch.as_tensor(array)))
-
-        if isinstance(data, torch.Tensor):
-            array = as_model_input(data.detach().cpu().numpy(), self.input_channels)
-            return self._build_loader(TensorDataset(torch.as_tensor(array)))
-
-        if isinstance(data, np.ndarray):
-            array = as_model_input(data, self.input_channels)
-            return self._build_loader(TensorDataset(torch.as_tensor(array)))
-
-        raise TypeError(
-            f"Unsupported input type: {type(data).__name__}. Pass an array, tensor, file path, "
-            f"Dataset, DataLoader, or ECGDataModule."
-        )
-
-    def _loader_for_module(self, data: ECGDataModule, split: str) -> DataLoader:
-        """Build a non-shuffling loader over one split of a data module.
-
-        The module's own train_dataloader shuffles, which would scramble row
-        order, so the loader is constructed here instead.
-
-        Args:
-            data: The data module
-            split: One of train, val, test, or all
-
-        Returns:
-            A loader over the requested split.
-
-        Raises:
-            RuntimeError: If the split holds no dataset after setup.
-        """
-        if data.dataset is None or data.train_dataset is None:
-            data.setup()
-
-        subset = data.dataset if split == "all" else getattr(data, f"{split}_dataset")
-        if subset is None:
-            raise RuntimeError(f"Data module has no '{split}' split available.")
-        return self._build_loader(subset)
-
-    def _build_loader(self, dataset: Dataset) -> DataLoader:
-        """Wrap a dataset in a loader that preserves ordering.
-
-        Args:
-            dataset: Any map-style dataset
-
-        Returns:
-            A DataLoader with shuffling disabled.
-        """
-        return DataLoader(
-            dataset,
+        """Normalise any supported input to a non-shuffling DataLoader."""
+        return as_inference_dataloader(
+            data,
+            split=split,
             batch_size=self.batch_size,
-            shuffle=False,
             num_workers=self.num_workers,
+            input_channels=self.input_channels,
+            verb="extracted",
         )
 
 
-def _unpack_batch(batch: Any) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-    """Split a batch into signals and optional labels.
-
-    Args:
-        batch: A tensor, or a sequence whose first element is the signals
-
-    Returns:
-        Tuple of the signals and the labels, which are None when absent.
-    """
-    if isinstance(batch, (list, tuple)):
-        signals = batch[0]
-        labels = batch[1] if len(batch) > 1 else None
-        return signals, labels
-    return batch, None
-
-
-def _iter_inputs(**sources: Any) -> Iterator[Tuple[str, Any]]:
+def _iter_inputs(**sources: Any) -> Iterator[tuple[str, Any]]:
     """Yield the weight sources that were actually supplied.
 
     Args:
@@ -491,12 +370,12 @@ def _iter_inputs(**sources: Any) -> Iterator[Tuple[str, Any]]:
 
 def extract_features(
     data: FeatureInput,
-    model: Optional[nn.Module] = None,
-    checkpoint: Optional[Union[str, Path]] = None,
-    weights: Optional[Union[str, Path]] = None,
-    model_name: Optional[str] = None,
-    input_channels: Optional[int] = None,
-    output_size: Optional[int] = None,
+    model: nn.Module | None = None,
+    checkpoint: str | Path | None = None,
+    weights: str | Path | None = None,
+    model_name: str | None = None,
+    input_channels: int | None = None,
+    output_size: int | None = None,
     split: str = "test",
     **kwargs: Any,
 ) -> FeatureSet:

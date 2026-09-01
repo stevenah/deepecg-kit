@@ -1,13 +1,17 @@
 """Representation-quality probing command."""
 
+import traceback
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Any
 
 import numpy as np
 
 from deepecgkit.analysis.latex import transfer_matrix_table
+from deepecgkit.cli import defaults
+from deepecgkit.cli._common import require_model
 from deepecgkit.cli.logger import CLILogger
-from deepecgkit.cli.registry import DATASET_NAMES, MODEL_NAMES, _get_model_registry
+from deepecgkit.cli.registry import DATASET_NAMES, MODEL_NAMES
 from deepecgkit.evaluation.representation import (
     DEFAULT_PROBE_METRIC,
     KEEP_DIAGONAL,
@@ -37,7 +41,7 @@ _LENGTH_MARKERS = ("Kernel size", "must match the size of tensor", "needs at lea
 _LEAD_MARKER = "leads but received"
 
 
-def parse_source_checkpoints(entries: Sequence[str]) -> Dict[str, str]:
+def parse_source_checkpoints(entries: Sequence[str]) -> dict[str, str]:
     """Parse repeated NAME=PATH source arguments.
 
     Args:
@@ -50,7 +54,7 @@ def parse_source_checkpoints(entries: Sequence[str]) -> Dict[str, str]:
         ValueError: If an entry lacks a separator, names a dataset twice, or
             leaves either half empty.
     """
-    parsed: Dict[str, str] = {}
+    parsed: dict[str, str] = {}
     for entry in entries:
         if SOURCE_SEPARATOR not in entry:
             raise ValueError(
@@ -72,12 +76,12 @@ def parse_source_checkpoints(entries: Sequence[str]) -> Dict[str, str]:
 
 def _validate(
     model_name: str,
-    sources: Dict[str, str],
+    sources: dict[str, str],
     targets: Sequence[str],
     metric: str,
     embedding_plots: str,
     logger: CLILogger,
-) -> Optional[int]:
+) -> int | None:
     """Reject an unrunnable request before any data is loaded.
 
     Args:
@@ -91,10 +95,8 @@ def _validate(
     Returns:
         An exit code when the request cannot be run, or None when it can.
     """
-    if model_name not in _get_model_registry():
-        logger.error(f"Unknown model: {model_name}")
-        logger.info(f"Available models: {', '.join(MODEL_NAMES)}")
-        return 1
+    if (code := require_model(model_name, logger)) is not None:
+        return code
 
     for name, path in sources.items():
         if name not in DATASET_NAMES:
@@ -130,7 +132,7 @@ def _write_embedding_plots(
     perplexity: float,
     seed: int,
     logger: CLILogger,
-) -> List[str]:
+) -> list[str]:
     """Project and plot the held-out embeddings the matrix retained.
 
     Args:
@@ -143,7 +145,7 @@ def _write_embedding_plots(
     Returns:
         The written filenames.
     """
-    written: List[str] = []
+    written: list[str] = []
     for key, features in sorted(matrix.embeddings.items()):
         source, _, target = key.partition(TRANSFER_KEY_SEPARATOR)
         try:
@@ -196,8 +198,8 @@ def probe(
     output_dir: str,
     model_name: str,
     source_checkpoints: Sequence[str],
-    targets: Optional[Sequence[str]] = None,
-    data_dir: Optional[str] = None,
+    targets: Sequence[str] | None = None,
+    data_dir: str | None = None,
     metric: str = DEFAULT_PROBE_METRIC,
     input_channels: int = PROBE_INPUT_CHANNELS,
     sampling_rate: int = PROBE_SAMPLING_RATE,
@@ -215,7 +217,7 @@ def probe(
     num_workers: int = 4,
     accelerator: str = "auto",
     force_download: bool = False,
-    logger: Optional[CLILogger] = None,
+    logger: CLILogger | None = None,
 ) -> int:
     """Probe frozen encoders across datasets and write the transfer matrix.
 
@@ -352,4 +354,183 @@ def probe(
         return 1
     except Exception as error:
         logger.error(f"Probing failed: {error}")
+        logger.debug(traceback.format_exc())
         return 1
+
+
+def add_parser(subparsers: Any) -> Any:
+    """Register the probe subcommand's arguments."""
+    parser = subparsers.add_parser(
+        "probe", help="Probe frozen encoders across datasets and build a transfer matrix"
+    )
+    parser.add_argument(
+        "--model",
+        "-m",
+        type=str,
+        required=True,
+        choices=MODEL_NAMES,
+        help="Model architecture matching every checkpoint",
+    )
+    parser.add_argument(
+        "--source-checkpoint",
+        action="append",
+        default=[],
+        metavar="DATASET=PATH",
+        help="Encoder trained on DATASET, repeatable once per source",
+    )
+    parser.add_argument(
+        "--target",
+        action="append",
+        default=[],
+        choices=DATASET_NAMES,
+        help=f"Dataset to probe, repeatable (default: {', '.join(PROBE_DATASETS)})",
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        type=str,
+        required=True,
+        help="Directory for the matrix, plots and table",
+    )
+    parser.add_argument(
+        "--data-dir",
+        type=str,
+        default=None,
+        help="Directory containing the datasets",
+    )
+    parser.add_argument(
+        "--metric",
+        type=str,
+        default=DEFAULT_PROBE_METRIC,
+        choices=list(PROBE_METRICS),
+        help=f"Metric filling the matrix (default: {DEFAULT_PROBE_METRIC})",
+    )
+    parser.add_argument(
+        "--input-channels",
+        type=int,
+        default=PROBE_INPUT_CHANNELS,
+        help=f"Lead count the protocol runs at (default: {PROBE_INPUT_CHANNELS})",
+    )
+    parser.add_argument(
+        "--sampling-rate",
+        type=int,
+        default=PROBE_SAMPLING_RATE,
+        help=f"Sampling rate for every dataset in Hz (default: {PROBE_SAMPLING_RATE})",
+    )
+    parser.add_argument(
+        "--no-random-init",
+        action="store_true",
+        help="Drop the untrained-encoder baseline row",
+    )
+    parser.add_argument(
+        "--no-plots",
+        action="store_true",
+        help="Skip the heatmap and the embedding plots",
+    )
+    parser.add_argument(
+        "--no-latex",
+        action="store_true",
+        help="Skip the LaTeX table",
+    )
+    parser.add_argument(
+        "--embedding-plots",
+        type=str,
+        default=KEEP_DIAGONAL,
+        choices=list(KEEP_EMBEDDINGS_MODES),
+        help=(
+            f"Which cells get a t-SNE plot: none, all, or diagonal for the in-domain cells and "
+            f"the random-init row (default: {KEEP_DIAGONAL})"
+        ),
+    )
+    parser.add_argument(
+        "--perplexity",
+        type=float,
+        default=30.0,
+        help="t-SNE perplexity, clamped to what the sample count supports (default: 30)",
+    )
+    parser.add_argument(
+        "--probe-c",
+        type=float,
+        default=1.0,
+        help="Inverse regularisation strength for the probe (default: 1.0)",
+    )
+    parser.add_argument(
+        "--max-iter",
+        type=int,
+        default=1000,
+        help="Solver iteration ceiling for the probe (default: 1000)",
+    )
+    parser.add_argument(
+        "--val-split",
+        type=float,
+        default=defaults.VAL_SPLIT,
+        help=f"Validation split fraction (default: {defaults.VAL_SPLIT})",
+    )
+    parser.add_argument(
+        "--test-split",
+        type=float,
+        default=defaults.TEST_SPLIT,
+        help=f"Held-out split the probe reports on (default: {defaults.TEST_SPLIT})",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=defaults.SEED,
+        help=(
+            f"Seed for the splits, the random encoder and the projection (default: {defaults.SEED})"
+        ),
+    )
+    parser.add_argument(
+        "--batch-size",
+        "-b",
+        type=int,
+        default=defaults.BATCH_SIZE,
+        help=f"Batch size (default: {defaults.BATCH_SIZE})",
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=defaults.NUM_WORKERS,
+        help=f"Data loading workers (default: {defaults.NUM_WORKERS})",
+    )
+    parser.add_argument(
+        "--accelerator",
+        type=str,
+        default=defaults.ACCELERATOR,
+        choices=defaults.ACCELERATOR_CHOICES,
+        help="Accelerator to use (default: auto)",
+    )
+    parser.add_argument(
+        "--force-download",
+        action="store_true",
+        help="Force re-download the datasets",
+    )
+    parser.set_defaults(handler="probe", to_kwargs=_to_kwargs)
+    return parser
+
+
+def _to_kwargs(args: Any) -> dict[str, Any]:
+    return {
+        "output_dir": args.output,
+        "model_name": args.model,
+        "source_checkpoints": args.source_checkpoint,
+        "targets": args.target,
+        "data_dir": args.data_dir,
+        "metric": args.metric,
+        "input_channels": args.input_channels,
+        "sampling_rate": args.sampling_rate,
+        "random_init": not args.no_random_init,
+        "plots": not args.no_plots,
+        "latex": not args.no_latex,
+        "embedding_plots": args.embedding_plots,
+        "perplexity": args.perplexity,
+        "probe_c": args.probe_c,
+        "max_iter": args.max_iter,
+        "val_split": args.val_split,
+        "test_split": args.test_split,
+        "seed": args.seed,
+        "batch_size": args.batch_size,
+        "num_workers": args.num_workers,
+        "accelerator": args.accelerator,
+        "force_download": args.force_download,
+    }

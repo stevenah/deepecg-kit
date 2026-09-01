@@ -210,3 +210,69 @@ class TestUtilityErrorHandling:
             pass
         except Exception as e:
             assert "encoding" in str(e).lower() or "decode" in str(e).lower()
+
+
+class TestDownloadAndExtractZip:
+    """The shared archive-download helper used by every dataset."""
+
+    @staticmethod
+    def _make_zip(path, entries):
+        import zipfile
+
+        with zipfile.ZipFile(path, "w") as zf:
+            for name, content in entries.items():
+                zf.writestr(name, content)
+
+    def _serve(self, monkeypatch, zip_source):
+        """Make download_file 'download' by copying a local file."""
+        import shutil
+
+        def fake_download(url, file_path, desc=None, force=False, max_retries=3):
+            shutil.copy(zip_source, file_path)
+
+        monkeypatch.setattr(download, "download_file", fake_download)
+
+    def test_flattens_nested_top_level_directory(self, temp_dir, monkeypatch):
+        source = temp_dir / "src.zip"
+        self._make_zip(source, {"data-1.0.0/rec01.hea": "h", "data-1.0.0/rec01.atr": "a"})
+        self._serve(monkeypatch, source)
+
+        dest = temp_dir / "dest"
+        download.download_and_extract_zip(
+            "http://example.invalid/x", dest, zip_name="data-1.0.0.zip", desc="t", verbose=False
+        )
+        assert (dest / "rec01.hea").exists()
+        assert not (dest / "data-1.0.0").exists()
+        assert not (dest / "data-1.0.0.zip").exists()
+
+    def test_flattens_physionet_files_directory(self, temp_dir, monkeypatch):
+        source = temp_dir / "src.zip"
+        self._make_zip(
+            source, {"data-1.0.0/files/rec01.hea": "h", "data-1.0.0/files/rec01.atr": "a"}
+        )
+        self._serve(monkeypatch, source)
+
+        dest = temp_dir / "dest"
+        download.download_and_extract_zip(
+            "http://example.invalid/x", dest, zip_name="data-1.0.0.zip", desc="t", verbose=False
+        )
+        assert (dest / "rec01.hea").exists()
+        assert not (dest / "files").exists()
+
+    def test_explicit_nested_dirs_and_no_files_flatten(self, temp_dir, monkeypatch):
+        source = temp_dir / "src.zip"
+        self._make_zip(source, {"long-name-1.0.3/records/r.dat": "d"})
+        self._serve(monkeypatch, source)
+
+        dest = temp_dir / "dest"
+        download.download_and_extract_zip(
+            "http://example.invalid/x",
+            dest,
+            zip_name="short.zip",
+            desc="t",
+            nested_dirs=("long-name-1.0.3",),
+            flatten_files_dir=False,
+            verbose=False,
+        )
+        assert (dest / "records" / "r.dat").exists()
+        assert not (dest / "long-name-1.0.3").exists()

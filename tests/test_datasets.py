@@ -3,6 +3,7 @@ Tests for deepecgkit.datasets module.
 """
 
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import patch
 
 import numpy as np
@@ -137,18 +138,16 @@ class TestAFClassificationDataset:
         assert dataset.num_classes == 4
         assert dataset.class_names == ["Normal", "AF", "Other", "Noisy"]
 
-    @patch("deepecgkit.datasets.af_classification.download_file")
+    @patch("deepecgkit.datasets.af_classification.download_and_extract_zip")
     def test_af_dataset_download(self, mock_download, mock_dataset_files):
         """Test AF dataset download functionality."""
         dataset = AFClassificationDataset(
             data_dir=str(mock_dataset_files), subset="training", download=False
         )
 
-        with patch("deepecgkit.datasets.af_classification.zipfile.ZipFile"):
-            dataset.download()
+        dataset.download()
 
         assert mock_download.called
-        _call_args = mock_download.call_args
 
     def test_af_dataset_with_mock_data(self, mock_dataset_files):
         """Test AF dataset with mock data files."""
@@ -551,7 +550,7 @@ class TestLTAFDBDataset:
 
     def test_dataset_properties(self):
         assert LTAFDBDataset.DOWNLOAD_URL == "https://physionet.org/content/ltafdb/get-zip/1.0.0/"
-        assert LTAFDBDataset.LABEL_MAPPING == {"(N": 0, "(AFIB": 1, "(AFL": 2, "(J": 3}
+        assert RhythmAnnotationExtractor.RHYTHM_MAP == {"(N": 0, "(AFIB": 1, "(AFL": 2, "(J": 3}
 
 
 class TestUnifiedAFDataset:
@@ -700,3 +699,166 @@ class TestECGFileIO:
         """Too many dimensions are reported rather than passed to the model."""
         with pytest.raises(ValueError, match="expected at most three"):
             as_model_input(np.zeros((2, 2, 2, 2)))
+
+
+class TestBaseDatasetDownloadBehaviour:
+    """Regression tests for the download plumbing on BaseECGDataset."""
+
+    @staticmethod
+    def _minimal_dataset_class():
+        from deepecgkit.datasets.base import BaseECGDataset
+
+        class MiniDataset(BaseECGDataset):
+            CLASS_LABELS: ClassVar[list[str]] = ["A", "B"]
+            downloads: ClassVar[list[Path]] = []
+
+            @classmethod
+            def _download(cls, data_dir, verbose=True):
+                cls.downloads.append(Path(data_dir))
+                Path(data_dir).mkdir(parents=True, exist_ok=True)
+                (Path(data_dir) / "marker.txt").write_text("ok")
+
+            def _load_data(self):
+                self.signals = [np.zeros((1, 10), dtype=np.float32)]
+                self.labels = [0]
+                self.record_names = ["r0"]
+
+        return MiniDataset
+
+    def test_download_triggers_for_existing_empty_dir(self, temp_dir):
+        """download=True used to be ignored when the directory existed but was
+        empty, failing later in _load_data."""
+        cls = self._minimal_dataset_class()
+        empty = temp_dir / "empty"
+        empty.mkdir()
+
+        cls(data_dir=str(empty), download=True)
+        assert cls.downloads == [empty]
+
+    def test_download_skipped_for_populated_dir(self, temp_dir):
+        cls = self._minimal_dataset_class()
+        populated = temp_dir / "populated"
+        populated.mkdir()
+        (populated / "existing.dat").write_text("x")
+
+        cls(data_dir=str(populated), download=True)
+        assert cls.downloads == []
+
+    def test_download_to_fetches_without_loading(self, temp_dir):
+        """download_to replaces the object.__new__ hack unified-af used to
+        reach a sub-dataset's download without running _load_data."""
+        cls = self._minimal_dataset_class()
+        target = temp_dir / "dl"
+
+        returned = cls.download_to(target, verbose=False)
+        assert returned == target
+        assert (target / "marker.txt").exists()
+
+    def test_base_accessors_from_standard_storage(self, temp_dir):
+        cls = self._minimal_dataset_class()
+        populated = temp_dir / "data"
+        populated.mkdir()
+        (populated / "existing.dat").write_text("x")
+
+        ds = cls(data_dir=str(populated))
+        assert len(ds) == 1
+        signal, label = ds[0]
+        assert signal.shape == (1, 10)
+        assert int(label) == 0
+        assert ds.num_classes == 2
+        assert ds.class_names == ["A", "B"]
+        assert ds.get_class_distribution() == {"A": 1}
+        assert ds.get_record_info(0)["record_name"] == "r0"
+
+
+class TestLTAFDBCacheAndMemmap:
+    """Regression tests for LTAFDB subsampling reproducibility and cache growth."""
+
+    @staticmethod
+    def _bare_instance(**attrs):
+        ds = object.__new__(LTAFDBDataset)
+        defaults = {
+            "sampling_rate": 300,
+            "segment_duration_seconds": 10.0,
+            "segment_overlap": 0.0,
+            "binary_classification": False,
+            "use_both_leads": False,
+            "max_segments_per_record": None,
+            "subsample_seed": 0,
+        }
+        defaults.update(attrs)
+        for key, value in defaults.items():
+            setattr(ds, key, value)
+
+        class _Std:
+            normalization = "zscore"
+
+        ds.standardizer = _Std()
+        return ds
+
+    def test_cache_key_ignores_seed_without_subsampling(self):
+        """Existing full caches keep their historical key."""
+        a = self._bare_instance(subsample_seed=0)
+        b = self._bare_instance(subsample_seed=123)
+        assert a._cache_key() == b._cache_key()
+
+    def test_cache_key_includes_seed_when_subsampling(self):
+        """A subsampled cache is only reusable for the same seed."""
+        a = self._bare_instance(max_segments_per_record=10, subsample_seed=0)
+        b = self._bare_instance(max_segments_per_record=10, subsample_seed=123)
+        assert a._cache_key() != b._cache_key()
+
+    def test_grow_memmap_preserves_content_and_grows(self, temp_dir):
+        """open_memmap(mode='r+') ignores a passed shape, so the old 'grow'
+        silently kept the original capacity; the helper must actually grow."""
+        path = temp_dir / "signals_tmp.npy"
+        writer = np.lib.format.open_memmap(str(path), mode="w+", dtype=np.float32, shape=(2, 1, 5))
+        writer[0] = 1.0
+        writer[1] = 2.0
+
+        grown = LTAFDBDataset._grow_memmap(path, writer, 6)
+        assert grown.shape == (6, 1, 5)
+        assert np.all(grown[0] == 1.0) and np.all(grown[1] == 2.0)
+
+        grown[5] = 5.0  # writing past the old capacity must succeed
+        grown.flush()
+        reread = np.load(path, mmap_mode="r")
+        assert reread.shape == (6, 1, 5)
+        assert np.all(reread[5] == 5.0)
+
+
+class TestRecordLoadErrorPolicy:
+    """Skipped source records must be loud, bounded, and escapable."""
+
+    @staticmethod
+    def _bare_base():
+        class _Concrete(BaseECGDatasetDirect):
+            def _load_data(self):
+                pass
+
+        ds = object.__new__(_Concrete)
+        ds.verbose = False
+        return ds
+
+    def test_strict_reraises(self):
+        ds = self._bare_base()
+        ds.strict = True
+        with pytest.raises(ValueError, match="corrupt"):
+            ds._record_load_error("rec01", ValueError("corrupt"))
+
+    def test_partial_failure_warns_unconditionally(self):
+        ds = self._bare_base()
+        ds._record_load_error("rec01", ValueError("corrupt"))
+        with pytest.warns(RuntimeWarning, match=r"Skipped 1/10 records"):
+            ds._finish_load(loaded_records=9, total_records=10)
+
+    def test_total_failure_raises(self):
+        ds = self._bare_base()
+        ds._record_load_error("rec01", ValueError("corrupt"))
+        with pytest.warns(RuntimeWarning), pytest.raises(RuntimeError, match="All 1 records"):
+            ds._finish_load(loaded_records=0, total_records=1)
+
+    def test_clean_load_is_silent(self, recwarn):
+        ds = self._bare_base()
+        ds._finish_load(loaded_records=5, total_records=5)
+        assert not [w for w in recwarn.list if issubclass(w.category, RuntimeWarning)]

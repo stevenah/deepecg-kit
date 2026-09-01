@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as func
 from torch import nn
 
-from deepecgkit.models.pretrained import PretrainedMixin
+from deepecgkit.models.base import ECGModelBase
 from deepecgkit.registry import register_model
 
 
@@ -70,7 +70,7 @@ class BasicBlock1DWang(nn.Module):
     name="resnet-wang",
     description="ResNet (Wang et al.) for time series classification",
 )
-class ResNetWang(PretrainedMixin, nn.Module):
+class ResNetWang(ECGModelBase):
     """
     ResNet model based on Wang et al.'s architecture for time series classification.
 
@@ -165,10 +165,6 @@ class ResNetWang(PretrainedMixin, nn.Module):
 
         return nn.Sequential(*layers)
 
-    @property
-    def feature_dim(self) -> int:
-        return self._feature_dim
-
     def extract_features(self, x: torch.Tensor) -> torch.Tensor:
         x = self.stem(x)
         x = self.layer1(x)
@@ -176,8 +172,3 @@ class ResNetWang(PretrainedMixin, nn.Module):
         x = self.layer3(x)
         x = self.global_pool(x)
         return torch.flatten(x, 1)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.extract_features(x)
-        x = self.dropout(x)
-        return self.classifier(x)

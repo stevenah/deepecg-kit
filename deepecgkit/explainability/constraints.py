@@ -3,52 +3,48 @@
 Attribution runs a model many times over the same recording, so a shape error
 raised deep inside the network is far more expensive here than during a single
 forward pass. Four architectures carry a positional-encoding ceiling and one
-carries a convolutional floor, and none of that is recorded in the registry.
-This module holds the measured bounds and reshapes a signal to satisfy them
-before any gradient work starts.
-
-The same numbers are currently hard-coded in ``examples/feature_extraction.py``
-and repeated as a table in the feature-extraction guide. This is the first
-importable copy; the other two are left alone.
+carries a convolutional floor. The measured bounds are recorded per model in
+the registry (``register_model(min_input_length=..., max_input_length=...)``)
+so that a new architecture declares them next to its definition; this module
+reads them back and reshapes a signal to satisfy them before any gradient
+work starts.
 """
 
 import warnings
-from typing import Dict, Optional, Tuple
+from typing import Any
 
 import torch
 from torch import nn
 
+from deepecgkit.registry import get_model_info, get_model_names
+
 __all__ = [
-    "MAXIMUM_LENGTHS",
-    "MINIMUM_LENGTHS",
+    "MAXIMUM_LENGTHS",  # noqa: F822  (module __getattr__ view over the registry)
+    "MINIMUM_LENGTHS",  # noqa: F822
     "fit_to_constraints",
     "length_bounds",
     "resolve_model_name",
 ]
 
-MINIMUM_LENGTHS: Dict[str, int] = {
-    "afmodel": 7971,
-    "convnext-v2": 29,
-    "crnn": 16,
-    "deep-res-cnn": 127,
-    "dualnet": 8,
-    "fcn-wang": 2,
-    "kanres-deep": 11,
-    "mamba": 50,
-    "medformer": 50,
-    "simple-cnn": 8,
-    "xresnet": 17,
-}
 
-MAXIMUM_LENGTHS: Dict[str, int] = {
-    "dualnet": 5000,
-    "mamba": 25049,
-    "medformer": 5009,
-    "transformer": 5000,
-}
+def __getattr__(name: str) -> Any:
+    """Expose the registry bounds under the historical table names."""
+    if name == "MINIMUM_LENGTHS":
+        return {
+            model: info["min_input_length"]
+            for model in get_model_names()
+            if (info := get_model_info(model)).get("min_input_length") is not None
+        }
+    if name == "MAXIMUM_LENGTHS":
+        return {
+            model: info["max_input_length"]
+            for model in get_model_names()
+            if (info := get_model_info(model)).get("max_input_length") is not None
+        }
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-def resolve_model_name(model: nn.Module) -> Optional[str]:
+def resolve_model_name(model: nn.Module) -> str | None:
     """Recover the registry name of an already-built model.
 
     ``register_model`` sets ``_registry_name`` on every registered class, so the
@@ -65,7 +61,7 @@ def resolve_model_name(model: nn.Module) -> Optional[str]:
     return name if isinstance(name, str) else None
 
 
-def length_bounds(model: nn.Module, model_name: Optional[str] = None) -> Tuple[int, Optional[int]]:
+def length_bounds(model: nn.Module, model_name: str | None = None) -> tuple[int, int | None]:
     """Return the smallest and largest signal length a model accepts.
 
     A live ``min_input_length`` attribute wins over the table, because AFModel's
@@ -81,20 +77,20 @@ def length_bounds(model: nn.Module, model_name: Optional[str] = None) -> Tuple[i
         None for the seventeen architectures that have no ceiling.
     """
     resolved = model_name or resolve_model_name(model)
+    info = get_model_info(resolved) if resolved and resolved in get_model_names() else {}
 
     declared = getattr(model, "min_input_length", None)
     if isinstance(declared, int):
         minimum = declared
     else:
-        minimum = MINIMUM_LENGTHS.get(resolved, 1) if resolved else 1
+        minimum = info.get("min_input_length") or 1
 
-    maximum = MAXIMUM_LENGTHS.get(resolved) if resolved else None
-    return minimum, maximum
+    return minimum, info.get("max_input_length")
 
 
 def fit_to_constraints(
-    signals: torch.Tensor, model: nn.Module, model_name: Optional[str] = None
-) -> Tuple[torch.Tensor, int]:
+    signals: torch.Tensor, model: nn.Module, model_name: str | None = None
+) -> tuple[torch.Tensor, int]:
     """Centre-crop a batch so the model can consume it, and report the offset.
 
     Cropping is centred to match ``ECGStandardizer(clip_method="center")``, so a

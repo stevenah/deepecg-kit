@@ -5,6 +5,9 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["deepecgkit*"]
 
+[tool.setuptools.package-data]
+deepecgkit = ["py.typed"]
+
 [project]
 name = "deepecgkit"
 version = "0.2.0"
@@ -13,12 +16,15 @@ authors = [
 ]
 description = "A deep learning toolkit for ECG analysis"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
-
 ]
 dependencies = [
     "numpy>=1.20.0",
@@ -28,8 +34,6 @@ dependencies = [
     "scikit-learn>=0.24.0",
     "matplotlib>=3.4.0",
     "wfdb>=3.4.0",
-    "pyEDFlib>=0.1.0",
-    "PyWavelets>=1.1.0",
     "seaborn>=0.11.0",
     "tqdm>=4.60.0",
     "pyyaml>=6.0.3",
@@ -38,13 +42,28 @@ dependencies = [
 [project.scripts]
 deepecg = "deepecgkit.cli:main"
 
+# Keep in sync with [dependency-groups]; dependency-groups is canonical (uv).
+# This extra exists so `pip install -e ".[dev]"` works for non-uv users.
 [project.optional-dependencies]
 dev = [
+    "pytest>=8.3.5",
     "pytest-cov>=3.0.0",
-    "black>=22.0.0",
-    "isort>=5.0.0",
-    "mypy>=0.900",
     "ruff>=0.11.13",
+    "mypy>=1.10",
+]
+docs = [
+    "mkdocs>=1.6.0",
+    "mkdocs-material>=9.5.0",
+    "mkdocstrings[python]>=0.25.0",
+    "mkdocs-autorefs>=1.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.5",
+    "pytest-cov>=3.0.0",
+    "ruff>=0.11.13",
+    "mypy>=1.10",
 ]
 docs = [
     "mkdocs>=1.6.0",
@@ -57,17 +76,12 @@ docs = [
 testpaths = ["tests"]
 pythonpath = ["."]
 python_files = ["test_*.py"]
-addopts = "-v --cov=deepecgkit --cov=scripts --cov-report=term-missing"
-filterwarnings = [
-    "ignore::DeprecationWarning",
-    "ignore::UserWarning",
-]
+addopts = "-ra"
 
 [tool.coverage.run]
-source = ["deepecgkit"]
+source = ["deepecgkit", "scripts"]
 omit = [
     "tests/*",
-    "setup.py",
     "**/__init__.py",
 ]
 
@@ -75,36 +89,20 @@ omit = [
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",
-    "if self.debug:",
     "raise NotImplementedError",
     "if __name__ == .__main__.:",
-    "pass",
-    "raise ImportError",
 ]
 
 [tool.ruff]
 line-length = 100
-target-version = "py38"
+target-version = "py310"
 lint.select = ["E", "F", "B", "I", "N", "UP", "PL", "RUF", "W"]
 lint.ignore = ["E501", "PLR0911", "PLR0913", "PLR0915", "PLR2004", "PLR0912", "E712", "RUF015"]
 lint.isort.known-first-party = ["deepecgkit"]
 
-
 [tool.mypy]
-python_version = "3.8"
+python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
-
-[dependency-groups]
-dev = [
-    "pytest>=8.3.5",
-    "pytest-cov>=3.0.0",
-    "ruff>=0.11.13",
-]
-docs = [
-    "mkdocs>=1.6.0",
-    "mkdocs-material>=9.5.0",
-    "mkdocstrings[python]>=0.25.0",
-    "mkdocs-autorefs>=1.0.0",
-]
+ignore_missing_imports = true

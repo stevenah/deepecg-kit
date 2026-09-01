@@ -327,7 +327,7 @@ class TestMetricEdgeCases:
         metrics = calculate_classification_metrics(y_true, y_pred)
 
         assert "accuracy" in metrics
-        assert isinstance(metrics["accuracy"], (float, np.floating))
+        assert isinstance(metrics["accuracy"], float | np.floating)
 
     def test_invalid_probabilities(self):
         """Test with invalid probability values."""
@@ -842,7 +842,7 @@ class TestEvaluatorCalibration:
             calibration_fit=(y_true[:half], logits[:half]),
         )
 
-        values = dict(zip(report["Metric"], report["Value"]))
+        values = dict(zip(report["Metric"], report["Value"], strict=False))
         assert values["ece_temp"] < values["ece"]
         assert abs(values["temperature"] - INJECTED_TEMPERATURE) < TEMPERATURE_TOLERANCE
 
@@ -853,5 +853,5 @@ class TestEvaluatorCalibration:
 
         report = evaluator.generate_report(y_prob, y_true, y_scores=y_prob)
 
-        values = dict(zip(report["Metric"], report["Value"]))
+        values = dict(zip(report["Metric"], report["Value"], strict=False))
         assert values["calibration_bins"] == 6

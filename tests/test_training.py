@@ -242,15 +242,15 @@ class TestTrainingIntegration:
         assert train_loader is not None
         assert val_loader is not None
 
-        try:
-            for batch in train_loader:
-                x, y = batch
-                y_hat = trainer.model(x)
-                loss = trainer._calculate_loss(y_hat, y)
-                assert isinstance(loss, torch.Tensor)
-                break
-        except Exception:
-            pytest.skip("No valid data in mock files")
+        saw_batch = False
+        for batch in train_loader:
+            x, y = batch
+            y_hat = trainer.model(x)
+            loss = trainer._calculate_loss(y_hat, y)
+            assert isinstance(loss, torch.Tensor)
+            saw_batch = True
+            break
+        assert saw_batch, "train_loader yielded no batches from the mock dataset"
 
     def test_full_training_simulation(self, sample_batch_ecg_10s, sample_labels):
         """Simulate a full training loop."""
@@ -320,12 +320,10 @@ class TestTrainingEdgeCases:
         x = torch.randn(1, 1, 100)
         y = torch.tensor([0])
 
-        try:
-            y_hat = trainer.model(x)
-            loss = trainer._calculate_loss(y_hat, y)
-            assert isinstance(loss, torch.Tensor)
-        except Exception as e:
-            pytest.skip(f"Edge case failed as expected: {e}")
+        y_hat = trainer.model(x)
+        loss = trainer._calculate_loss(y_hat, y)
+        assert isinstance(loss, torch.Tensor)
+        assert y_hat.shape == (1, 4)
 
     def test_gradient_flow_and_backprop(self, sample_batch_ecg_10s, sample_labels):
         """Test gradient flow during training."""

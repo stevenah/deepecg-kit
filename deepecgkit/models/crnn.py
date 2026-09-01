@@ -1,15 +1,17 @@
 import torch
 from torch import nn
 
-from deepecgkit.models.pretrained import PretrainedMixin
+from deepecgkit.models.base import ECGModelBase
+from deepecgkit.models.layers import lstm_final_hidden
 from deepecgkit.registry import register_model
 
 
 @register_model(
     name="crnn",
     description="CNN-LSTM hybrid for local feature extraction and temporal aggregation",
+    min_input_length=16,
 )
-class CRNN(PretrainedMixin, nn.Module):
+class CRNN(ECGModelBase):
     """
     Convolutional Recurrent Neural Network for ECG classification.
 
@@ -93,26 +95,16 @@ class CRNN(PretrainedMixin, nn.Module):
             nn.Linear(64, output_size),
         )
 
-    @property
-    def feature_dim(self) -> int:
-        return self._feature_dim
-
     def extract_features(self, x: torch.Tensor) -> torch.Tensor:
         batch_size = x.size(0)
         x = self.cnn(x)
         x = x.transpose(1, 2)
         _, (h_n, _) = self.lstm(x)
 
-        if self.bidirectional:
-            h_n = h_n.view(self.lstm_num_layers, 2, batch_size, self.lstm_hidden_size)
-            h_n = h_n[-1]
-            h_n = torch.cat([h_n[0], h_n[1]], dim=1)
-        else:
-            h_n = h_n[-1]
-
-        return h_n
-
-    def forward(self, x):
-        x = self.extract_features(x)
-        x = self.dropout(x)
-        return self.classifier(x)
+        return lstm_final_hidden(
+            h_n,
+            num_layers=self.lstm_num_layers,
+            batch_size=batch_size,
+            hidden_size=self.lstm_hidden_size,
+            bidirectional=self.bidirectional,
+        )

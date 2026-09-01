@@ -45,7 +45,7 @@ def make_runs():
     rows = []
     for dataset, models in VALUES.items():
         for model, values in models.items():
-            for seed, value in zip(SEEDS, values):
+            for seed, value in zip(SEEDS, values, strict=False):
                 for metric, offset in (("f1", 0.0), ("precision", 0.01), ("recall", -0.01)):
                     rows.append(
                         {

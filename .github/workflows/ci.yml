@@ -25,6 +25,9 @@ jobs:
       with:
         python-version: "3.10"
 
+    - name: Check the lockfile is in sync
+      run: uv lock --check
+
     - name: Install dependencies
       run: uv sync --dev --python-preference system
 
@@ -34,11 +37,56 @@ jobs:
     - name: Run ruff formatting check
       run: uv run ruff format --check .
 
+  typecheck:
+    runs-on: ubuntu-latest
+    # Advisory until the remaining annotation debt is paid down; flip to
+    # blocking by removing continue-on-error once mypy is clean.
+    continue-on-error: true
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.10"
+
+    - name: Install dependencies
+      run: uv sync --dev --python-preference system
+
+    - name: Run mypy
+      run: uv run mypy deepecgkit
+
+  docs:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.10"
+
+    - name: Install docs dependencies
+      run: uv sync --group docs --python-preference system
+
+    - name: Build docs (strict)
+      run: uv run --group docs mkdocs build --strict
+
   test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
 
     steps:
     - name: Checkout code
@@ -56,7 +104,7 @@ jobs:
       run: uv sync --dev --python-preference system
 
     - name: Run tests
-      run: uv run pytest
+      run: uv run pytest ${{ matrix.python-version == '3.12' && '--cov --cov-report=term-missing' || '' }}
 
   build:
     runs-on: ubuntu-latest

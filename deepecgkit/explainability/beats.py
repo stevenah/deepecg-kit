@@ -10,8 +10,6 @@ That last number is the point. "This model attends to the P-wave region" stops
 being a description of a picture and becomes a fraction that can be wrong.
 """
 
-from typing import Dict, Optional, Tuple
-
 import numpy as np
 from scipy import signal as scipy_signal
 
@@ -25,15 +23,15 @@ __all__ = [
     "region_duration_fractions",
 ]
 
-PQRST_WINDOWS_MS: Dict[str, Tuple[int, int]] = {
+PQRST_WINDOWS_MS: dict[str, tuple[int, int]] = {
     "P": (-250, -50),
     "QRS": (-50, 50),
     "T": (100, 400),
 }
 
-BEAT_WINDOW_MS: Tuple[int, int] = (-300, 500)
+BEAT_WINDOW_MS: tuple[int, int] = (-300, 500)
 
-_QRS_BANDPASS_HZ: Tuple[float, float] = (5.0, 15.0)
+_QRS_BANDPASS_HZ: tuple[float, float] = (5.0, 15.0)
 _MINIMUM_RR_SECONDS = 0.3
 _THRESHOLD_FACTOR = 1.0
 _INTEGRATION_SECONDS = 0.15
@@ -42,7 +40,7 @@ _INTEGRATION_SECONDS = 0.15
 def detect_r_peaks(
     signal: np.ndarray,
     sampling_rate: float = 500.0,
-    bandpass: Tuple[float, float] = _QRS_BANDPASS_HZ,
+    bandpass: tuple[float, float] = _QRS_BANDPASS_HZ,
     min_rr_seconds: float = _MINIMUM_RR_SECONDS,
     threshold_factor: float = _THRESHOLD_FACTOR,
     integration_seconds: float = _INTEGRATION_SECONDS,
@@ -119,8 +117,8 @@ def beat_aligned_attribution(
     values: np.ndarray,
     r_peaks: np.ndarray,
     sampling_rate: float = 500.0,
-    window_ms: Tuple[int, int] = BEAT_WINDOW_MS,
-) -> Tuple[np.ndarray, np.ndarray, int]:
+    window_ms: tuple[int, int] = BEAT_WINDOW_MS,
+) -> tuple[np.ndarray, np.ndarray, int]:
     """Average attribution over R-peak-aligned windows.
 
     Beats whose window would run past either end of the recording are dropped
@@ -179,8 +177,8 @@ def beat_aligned_attribution(
 def pqrst_fractions(
     profile: np.ndarray,
     times_ms: np.ndarray,
-    windows_ms: Optional[Dict[str, Tuple[int, int]]] = None,
-) -> Dict[str, float]:
+    windows_ms: dict[str, tuple[int, int]] | None = None,
+) -> dict[str, float]:
     """Split a beat profile into its P, QRS and T shares.
 
     Shares are taken against the total mass of the profile, not against the
@@ -232,8 +230,8 @@ def pqrst_fractions(
 
 def region_duration_fractions(
     times_ms: np.ndarray,
-    windows_ms: Optional[Dict[str, Tuple[int, int]]] = None,
-) -> Dict[str, float]:
+    windows_ms: dict[str, tuple[int, int]] | None = None,
+) -> dict[str, float]:
     """Return each region's share of the beat window's duration.
 
     This is the profile a model spreading its attention evenly over the cardiac
@@ -265,10 +263,10 @@ def region_duration_fractions(
 
 
 def pqrst_enrichment(
-    fractions: Dict[str, float],
+    fractions: dict[str, float],
     times_ms: np.ndarray,
-    windows_ms: Optional[Dict[str, Tuple[int, int]]] = None,
-) -> Dict[str, float]:
+    windows_ms: dict[str, tuple[int, int]] | None = None,
+) -> dict[str, float]:
     """Compare each region's attribution share against its share of the beat.
 
     A value of one means the region received exactly the attention its width

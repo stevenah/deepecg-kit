@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 
-from deepecgkit.models.pretrained import PretrainedMixin
+from deepecgkit.models.base import ECGModelBase
 from deepecgkit.registry import register_model
 
 
@@ -88,8 +88,9 @@ class ConvNeXtV2Block1D(nn.Module):
 @register_model(
     name="convnext-v2",
     description="Modern ConvNet with depthwise convolutions and Global Response Normalization for ECG",
+    min_input_length=29,
 )
-class ConvNeXtV21D(PretrainedMixin, nn.Module):
+class ConvNeXtV21D(ECGModelBase):
     """
     ConvNeXtV2 adapted for 1D ECG signals.
 
@@ -162,10 +163,6 @@ class ConvNeXtV21D(PretrainedMixin, nn.Module):
 
         self.classifier = nn.Linear(dims[-1], output_size)
 
-    @property
-    def feature_dim(self) -> int:
-        return self._feature_dim
-
     def extract_features(self, x: torch.Tensor) -> torch.Tensor:
         x = self.stem(x)
         for i, stage in enumerate(self.stages):
@@ -175,10 +172,4 @@ class ConvNeXtV21D(PretrainedMixin, nn.Module):
         x = self.pool(x)
         x = torch.flatten(x, 1)
         x = self.final_norm(x)
-        return x
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.extract_features(x)
-        x = self.dropout(x)
-        x = self.classifier(x)
         return x

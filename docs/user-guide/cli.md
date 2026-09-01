@@ -25,7 +25,7 @@ deepecg train -m kanres -d af-classification --epochs 50
 | `--model`, `-m` | *required* | Model architecture (see `deepecg list-models`) |
 | `--dataset`, `-d` | *required* | Dataset to train on (see `deepecg list-datasets`) |
 | `--data-dir` | auto-detect | Directory containing the dataset |
-| `--output-dir`, `-o` | `runs/{timestamp}-{model}-{dataset}` | Output directory |
+| `--output-dir`, `-o` | `runs/{timestamp}-{model}-{dataset}-seed{seed}` | Output directory |
 | `--weights`, `-w` | None | Pretrained weight name or file path |
 | `--epochs`, `-e` | 50 | Number of training epochs |
 | `--batch-size`, `-b` | 32 | Batch size |
@@ -42,6 +42,12 @@ deepecg train -m kanres -d af-classification --epochs 50
 | `--sampling-rate` | None | Target sampling rate in Hz |
 | `--binary-classification` | false | Binary AF vs Non-AF classification |
 | `--normalization` | None | Normalization method: `zscore`, `minmax`, `none` |
+
+Every run directory receives, alongside its metrics: `checkpoints/` with the best checkpoints by
+validation loss, named like `epoch=07-val_loss=0.4123.pt`; `run_metadata.json` recording what
+produced the run (model, dataset, seed, split fractions, labelling mode, hyperparameters, and the
+final returncode); and `split_info.json` with the realised split sizes. `deepecg evaluate` and the
+[analysis commands](#deepecg-aggregate) read these files back.
 
 ### `deepecg evaluate`
 
@@ -63,6 +69,23 @@ deepecg evaluate --checkpoint model.pt -m kanres -d af-classification
 | `--devices` | 1 | Number of devices |
 | `--force-download` | false | Force re-download the dataset |
 | `--split` | test | Dataset split: `test` or `val` |
+| `--seed` | recorded, else 42 | Seed that produced the split during training |
+| `--val-split` | recorded, else 0.2 | Validation fraction used during training |
+| `--test-split` | recorded, else 0.1 | Test fraction used during training |
+| `--calibration-bins` | 15 | Bins for the calibration metrics |
+| `--no-calibration` | false | Skip the validation pass that fits the temperature |
+| `--output`, `-o` | console only | Directory to write metrics CSV, predictions and plots into |
+
+The evaluation split is rebuilt from `--seed`, `--val-split` and `--test-split`. When the
+checkpoint lives inside a run directory written by `deepecg train`, the values recorded in that
+run's `run_metadata.json` are adopted automatically for whichever of the three flags were left at
+their defaults; an explicit flag that contradicts the recording is kept but produces a warning,
+because the rebuilt split will then not match the one the model was trained on. The rebuilt split
+sizes are also verified against the run's `split_info.json`, again with a warning on mismatch.
+
+With `--output`, the full artifact set is written into the directory:
+`classification_metrics.csv`, `predictions.txt`, `confusion_matrix.png`, `calibration_curve.png`
+and `prediction_distribution.png`. Without it, results are printed to the console only.
 
 ### `deepecg predict`
 
@@ -87,8 +110,8 @@ Extract deep embeddings and write them to disk. See
 [Feature Extraction](feature-extraction.md) for what the embeddings represent.
 
 ```bash
-deepecg extract-features --checkpoint model.ckpt -m kanres -d af-classification -o features.npz
-deepecg extract-features --checkpoint model.ckpt -m kanres -i ecg.npy -o features.csv
+deepecg extract-features --checkpoint model.pt -m kanres -d af-classification -o features.npz
+deepecg extract-features --checkpoint model.pt -m kanres -i ecg.npy -o features.csv
 ```
 
 Exactly one weight source (`--checkpoint` or `--weights`) and one data source (`--dataset` or
@@ -104,6 +127,9 @@ Exactly one weight source (`--checkpoint` or `--weights`) and one data source (`
 | `--output`, `-o` | *required* | Output path (`.npz`, `.npy`, or `.csv`) |
 | `--data-dir` | None | Directory containing the dataset |
 | `--split` | `test` | Split to extract: `train`, `val`, `test`, `all` |
+| `--seed` | 42 | Seed that produced the split during training |
+| `--val-split` | 0.2 | Validation fraction used during training |
+| `--test-split` | 0.1 | Test fraction used during training |
 | `--batch-size`, `-b` | 32 | Batch size |
 | `--num-workers` | 4 | Data loading workers |
 | `--accelerator` | auto | Device: `auto`, `cpu`, `gpu`, `mps` |
@@ -114,14 +140,18 @@ Exactly one weight source (`--checkpoint` or `--weights`) and one data source (`
 Output format follows the extension: `.npz` keeps features, labels and metadata; `.npy` stores
 features only; `.csv` writes columns `f0..fN` plus a label column.
 
+`--seed`, `--val-split` and `--test-split` rebuild the dataset partition, so passing the values
+the checkpoint was trained with makes `--split test` cover exactly the recordings the model never
+saw during training.
+
 ### `deepecg explain`
 
 Attribute a model's predictions back to the signal and write the arrays and figures to a directory.
 See [Explainability](explainability.md) for what the numbers mean.
 
 ```bash
-deepecg explain --checkpoint model.ckpt -m kanres -d af-classification -o explanations/
-deepecg explain --checkpoint model.ckpt -m kanres -i ecg.npy -o explanations/ \
+deepecg explain --checkpoint model.pt -m kanres -d af-classification -o explanations/
+deepecg explain --checkpoint model.pt -m kanres -i ecg.npy -o explanations/ \
     --method integrated-gradients --ig-steps 128
 deepecg explain -w kanres-af-30s -m kanres -i ecg.npy -o explanations/ --no-plots
 ```
@@ -149,6 +179,9 @@ directory rather than a file.
 | `--no-plots` | false | Write the arrays and summary only |
 | `--data-dir` | None | Directory containing the dataset |
 | `--split` | `test` | Split to explain: `train`, `val`, `test`, `all` |
+| `--seed` | 42 | Seed that produced the split during training |
+| `--val-split` | 0.2 | Validation fraction used during training |
+| `--test-split` | 0.1 | Test fraction used during training |
 | `--batch-size`, `-b` | 8 | Batch size |
 | `--num-workers` | 4 | Data loading workers |
 | `--accelerator` | auto | Device: `auto`, `cpu`, `gpu`, `mps` |
@@ -213,31 +246,72 @@ and one `embedding_<source>_<target>.png` per retained cell.
 Pass `--input-channels` explicitly for `deep-res-cnn`, `gru`, `lstm` and `transformer`, whose lead
 count cannot be read back from their weights.
 
-### `deepecg resume`
+### `deepecg aggregate`
 
-Resume training from a checkpoint.
+Aggregate per-run test metrics across random seeds. Run directories written by `deepecg train`
+(any directory holding `classification_metrics.csv`) are discovered, grouped by model, dataset
+and seed, and each metric is summarised as a mean with a Student-t confidence interval.
 
 ```bash
-deepecg resume --checkpoint model.pt -m kanres --epochs 100
+deepecg aggregate --runs-dir runs --output-dir analysis --emit-latex \
+    --metrics f1 auroc ece
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--checkpoint` | *required* | Path to checkpoint to resume from |
-| `--model`, `-m` | *required* | Model architecture |
-| `--epochs`, `-e` | None | Additional epochs (default: continue original) |
-| `--output-dir`, `-o` | None | Directory to save new checkpoints |
-| `--accelerator` | auto | Device selection |
-| `--devices` | 1 | Number of devices |
-| `--early-stopping-patience` | 10 | Early stopping patience |
+| `--runs-dir` | `runs` | One or more directories holding run directories |
+| `--output-dir` | print only | Write CSV and LaTeX output here instead of printing only |
+| `--recursive` | false | Search for run directories at any depth |
+| `--include-legacy` | false | Include runs whose seed cannot be determined, under a sentinel seed |
+| `--on-duplicate` | `newest` | `newest`, `error` or `all` when one model, dataset and seed appears twice |
+| `--models` | all | Restrict to these models |
+| `--datasets` | all | Restrict to these datasets |
+| `--confidence-level` | 0.95 | Two-sided coverage of the intervals |
+| `--emit-latex` | false | Write booktabs tables |
+| `--metrics` | default set | Metrics for the report and LaTeX tables, in column order |
+
+### `deepecg rank`
+
+Report how stable architecture rankings are across seeds: per-seed ranks within each dataset,
+rank distributions, Kendall's tau between seeds, and paired flip tests between models.
+
+```bash
+deepecg rank --runs-dir runs --output-dir analysis --metric f1
+deepecg rank --claim kanres:af-classification:ptbxl
+```
+
+`deepecg rank` shares the run-discovery flags of `deepecg aggregate` (`--runs-dir`,
+`--output-dir`, `--recursive`, `--include-legacy`, `--on-duplicate`, `--models`, `--datasets`,
+`--confidence-level`, `--emit-latex`) and adds:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--metric` | `f1` | Metric to rank on |
+| `--correction` | `nadeau-bengio` | Standard error correction for the paired differences: `nadeau-bengio` or `none` |
+| `--min-test-groups` | 10 | Fewest independent test units that can support a test |
+| `--claim` | none | Evaluate a "best here, worst there" claim, as `MODEL:BEST_DATASET:WORST_DATASET` |
+
+Both commands are also reachable as `python scripts/aggregate_results.py` and
+`python scripts/ranking_stability.py`, thin shims kept for existing invocations. See the
+[analysis API reference](../api/analysis.md) for the underlying functions.
 
 ### `deepecg info`
 
-Show model information.
+Show model information, including parameter counts.
 
 ```bash
 deepecg info -m kanres
+deepecg info -m kanres --input-channels 12 --num-classes 5
 ```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--model`, `-m` | *required* | Model to show information for |
+| `--input-channels` | 1 | Lead count used for the parameter counts |
+| `--num-classes` | 4 | Class count used for the parameter counts |
+
+Parameter counts depend on the lead and class configuration, so the output labels them with the
+configuration they were computed for.
 
 ### `deepecg list-models`
 
@@ -257,7 +331,10 @@ deepecg list-datasets
 
 ## Configuration Files
 
-Instead of passing all flags on the command line, you can use a YAML or JSON config file:
+Every command accepts `--config` with a YAML or JSON file, so an experiment's settings can live in
+one file instead of a long command line. The file holds one section per command, named after the
+command — `train:`, `evaluate:`, `extract-features:` (the underscore form `extract_features:` also
+works) — with keys matching the command's flags, written with underscores:
 
 ```yaml
 train:
@@ -266,10 +343,17 @@ train:
   batch_size: 64
   val_split: 0.2
   early_stopping_patience: 15
+
+evaluate:
+  batch_size: 64
 ```
 
 ```bash
-deepecg train -m kanres -d af-classification --config train_config.yaml
+deepecg train -m kanres -d af-classification --config experiment.yaml
+deepecg evaluate --checkpoint model.pt -m kanres -d af-classification --config experiment.yaml
 ```
 
-CLI flags override values from the config file.
+Precedence is: explicit flags > config values > built-in defaults. Only the section for the
+command being run is read, so one file can configure a whole workflow. A key the chosen command
+does not define produces a warning and is ignored, so a typo cannot silently change a run. The
+top-level keys `verbose` and `quiet` are also honoured.

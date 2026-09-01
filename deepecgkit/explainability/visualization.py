@@ -9,12 +9,11 @@ neighbouring function instead would put a transpose at every call site, and
 each of those is somewhere to get the axes the wrong way round.
 """
 
-from typing import Dict, List, Optional, Tuple
-
 import matplotlib.pyplot as plt
 import numpy as np
 
 from deepecgkit.explainability.beats import PQRST_WINDOWS_MS
+from deepecgkit.utils.plotting import finalize_figure
 
 __all__ = [
     "plot_attribution",
@@ -23,18 +22,18 @@ __all__ = [
 ]
 
 _ATTRIBUTION_CMAP = "Reds"
-_REGION_COLOURS: Dict[str, str] = {"P": "tab:blue", "QRS": "tab:orange", "T": "tab:green"}
+_REGION_COLOURS: dict[str, str] = {"P": "tab:blue", "QRS": "tab:orange", "T": "tab:green"}
 
 
 def plot_attribution(
     signal: np.ndarray,
     values: np.ndarray,
     sampling_rate: float = 500.0,
-    leads: Optional[List[str]] = None,
+    leads: list[str] | None = None,
     time_offset: float = 0.0,
     title: str = "ECG Attribution",
-    save_path: Optional[str] = None,
-):
+    save_path: str | None = None,
+) -> None:
     """Plot each lead with its attribution shaded behind the trace.
 
     Attribution magnitude is drawn as a background band on one colour scale
@@ -98,19 +97,15 @@ def plot_attribution(
     if mesh is not None:
         plt.colorbar(mesh, ax=axes, label="|attribution|", fraction=0.02, pad=0.01)
 
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches="tight")
-        plt.close()
-    else:
-        plt.show()
+    finalize_figure(save_path)
 
 
 def plot_lead_importance(
     importance: np.ndarray,
-    leads: Optional[List[str]] = None,
+    leads: list[str] | None = None,
     title: str = "Lead Importance",
-    save_path: Optional[str] = None,
-):
+    save_path: str | None = None,
+) -> None:
     """Plot the share of attribution each lead carries.
 
     Args:
@@ -144,21 +139,17 @@ def plot_lead_importance(
     plt.grid(True, alpha=0.3, axis="x")
     plt.tight_layout()
 
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches="tight")
-        plt.close()
-    else:
-        plt.show()
+    finalize_figure(save_path)
 
 
 def plot_beat_profile(
     profile: np.ndarray,
     times_ms: np.ndarray,
-    leads: Optional[List[str]] = None,
-    windows_ms: Optional[Dict[str, Tuple[int, int]]] = None,
+    leads: list[str] | None = None,
+    windows_ms: dict[str, tuple[int, int]] | None = None,
     title: str = "Beat-Aligned Attribution",
-    save_path: Optional[str] = None,
-):
+    save_path: str | None = None,
+) -> None:
     """Plot mean attribution across the cardiac cycle with the regions shaded.
 
     The P, QRS and T windows are drawn behind the curve so the reported shares
@@ -212,8 +203,4 @@ def plot_beat_profile(
     plt.legend(loc="upper right", fontsize="small", ncol=2)
     plt.tight_layout()
 
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches="tight")
-        plt.close()
-    else:
-        plt.show()
+    finalize_figure(save_path)

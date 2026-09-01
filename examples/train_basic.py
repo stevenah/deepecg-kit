@@ -11,6 +11,7 @@ Usage:
 import argparse
 from pathlib import Path
 
+from deepecgkit.cli import defaults
 from deepecgkit.datasets import ECGDataModule
 from deepecgkit.registry import get_dataset, get_dataset_info, get_model
 from deepecgkit.training import ECGTrainer
@@ -20,16 +21,16 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train an ECG model")
     parser.add_argument("--model", type=str, default="kanres")
     parser.add_argument("--dataset", type=str, default="af-classification")
-    parser.add_argument("--epochs", type=int, default=50)
-    parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--val-split", type=float, default=0.2)
-    parser.add_argument("--test-split", type=float, default=0.1)
-    parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--epochs", type=int, default=defaults.EPOCHS)
+    parser.add_argument("--batch-size", type=int, default=defaults.BATCH_SIZE)
+    parser.add_argument("--lr", type=float, default=defaults.LEARNING_RATE)
+    parser.add_argument("--val-split", type=float, default=defaults.VAL_SPLIT)
+    parser.add_argument("--test-split", type=float, default=defaults.TEST_SPLIT)
+    parser.add_argument("--num-workers", type=int, default=defaults.NUM_WORKERS)
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--output-dir", type=str, default=None)
     parser.add_argument("--download", action="store_true")
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--seed", type=int, default=defaults.SEED)
     return parser.parse_args()
 
 

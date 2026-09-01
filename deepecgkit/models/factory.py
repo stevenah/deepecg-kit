@@ -7,7 +7,7 @@ models the same way.
 """
 
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any
 
 import torch
 from torch import nn
@@ -47,29 +47,41 @@ def build_model(name: str, input_channels: int, output_size: int, **kwargs: Any)
     return model_class(input_channels=input_channels, output_size=output_size, **resolved)
 
 
-def infer_output_size(state_dict: Dict[str, torch.Tensor]) -> Optional[int]:
+def infer_output_size(
+    state_dict: dict[str, torch.Tensor], head_attr: str | None = None
+) -> int | None:
     """Infer the classifier output size from a saved state dict.
 
-    Every registered architecture terminates in a linear classifier, so the last
-    two-dimensional weight tensor with a matching bias gives the output size.
+    Every registered architecture terminates in a linear classifier. When the
+    head's attribute name is known (recorded in the registry as HEAD_ATTR),
+    the last two-dimensional weight under that prefix is exact; otherwise the
+    last two-dimensional weight tensor with a matching bias anywhere in the
+    state dict is used as a heuristic, which also covers bare and legacy
+    checkpoints.
 
     Args:
         state_dict: Model state dict
+        head_attr: Attribute name of the model's head submodule, if known
 
     Returns:
         The inferred output size, or None if no classifier head was found.
     """
     output_size = None
+    prefix = f"{head_attr}." if head_attr else None
     for key, tensor in state_dict.items():
         if not key.endswith(".weight") or tensor.dim() != 2:
+            continue
+        if prefix is not None and not key.startswith(prefix):
             continue
         bias = state_dict.get(key[: -len(".weight")] + ".bias")
         if bias is not None and bias.dim() == 1 and bias.shape[0] == tensor.shape[0]:
             output_size = int(tensor.shape[0])
+    if output_size is None and prefix is not None:
+        return infer_output_size(state_dict)
     return output_size
 
 
-def infer_input_channels(state_dict: Dict[str, torch.Tensor]) -> Optional[int]:
+def infer_input_channels(state_dict: dict[str, torch.Tensor]) -> int | None:
     """Infer the input lead count from a saved state dict, where recoverable.
 
     Architectures whose first layer is a 1D convolution encode the lead count in
@@ -89,12 +101,12 @@ def infer_input_channels(state_dict: Dict[str, torch.Tensor]) -> Optional[int]:
 
 
 def build_model_from_checkpoint(
-    checkpoint_path: Union[str, Path],
+    checkpoint_path: str | Path,
     name: str,
-    input_channels: Optional[int] = None,
-    output_size: Optional[int] = None,
+    input_channels: int | None = None,
+    output_size: int | None = None,
     map_location: str = "cpu",
-) -> Tuple[nn.Module, Dict[str, Any]]:
+) -> tuple[nn.Module, dict[str, Any]]:
     """Build a model matching a checkpoint and load its weights.
 
     Shapes are taken from explicit arguments when given, then from a model_config
@@ -124,7 +136,8 @@ def build_model_from_checkpoint(
         raise ValueError(f"Checkpoint {checkpoint_path} contains no model_state_dict") from error
 
     if output_size is None:
-        output_size = recorded.get("output_size") or infer_output_size(state_dict)
+        head_attr = get_model_info(name).get("head_attr") if name in get_model_names() else None
+        output_size = recorded.get("output_size") or infer_output_size(state_dict, head_attr)
     if output_size is None:
         raise ValueError(
             f"Could not determine output size for '{name}' from {checkpoint_path}. "
