@@ -45,6 +45,7 @@ nav:
       - Evaluation: user-guide/evaluation.md
       - Calibration: user-guide/calibration.md
       - Feature Extraction: user-guide/feature-extraction.md
+      - Representation Quality: user-guide/representation-quality.md
       - Explainability: user-guide/explainability.md
   - Examples:
       - Basic Training: examples/train-basic.md

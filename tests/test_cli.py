@@ -29,6 +29,7 @@ from deepecgkit.cli import (
     load_config,
     main,
     predict,
+    probe,
     resume,
     show_info,
     train,
@@ -37,6 +38,7 @@ from deepecgkit.cli.commands.evaluate import (
     _dataset_kwargs_for_checkpoint,
     _read_train_config,
 )
+from deepecgkit.cli.commands.probe import parse_source_checkpoints
 from deepecgkit.models.factory import build_model
 
 predict_module = sys.modules["deepecgkit.cli.commands.predict"]
@@ -716,6 +718,65 @@ class TestCLIParserDefaults:
             assert call_kwargs["early_stopping_patience"] == 10
             assert call_kwargs["seed"] == 42
 
+    def test_probe_default_values(self):
+        """Test probe command default argument values."""
+        with patch("deepecgkit.cli.probe") as mock_probe:
+            mock_probe.return_value = 0
+            main(["probe", "-m", "kanres", "-o", "probe/"])
+
+            call_kwargs = mock_probe.call_args[1]
+            assert call_kwargs["metric"] == "auroc_macro"
+            assert call_kwargs["input_channels"] == 1
+            assert call_kwargs["sampling_rate"] == 300
+            assert call_kwargs["embedding_plots"] == "diagonal"
+            assert call_kwargs["random_init"] is True
+            assert call_kwargs["plots"] is True
+            assert call_kwargs["latex"] is True
+            assert call_kwargs["source_checkpoints"] == []
+            assert call_kwargs["targets"] == []
+            assert call_kwargs["val_split"] == 0.2
+            assert call_kwargs["test_split"] == 0.1
+            assert call_kwargs["seed"] == 42
+            assert call_kwargs["batch_size"] == 32
+            assert call_kwargs["num_workers"] == 4
+            assert call_kwargs["accelerator"] == "auto"
+
+    def test_probe_custom_values(self):
+        """Test probe command with custom argument values."""
+        with patch("deepecgkit.cli.probe") as mock_probe:
+            mock_probe.return_value = 0
+            main(
+                [
+                    "probe",
+                    "-m",
+                    "resnet",
+                    "-o",
+                    "out/",
+                    "--source-checkpoint",
+                    "ptbxl=a.pt",
+                    "--source-checkpoint",
+                    "ltafdb=b.pt",
+                    "--target",
+                    "ptbxl",
+                    "--metric",
+                    "accuracy",
+                    "--no-random-init",
+                    "--no-plots",
+                    "--no-latex",
+                    "--embedding-plots",
+                    "all",
+                ]
+            )
+
+            call_kwargs = mock_probe.call_args[1]
+            assert call_kwargs["source_checkpoints"] == ["ptbxl=a.pt", "ltafdb=b.pt"]
+            assert call_kwargs["targets"] == ["ptbxl"]
+            assert call_kwargs["metric"] == "accuracy"
+            assert call_kwargs["random_init"] is False
+            assert call_kwargs["plots"] is False
+            assert call_kwargs["latex"] is False
+            assert call_kwargs["embedding_plots"] == "all"
+
     def test_train_custom_values(self):
         """Test train command with custom argument values."""
         with patch("deepecgkit.cli.train") as mock_train:
@@ -829,6 +890,119 @@ class TestCLIParserDefaults:
             assert call_kwargs["accelerator"] == "auto"
             assert call_kwargs["devices"] == 1
             assert call_kwargs["early_stopping_patience"] == 10
+
+
+class TestProbeCommand:
+    """Test the probe command."""
+
+    def test_model_is_required(self):
+        """The model architecture must be given."""
+        with pytest.raises(SystemExit):
+            main(["probe", "-o", "probe/"])
+
+    def test_output_is_required(self):
+        """The output directory must be given."""
+        with pytest.raises(SystemExit):
+            main(["probe", "-m", "kanres"])
+
+    def test_unknown_model(self, capsys, temp_dir):
+        """An unregistered model is a usage error from argparse."""
+        with pytest.raises(SystemExit):
+            main(["probe", "-m", "not-a-model", "-o", str(temp_dir)])
+
+    def test_unknown_model_reaches_the_command(self, capsys, temp_dir):
+        """Calling the command directly with an unknown model exits non-zero."""
+        exit_code = probe(str(temp_dir), "not-a-model", [])
+        assert exit_code == 1
+        assert "Unknown model" in capsys.readouterr().err
+
+    def test_malformed_source_checkpoint(self, capsys, temp_dir):
+        """A source without a separator exits non-zero with a clear message."""
+        exit_code = main(
+            [
+                "probe",
+                "-m",
+                "kanres",
+                "-o",
+                str(temp_dir),
+                "--source-checkpoint",
+                "af-classification",
+            ]
+        )
+        assert exit_code == 1
+        assert "Malformed source" in capsys.readouterr().err
+
+    def test_checkpoint_not_found(self, capsys, temp_dir):
+        """A missing checkpoint exits non-zero with a clear message."""
+        exit_code = main(
+            [
+                "probe",
+                "-m",
+                "kanres",
+                "-o",
+                str(temp_dir),
+                "--source-checkpoint",
+                f"af-classification={temp_dir / 'absent.pt'}",
+            ]
+        )
+        assert exit_code == 1
+        assert "Checkpoint not found" in capsys.readouterr().err
+
+    def test_unknown_source_dataset(self, capsys, temp_dir):
+        """A source naming an unregistered dataset exits non-zero."""
+        exit_code = probe(str(temp_dir), "kanres", ["not-a-dataset=some.pt"])
+        assert exit_code == 1
+        assert "Unknown source dataset" in capsys.readouterr().err
+
+    def test_nothing_to_probe(self, capsys, temp_dir):
+        """Dropping the floor with no sources leaves nothing to run."""
+        exit_code = probe(str(temp_dir), "kanres", [], random_init=False)
+        assert exit_code == 1
+        assert "Nothing to probe" in capsys.readouterr().err
+
+    def test_unknown_metric(self, capsys, temp_dir):
+        """An unrecognised metric exits non-zero before any data is touched."""
+        exit_code = probe(str(temp_dir), "kanres", [], metric="rmse")
+        assert exit_code == 1
+        assert "Unknown metric" in capsys.readouterr().err
+
+    def test_unknown_embedding_mode(self, capsys, temp_dir):
+        """An unrecognised embedding plot mode exits non-zero."""
+        exit_code = probe(str(temp_dir), "kanres", [], embedding_plots="some")
+        assert exit_code == 1
+        assert "Unknown embedding plot mode" in capsys.readouterr().err
+
+
+class TestParseSourceCheckpoints:
+    """Repeated DATASET=PATH arguments are parsed into a mapping."""
+
+    def test_parses_pairs(self):
+        """Each entry becomes one source."""
+        parsed = parse_source_checkpoints(["ptbxl=a.pt", "ltafdb=b.pt"])
+        assert parsed == {"ptbxl": "a.pt", "ltafdb": "b.pt"}
+
+    def test_tolerates_surrounding_space(self):
+        """Whitespace around either half is stripped."""
+        assert parse_source_checkpoints([" ptbxl = a.pt "]) == {"ptbxl": "a.pt"}
+
+    def test_keeps_a_path_containing_a_separator(self):
+        """Only the first separator splits the entry, so paths may contain one."""
+        assert parse_source_checkpoints(["ptbxl=runs/a=1/best.pt"]) == {"ptbxl": "runs/a=1/best.pt"}
+
+    def test_rejects_a_missing_separator(self):
+        """An entry with no separator is rejected."""
+        with pytest.raises(ValueError, match="Malformed source"):
+            parse_source_checkpoints(["ptbxl"])
+
+    def test_rejects_an_empty_half(self):
+        """Both the dataset and the path are required."""
+        with pytest.raises(ValueError, match="Malformed source"):
+            parse_source_checkpoints(["ptbxl="])
+
+    def test_rejects_a_repeated_dataset(self):
+        """One checkpoint per source dataset."""
+        with pytest.raises(ValueError, match="more than once"):
+            parse_source_checkpoints(["ptbxl=a.pt", "ptbxl=b.pt"])
 
 
 class TestExtractFeaturesCommand:

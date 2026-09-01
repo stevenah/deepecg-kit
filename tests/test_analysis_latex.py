@@ -17,6 +17,7 @@ from deepecgkit.analysis.latex import (
     rank_distribution_table,
     results_table,
     tau_table,
+    transfer_matrix_table,
     write_tables,
 )
 from deepecgkit.analysis.ranking import all_flip_tests, rank_distribution, tau_summary
@@ -265,3 +266,71 @@ class TestCalibrationTableOrdering:
         body = table.split(r"\midrule")[1]
 
         assert body.index("CRNN") < body.index("ResNet1D")
+
+
+TRANSFER_SOURCES = ["random-init", "af-classification", "ptbxl"]
+TRANSFER_TARGETS = ["af-classification", "ptbxl", "mitbih-afdb"]
+
+
+def make_transfer_matrix():
+    """Build a transfer matrix frame with one unscored cell.
+
+    Returns:
+        A frame indexed by encoder source with one column per probe target.
+    """
+    return pd.DataFrame(
+        [
+            [0.512, 0.601, 0.498],
+            [0.884, 0.702, 0.771],
+            [0.690, float("nan"), 0.664],
+        ],
+        index=TRANSFER_SOURCES,
+        columns=TRANSFER_TARGETS,
+    )
+
+
+class TestTransferMatrixTable:
+    """The transfer matrix renders as a booktabs table with the floor on top."""
+
+    def test_wraps_a_booktabs_table(self):
+        """The output is a complete table float."""
+        table = transfer_matrix_table(make_transfer_matrix())
+        assert r"\toprule" in table
+        assert r"\bottomrule" in table
+        assert r"\begin{tabular}{lccc}" in table
+
+    def test_uses_dataset_display_names(self):
+        """Registry names are rendered as the manuscript's names."""
+        table = transfer_matrix_table(make_transfer_matrix())
+        assert "PhysioNet 2017" in table
+        assert "PTB-XL" in table
+        assert "MIT-BIH AFDB" in table
+
+    def test_unscored_cells_render_as_a_dash(self):
+        """A cell the probe could not score is a dash, not a NaN literal."""
+        table = transfer_matrix_table(make_transfer_matrix())
+        assert MISSING_CELL in table
+        assert "nan" not in table.lower()
+
+    def test_baseline_row_leads_and_is_ruled_off(self):
+        """The floor is the first body row and is separated from the trained encoders."""
+        table = transfer_matrix_table(make_transfer_matrix(), baseline_row="random-init")
+        body = table.split(r"\midrule")
+        assert "Random init" in body[1]
+        assert "PhysioNet 2017" in body[2]
+
+    def test_baseline_row_is_optional(self):
+        """Without a baseline the rows keep the frame's own order."""
+        table = transfer_matrix_table(make_transfer_matrix())
+        assert "Random init" in table
+        assert table.count(r"\midrule") == 2
+
+    def test_metric_names_the_caption(self):
+        """The caption says which metric fills the cells."""
+        assert "AUROC" in transfer_matrix_table(make_transfer_matrix())
+        assert "Acc." in transfer_matrix_table(make_transfer_matrix(), metric="accuracy")
+
+    def test_label_is_settable(self):
+        """The cross-reference label can be chosen by the caller."""
+        table = transfer_matrix_table(make_transfer_matrix(), label="tab:probe")
+        assert r"\label{tab:probe}" in table
