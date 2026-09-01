@@ -4,8 +4,8 @@ Data splitting and loader creation utilities.
 This module provides classes for splitting datasets and creating data loaders.
 """
 
+import warnings
 from collections import Counter
-from typing import Optional, Tuple
 
 import numpy as np
 import torch
@@ -21,9 +21,9 @@ class DataSplitter:
         dataset: Dataset,
         val_split: float = 0.2,
         test_split: float = 0.1,
-        seed: Optional[int] = 42,
-        stratify: Optional[np.ndarray] = None,
-        groups: Optional[np.ndarray] = None,
+        seed: int | None = 42,
+        stratify: np.ndarray | None = None,
+        groups: np.ndarray | None = None,
     ):
         """Initialize the data splitter.
 
@@ -47,7 +47,7 @@ class DataSplitter:
         if val_split + test_split >= 1.0:
             raise ValueError("val_split + test_split must be less than 1.0")
 
-    def split(self) -> Tuple[Dataset, Dataset, Dataset]:
+    def split(self) -> tuple[Dataset, Dataset, Dataset]:
         """Split the dataset into train, validation, and test sets.
 
         Returns:
@@ -114,8 +114,12 @@ class DataSplitter:
                     else Subset(self.dataset, [])
                 )
                 return train_dataset, val_dataset, test_dataset
-            except ValueError:
-                pass  # Fall through to random splitting
+            except ValueError as error:
+                warnings.warn(
+                    f"Stratified splitting failed ({error}); falling back to random splitting.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
 
         if val_size + test_size == 0:
             train_dataset = self.dataset
@@ -130,7 +134,7 @@ class DataSplitter:
 
         return train_dataset, val_dataset, test_dataset
 
-    def _split_by_groups(self) -> Tuple[Dataset, Dataset, Dataset]:
+    def _split_by_groups(self) -> tuple[Dataset, Dataset, Dataset]:
         """Split by groups so all samples from one group stay in the same split.
 
         This implements inter-patient splitting for medical datasets where
@@ -153,7 +157,7 @@ class DataSplitter:
         group_stratify = None
         if self.stratify is not None:
             group_to_labels: dict = {}
-            for g, label in zip(self.groups, self.stratify):
+            for g, label in zip(self.groups, self.stratify, strict=False):
                 group_to_labels.setdefault(g, []).append(label)
             group_stratify = np.array(
                 [Counter(group_to_labels[g]).most_common(1)[0][0] for g in unique_groups]

@@ -1,14 +1,7 @@
+# Training defaults come from deepecgkit/cli/defaults.py; override any of
+# them here (epochs, batch_size, learning_rate, val_split, test_split,
+# num_workers, accelerator, devices, early_stopping_patience, seed).
 defaults:
-  epochs: 50
-  batch_size: 32
-  learning_rate: 0.001
-  val_split: 0.2
-  test_split: 0.1
-  num_workers: 4
-  accelerator: auto
-  devices: 1
-  early_stopping_patience: 10
-  seed: 42
   seeds: [42, 43, 44, 45, 46]
 
 experiments:

@@ -145,11 +145,15 @@ the raw and rescaled figures into `classification_metrics.csv`.
 deepecg evaluate --checkpoint model.pt -m resnet -d af-classification --split test
 ```
 
-The split is redrawn at evaluation time rather than read back from the run, so pass the `--seed`,
-`--val-split` and `--test-split` the checkpoint was trained with. Mismatched values produce a
-different partition, and a temperature fitted on a validation split that overlaps the original
-training data is fitted on data the model has already seen. Use `--calibration-bins` to change the
-binning and `--no-calibration` to skip the extra validation pass.
+The split is redrawn at evaluation time, and getting it right matters more here than usual: a
+temperature fitted on a validation split that overlaps the original training data is fitted on
+data the model has already seen. When the checkpoint lives inside a run directory written by
+`deepecg train`, the `--seed`, `--val-split` and `--test-split` recorded in `run_metadata.json`
+are adopted automatically for flags left at their defaults, and the rebuilt split sizes are
+verified against `split_info.json`; explicit flags that contradict the recording are kept with a
+warning. For a bare checkpoint with no run directory, pass the values the model was trained with
+yourself. Use `--calibration-bins` to change the binning and `--no-calibration` to skip the extra
+validation pass.
 
 ## Building the results table
 
@@ -157,9 +161,11 @@ Calibration columns flow into the same aggregation the other tables use, so a ta
 Brier before and after scaling across models and datasets is one command:
 
 ```bash
-python scripts/aggregate_results.py --runs-dir runs --output-dir analysis --emit-latex \
+deepecg aggregate --runs-dir runs --output-dir analysis --emit-latex \
   --metrics ece ece_temp brier brier_temp
 ```
+
+(`python scripts/aggregate_results.py` remains as a shim for the same command.)
 
 Each cell carries the mean over seeds with a Student-t interval. Rows are ordered by the first
 metric, ascending for calibration metrics, so the table leads with the best-calibrated model.

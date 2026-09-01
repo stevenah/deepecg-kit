@@ -1,7 +1,9 @@
+from typing import ClassVar
+
 import torch
 from torch import nn
 
-from deepecgkit.models.pretrained import PretrainedMixin
+from deepecgkit.models.base import ECGModelBase
 from deepecgkit.registry import register_model
 
 
@@ -9,7 +11,7 @@ from deepecgkit.registry import register_model
     name="gru",
     description="GRU-based model for sequential ECG analysis",
 )
-class GRUECG(PretrainedMixin, nn.Module):
+class GRUECG(ECGModelBase):
     """
     GRU-based model for ECG signal classification.
 
@@ -37,6 +39,8 @@ class GRUECG(PretrainedMixin, nn.Module):
         >>> features = model.extract_features(x)
         >>> print(features.shape)  # (32, 768) with hidden_size=256, unidirectional
     """
+
+    HEAD_ATTR: ClassVar[str] = "head"
 
     def __init__(
         self,
@@ -72,10 +76,6 @@ class GRUECG(PretrainedMixin, nn.Module):
             nn.Linear(self._feature_dim, output_size),
         )
 
-    @property
-    def feature_dim(self) -> int:
-        return self._feature_dim
-
     def _concat_pool(self, rnn_output: torch.Tensor) -> torch.Tensor:
         x = rnn_output.transpose(1, 2)
         avg_pool = torch.mean(x, dim=2)
@@ -94,7 +94,3 @@ class GRUECG(PretrainedMixin, nn.Module):
         x = x.transpose(1, 2)
         output, _ = self.gru(x)
         return self._concat_pool(output)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.extract_features(x)
-        return self.head(x)

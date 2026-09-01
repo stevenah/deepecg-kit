@@ -11,8 +11,9 @@ Fitting on test leaks the evaluation set into the model and reports an
 optimistic calibration error.
 """
 
+import logging
 import warnings
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 import numpy as np
 from scipy.optimize import minimize_scalar
@@ -24,6 +25,8 @@ from deepecgkit.evaluation.metrics import (
     calculate_calibration_metrics,
     resolve_task_shape,
 )
+
+logger = logging.getLogger(__name__)
 
 LOGIT_CLIP_EPS = 1e-7
 DEFAULT_TEMPERATURE_BOUNDS = (0.01, 100.0)
@@ -69,7 +72,7 @@ def _is_single_logit(logits: np.ndarray) -> bool:
     return logits.ndim == 1 or logits.shape[-1] == 1
 
 
-def probabilities_to_logits(y_prob: np.ndarray, task: Optional[str] = None) -> np.ndarray:
+def probabilities_to_logits(y_prob: np.ndarray, task: str | None = None) -> np.ndarray:
     """Recover logits from stored probabilities, for callers who kept only those.
 
     Prefer real logits where they are available. This reconstruction is exact
@@ -113,7 +116,7 @@ def probabilities_to_logits(y_prob: np.ndarray, task: Optional[str] = None) -> n
 
 
 def apply_temperature(
-    logits: np.ndarray, temperature: float, task: Optional[str] = None
+    logits: np.ndarray, temperature: float, task: str | None = None
 ) -> np.ndarray:
     """Divide logits by a temperature and map them back to probabilities.
 
@@ -153,7 +156,7 @@ def temperature_nll(
     logits: np.ndarray,
     y_true: np.ndarray,
     temperature: float = NEUTRAL_TEMPERATURE,
-    task: Optional[str] = None,
+    task: str | None = None,
 ) -> float:
     """Mean negative log-likelihood of the labels under a scaled model.
 
@@ -194,8 +197,8 @@ def temperature_nll(
 def fit_temperature(
     logits: np.ndarray,
     y_true: np.ndarray,
-    task: Optional[str] = None,
-    bounds: Tuple[float, float] = DEFAULT_TEMPERATURE_BOUNDS,
+    task: str | None = None,
+    bounds: tuple[float, float] = DEFAULT_TEMPERATURE_BOUNDS,
 ) -> float:
     """Fit the single temperature that minimises NLL on the given split.
 
@@ -274,8 +277,8 @@ class TemperatureScaler:
 
     def __init__(
         self,
-        task: Optional[str] = None,
-        bounds: Tuple[float, float] = DEFAULT_TEMPERATURE_BOUNDS,
+        task: str | None = None,
+        bounds: tuple[float, float] = DEFAULT_TEMPERATURE_BOUNDS,
     ):
         self.task = task
         self.bounds = bounds
@@ -328,7 +331,7 @@ class TemperatureScaler:
         return temperature_nll(logits, y_true, temperature=self.temperature, task=self.task)
 
 
-def resolve_calibration_task(y_true: np.ndarray, y_prob: np.ndarray) -> Optional[str]:
+def resolve_calibration_task(y_true: np.ndarray, y_prob: np.ndarray) -> str | None:
     """Task shape in the form the scaling helpers expect.
 
     The scaling helpers only need to know whether the outputs are per-class
@@ -349,10 +352,10 @@ def calibration_report(
     y_true: np.ndarray,
     y_prob: np.ndarray,
     n_bins: int = DEFAULT_CALIBRATION_BINS,
-    fit_targets: Optional[np.ndarray] = None,
-    fit_logits: Optional[np.ndarray] = None,
-    eval_logits: Optional[np.ndarray] = None,
-) -> Dict[str, Any]:
+    fit_targets: np.ndarray | None = None,
+    fit_logits: np.ndarray | None = None,
+    eval_logits: np.ndarray | None = None,
+) -> dict[str, Any]:
     """Calibration before and after temperature scaling, as one flat mapping.
 
     This is the shape the paper table wants: one row per run holding both the
@@ -382,7 +385,7 @@ def calibration_report(
     task = resolve_calibration_task(y_true, y_prob)
     base = calculate_calibration_metrics(y_true, y_prob, n_bins=n_bins)
 
-    report: Dict[str, Any] = {
+    report: dict[str, Any] = {
         "ece": base.get("ece", np.nan),
         "adaptive_ece": base.get("adaptive_ece", np.nan),
         "mce": base.get("mce", np.nan),
@@ -406,7 +409,7 @@ def calibration_report(
         scaled = scaler.transform(logits)
         after = calculate_calibration_metrics(y_true, scaled, n_bins=n_bins)
     except Exception as error:
-        print(f"Warning: Could not apply temperature scaling: {error}")
+        logger.warning(f"Could not apply temperature scaling: {error}")
         return report
 
     report["temperature"] = float(scaler.temperature)

@@ -1,15 +1,16 @@
 import torch
 from torch import nn
 
-from deepecgkit.models.pretrained import PretrainedMixin
+from deepecgkit.models.base import ECGModelBase
 from deepecgkit.registry import register_model
 
 
 @register_model(
     name="simple-cnn",
     description="Lightweight CNN for fast inference",
+    min_input_length=8,
 )
-class SimpleCNN(PretrainedMixin, nn.Module):
+class SimpleCNN(ECGModelBase):
     """
     Simple CNN model for ECG signal classification.
 
@@ -61,6 +62,7 @@ class SimpleCNN(PretrainedMixin, nn.Module):
             nn.AdaptiveAvgPool1d(1),
         )
 
+        self._feature_dim = 256
         self.classifier = nn.Sequential(
             nn.Flatten(),
             nn.Linear(256, 128),
@@ -69,14 +71,6 @@ class SimpleCNN(PretrainedMixin, nn.Module):
             nn.Linear(128, output_size),
         )
 
-    @property
-    def feature_dim(self) -> int:
-        return 256
-
     def extract_features(self, x: torch.Tensor) -> torch.Tensor:
         x = self.features(x)
         return torch.flatten(x, 1)
-
-    def forward(self, x):
-        x = self.extract_features(x)
-        return self.classifier(x)

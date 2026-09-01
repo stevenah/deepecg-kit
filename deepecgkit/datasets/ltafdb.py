@@ -1,24 +1,25 @@
 import hashlib
-import os
+import logging
 import shutil
-import zipfile
+from collections.abc import Callable
 from pathlib import Path
-from typing import ClassVar, Dict, List, Optional, Tuple, Union
+from typing import ClassVar
 
 import numpy as np
 import torch
-import wfdb
 
 from deepecgkit.registry import register_dataset
 
-from ..utils.download import download_file
+from ..utils.download import download_and_extract_zip
 from .base import BaseECGDataset
 from .preprocessing import (
     ECGSegmenter,
     ECGStandardizer,
     RhythmAnnotationExtractor,
-    convert_to_tensor,
+    read_rhythm_record,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @register_dataset(
@@ -43,30 +44,26 @@ class LTAFDBDataset(BaseECGDataset):
         https://physionet.org/content/ltafdb/1.0.0/
     """
 
-    CLASS_LABELS: ClassVar[List[str]] = ["Normal", "AF", "AFL", "J"]
-    LABEL_MAPPING: ClassVar[Dict[str, int]] = {
-        "(N": 0,
-        "(AFIB": 1,
-        "(AFL": 2,
-        "(J": 3,
-    }
-    LEADS: ClassVar[List[str]] = ["ECG1", "ECG2"]
+    CLASS_LABELS: ClassVar[list[str]] = ["Normal", "AF", "AFL", "J"]
+    LEADS: ClassVar[list[str]] = ["ECG1", "ECG2"]
     SAMPLING_RATE: ClassVar[int] = 128
 
     DOWNLOAD_URL: ClassVar[str] = "https://physionet.org/content/ltafdb/get-zip/1.0.0/"
 
     def __init__(
         self,
-        data_dir: Optional[Union[str, Path]] = None,
+        data_dir: str | Path | None = None,
         sampling_rate: int = 300,
         segment_duration_seconds: float = 10.0,
         segment_overlap: float = 0.0,
         binary_classification: bool = False,
         use_both_leads: bool = False,
         normalization: str = "zscore",
-        max_segments_per_record: Optional[int] = None,
-        transform: Optional[callable] = None,
-        target_transform: Optional[callable] = None,
+        max_segments_per_record: int | None = None,
+        subsample_seed: int = 0,
+        strict: bool = False,
+        transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
+        target_transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
         download: bool = False,
         force_download: bool = False,
         verbose: bool = True,
@@ -76,6 +73,8 @@ class LTAFDBDataset(BaseECGDataset):
         self.binary_classification = binary_classification
         self.use_both_leads = use_both_leads
         self.max_segments_per_record = max_segments_per_record
+        self.subsample_seed = subsample_seed
+        self.strict = strict
         self.verbose = verbose
 
         self.standardizer = ECGStandardizer(
@@ -95,7 +94,7 @@ class LTAFDBDataset(BaseECGDataset):
 
         self.signals: np.ndarray = np.array([])
         self.labels: np.ndarray = np.array([], dtype=np.int64)
-        self.record_names: List[str] = []
+        self.record_names: list[str] = []
 
         super().__init__(
             data_dir=data_dir,
@@ -114,48 +113,61 @@ class LTAFDBDataset(BaseECGDataset):
             f"leads{self.use_both_leads}_norm{self.standardizer.normalization}_"
             f"max{self.max_segments_per_record}"
         )
+        if self.max_segments_per_record is not None:
+            # The seed shapes which segments survive subsampling, so it is part
+            # of the cache identity. Unsubsampled caches are seed-independent
+            # and keep their historical key.
+            params += f"_seed{self.subsample_seed}"
         return hashlib.md5(params.encode()).hexdigest()[:12]
 
     def _cache_dir(self) -> Path:
         return self.data_dir / f"cache_{self._cache_key()}"
 
-    def download(self):
-        if self.verbose:
-            print(f"Downloading Long-Term AF Database to {self.data_dir}")
-            print("Note: This is a large dataset (~1.7GB). Download may take a while.")
+    @staticmethod
+    def _grow_memmap(path: Path, writer: np.memmap, new_rows: int) -> np.memmap:
+        """Grow an on-disk .npy memmap to new_rows, preserving its content.
 
-        os.makedirs(self.data_dir, exist_ok=True)
+        open_memmap in r+ mode reads the shape from the file header and
+        ignores a passed shape, so "reopening larger" silently keeps the old
+        capacity — writes past it then raise, and the per-record error
+        handling drops those records. A real grow needs a new file.
 
-        zip_path = self.data_dir / "ltafdb-1.0.0.zip"
-        download_file(
-            self.DOWNLOAD_URL,
-            zip_path,
-            desc="Downloading LTAFDB",
-            max_retries=5,
+        Args:
+            path: Path of the memmap file being grown
+            writer: The currently open memmap over path
+            new_rows: New first-dimension size, larger than the current one
+
+        Returns:
+            A writable memmap over the grown file.
+        """
+        old_rows = writer.shape[0]
+        tail_shape = writer.shape[1:]
+        dtype = writer.dtype
+        grow_path = path.with_suffix(".grow.npy")
+        grown = np.lib.format.open_memmap(
+            str(grow_path), mode="w+", dtype=dtype, shape=(new_rows, *tail_shape)
         )
+        grown[:old_rows] = writer[:old_rows]
+        grown.flush()
+        del writer
+        del grown
+        grow_path.replace(path)
+        return np.lib.format.open_memmap(str(path), mode="r+")
 
-        if self.verbose:
-            print("Extracting dataset...")
-
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            zf.extractall(self.data_dir)
-
-        nested_dir = self.data_dir / "ltafdb-1.0.0"
-        if nested_dir.is_dir():
-            for item in nested_dir.iterdir():
-                dest = self.data_dir / item.name
-                if dest.exists():
-                    if dest.is_dir():
-                        shutil.rmtree(dest)
-                    else:
-                        dest.unlink()
-                shutil.move(str(item), str(dest))
-            nested_dir.rmdir()
-
-        zip_path.unlink(missing_ok=True)
-
-        if self.verbose:
-            print("Download complete!")
+    @classmethod
+    def _download(cls, data_dir: Path, verbose: bool = True) -> None:
+        if verbose:
+            logger.info(f"Downloading Long-Term AF Database to {data_dir}")
+            logger.info("Note: This is a large dataset (~1.7GB). Download may take a while.")
+        download_and_extract_zip(
+            cls.DOWNLOAD_URL,
+            data_dir,
+            zip_name="ltafdb-1.0.0.zip",
+            desc="Downloading LTAFDB",
+            verbose=verbose,
+        )
+        if verbose:
+            logger.info("Download complete!")
 
     def _resolve_record_dir(self) -> Path:
         """Find the directory containing .hea/.atr record files."""
@@ -166,15 +178,15 @@ class LTAFDBDataset(BaseECGDataset):
             return files_dir
         return self.data_dir
 
-    def _discover_records(self, record_dir: Path) -> List[str]:
+    def _discover_records(self, record_dir: Path) -> list[str]:
         """Discover available records by finding files with both .hea and .atr extensions."""
         hea_stems = {p.stem for p in record_dir.glob("*.hea")}
         atr_stems = {p.stem for p in record_dir.glob("*.atr")}
         return sorted(hea_stems & atr_stems, key=lambda x: (len(x), x))
 
-    def _load_data(self):
+    def _load_data(self) -> None:
         if self.verbose:
-            print("Loading Long-Term AF Database...")
+            logger.info("Loading Long-Term AF Database...")
 
         cache_dir = self._cache_dir()
         signals_path = cache_dir / "signals.npy"
@@ -183,7 +195,7 @@ class LTAFDBDataset(BaseECGDataset):
 
         if signals_path.exists() and labels_path.exists():
             if self.verbose:
-                print(f"Loading from cache: {cache_dir.name}")
+                logger.info(f"Loading from cache: {cache_dir.name}")
             self.signals = np.load(signals_path, mmap_mode="r")
             self.labels = np.load(labels_path, mmap_mode="r")
             if record_names_path.exists():
@@ -191,7 +203,7 @@ class LTAFDBDataset(BaseECGDataset):
             else:
                 self.record_names = ["unknown"] * len(self.labels)
             if self.verbose:
-                print(f"Loaded {len(self.labels)} segments from cache (memory-mapped)")
+                logger.info(f"Loaded {len(self.labels)} segments from cache (memory-mapped)")
                 self._print_class_distribution()
             return
 
@@ -204,7 +216,7 @@ class LTAFDBDataset(BaseECGDataset):
             )
 
         if self.verbose:
-            print(f"Found {len(record_names)} records — processing (first run only)...")
+            logger.info(f"Found {len(record_names)} records — processing (first run only)...")
 
         cache_dir.mkdir(parents=True, exist_ok=True)
         tmp_signals = cache_dir / "signals_tmp.npy"
@@ -214,29 +226,23 @@ class LTAFDBDataset(BaseECGDataset):
 
         writer = None
         write_offset = 0
-        label_chunks: List[np.ndarray] = []
-        all_record_names: List[str] = []
+        label_chunks: list[np.ndarray] = []
+        all_record_names: list[str] = []
         total_segments = 0
+        loaded_records = 0
 
         for record_name in record_names:
             record_path = record_dir / record_name
 
             try:
-                record = wfdb.rdrecord(str(record_path))
-                annotation = wfdb.rdann(str(record_path), "atr")
-
-                signals = record.p_signal.T
-
-                if not self.use_both_leads:
-                    signals = signals[0:1, :]
-
-                standardized_signal = self.standardizer.resample(signals, self.SAMPLING_RATE)
-
-                labels = self.rhythm_extractor.extract_labels(
-                    annotation, standardized_signal.shape[-1], self.SAMPLING_RATE
+                segments, start_indices, label_timeline = read_rhythm_record(
+                    record_path,
+                    standardizer=self.standardizer,
+                    segmenter=self.segmenter,
+                    rhythm_extractor=self.rhythm_extractor,
+                    native_sampling_rate=self.SAMPLING_RATE,
+                    use_both_leads=self.use_both_leads,
                 )
-
-                segments, start_indices = self.segmenter.segment(standardized_signal)
 
                 if len(segments) == 0:
                     continue
@@ -245,7 +251,8 @@ class LTAFDBDataset(BaseECGDataset):
                     self.max_segments_per_record is not None
                     and len(segments) > self.max_segments_per_record
                 ):
-                    indices = np.random.choice(
+                    rng = np.random.default_rng(self.subsample_seed)
+                    indices = rng.choice(
                         len(segments),
                         self.max_segments_per_record,
                         replace=False,
@@ -254,7 +261,7 @@ class LTAFDBDataset(BaseECGDataset):
                     start_indices = start_indices[indices]
 
                 segment_labels = self.rhythm_extractor.segment_with_labels(
-                    labels, start_indices, self.segmenter.segment_length
+                    label_timeline, start_indices, self.segmenter.segment_length
                 )
 
                 normalized = np.stack([self.standardizer.normalize(seg) for seg in segments])
@@ -271,28 +278,25 @@ class LTAFDBDataset(BaseECGDataset):
                 needed = write_offset + len(normalized)
                 if needed > writer.shape[0]:
                     new_size = max(needed, writer.shape[0] * 2)
-                    writer = np.lib.format.open_memmap(
-                        str(tmp_signals),
-                        mode="r+",
-                        dtype=np.float32,
-                        shape=(new_size, num_leads, seg_len),
-                    )
+                    writer = self._grow_memmap(tmp_signals, writer, new_size)
 
                 writer[write_offset : write_offset + len(normalized)] = normalized
                 label_chunks.append(np.array(segment_labels, dtype=np.int64))
                 all_record_names.extend([record_name] * len(segments))
                 write_offset += len(normalized)
                 total_segments += len(segments)
+                loaded_records += 1
 
                 if self.verbose:
-                    print(
+                    logger.info(
                         f"Loaded {record_name}: {len(segments)} segments (total: {total_segments})"
                     )
 
-            except Exception as e:
-                if self.verbose:
-                    print(f"Error loading {record_name}: {e}")
+            except self.RECORD_ERRORS as e:
+                self._record_load_error(record_name, e)
                 continue
+
+        self._finish_load(loaded_records, len(record_names))
 
         if write_offset == 0:
             shutil.rmtree(cache_dir)
@@ -303,9 +307,7 @@ class LTAFDBDataset(BaseECGDataset):
 
         del writer
 
-        final_signals = np.lib.format.open_memmap(
-            str(tmp_signals), mode="r+", shape=(write_offset, num_leads, seg_len)
-        )
+        final_signals = np.lib.format.open_memmap(str(tmp_signals), mode="r")
         np.save(signals_path, final_signals[:write_offset])
         del final_signals
         tmp_signals.unlink(missing_ok=True)
@@ -319,45 +321,5 @@ class LTAFDBDataset(BaseECGDataset):
         self.record_names = all_record_names
 
         if self.verbose:
-            print(f"\nCached {len(self.labels)} segments to {cache_dir.name} (memory-mapped)")
+            logger.info(f"\nCached {len(self.labels)} segments to {cache_dir.name} (memory-mapped)")
             self._print_class_distribution()
-
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        signal = self.signals[idx]
-        label = self.labels[idx]
-
-        signal = convert_to_tensor(signal, dtype=torch.float32)
-        label = torch.tensor(label, dtype=torch.long)
-
-        if self.transform is not None:
-            signal = self.transform(signal)
-
-        if self.target_transform is not None:
-            label = self.target_transform(label)
-
-        return signal, label
-
-    def __len__(self) -> int:
-        return len(self.labels)
-
-    @property
-    def num_classes(self) -> int:
-        return 2 if self.binary_classification else len(self.CLASS_LABELS)
-
-    @property
-    def class_names(self) -> List[str]:
-        if self.binary_classification:
-            return ["Non-AF", "AF"]
-        return self.CLASS_LABELS
-
-    def get_record_info(self, idx: int) -> Dict:
-        return {
-            "record_name": self.record_names[idx],
-            "label": int(self.labels[idx]),
-            "class_name": self.class_names[int(self.labels[idx])],
-            "signal_shape": self.signals[idx].shape,
-        }
-
-    def get_class_distribution(self) -> Dict[str, int]:
-        unique, counts = np.unique(self.labels, return_counts=True)
-        return {self.class_names[int(label)]: int(count) for label, count in zip(unique, counts)}

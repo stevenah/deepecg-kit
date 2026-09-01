@@ -22,6 +22,12 @@ cd deepecg-kit
 uv sync --group dev
 ```
 
+Or, without uv:
+
+```bash
+pip install -e ".[dev]"
+```
+
 This installs the package in editable mode along with testing and linting tools (pytest, ruff).
 
 ## Building Documentation Locally
@@ -49,6 +55,6 @@ You can override device selection with `--accelerator cpu|gpu|mps` (CLI) or `dev
 
 ## Requirements
 
-- Python >= 3.8
+- Python >= 3.10
 - PyTorch >= 1.9.0
 - See [pyproject.toml](https://github.com/stevenah/deepecg-kit/blob/main/pyproject.toml) for the full dependency list

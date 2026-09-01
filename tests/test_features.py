@@ -367,8 +367,10 @@ class TestFeatureExtractorBehaviour:
         "name,expected",
         [("cpu", "cpu"), ("auto", None), ("gpu", "cuda")],
     )
-    def test_resolve_device(self, name, expected):
+    def test_resolve_device(self, name, expected, monkeypatch):
         """Device names, including the CLI accelerator vocabulary, resolve."""
+        if name == "gpu":
+            monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
         resolved = _resolve_device(name)
         if expected is not None:
             assert resolved.type == expected

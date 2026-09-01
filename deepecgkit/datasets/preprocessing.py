@@ -1,16 +1,38 @@
-from typing import ClassVar, Dict, Optional, Tuple, Union
+"""Signal standardisation, segmentation, and rhythm-annotation expansion.
+
+These are the building blocks every dataset loader composes: resample to a
+target rate, normalise, cut into fixed-length segments, and expand wfdb
+rhythm annotations into per-sample label timelines.
+"""
+
+from pathlib import Path
+from typing import Any, ClassVar
 
 import numpy as np
 import torch
+import wfdb
 from scipy import signal
 
 
 class ECGStandardizer:
+    """Resamples, length-standardises, and normalises raw ECG signals.
+
+    Args:
+        target_sampling_rate: Sampling rate signals are resampled to (Hz)
+        target_length: Fixed output length in samples; mutually exclusive
+            with target_duration_seconds, None leaves lengths unchanged
+        target_duration_seconds: Fixed output duration; converted to samples
+            at the target rate
+        normalization: "zscore", "minmax", or "none"
+        clip_method: Where clipping/padding takes place: "center", "start",
+            or "end"
+    """
+
     def __init__(
         self,
         target_sampling_rate: int = 300,
-        target_length: Optional[int] = None,
-        target_duration_seconds: Optional[float] = None,
+        target_length: int | None = None,
+        target_duration_seconds: float | None = None,
         normalization: str = "zscore",
         clip_method: str = "center",
     ):
@@ -27,6 +49,7 @@ class ECGStandardizer:
             self.target_length = target_length
 
     def resample(self, ecg_signal: np.ndarray, original_sampling_rate: int) -> np.ndarray:
+        """Resample a (leads, samples) or 1-D signal to the target rate."""
         if original_sampling_rate == self.target_sampling_rate:
             return ecg_signal
 
@@ -42,6 +65,7 @@ class ECGStandardizer:
             return resampled
 
     def normalize(self, ecg_signal: np.ndarray) -> np.ndarray:
+        """Normalise per lead using the configured method."""
         if self.normalization == "zscore":
             mean = np.mean(ecg_signal, axis=-1, keepdims=True)
             std = np.std(ecg_signal, axis=-1, keepdims=True)
@@ -62,6 +86,7 @@ class ECGStandardizer:
             raise ValueError(f"Unknown normalization method: {self.normalization}")
 
     def clip_or_pad(self, ecg_signal: np.ndarray) -> np.ndarray:
+        """Bring the signal to target_length by clipping or zero-padding."""
         if self.target_length is None or ecg_signal.shape[-1] == self.target_length:
             return ecg_signal
 
@@ -97,6 +122,7 @@ class ECGStandardizer:
         return ecg_signal[:, -self.target_length :]
 
     def __call__(self, ecg_signal: np.ndarray, original_sampling_rate: int) -> np.ndarray:
+        """Apply resample, clip_or_pad, and normalize in order."""
         ecg_signal = self.resample(ecg_signal, original_sampling_rate)
         ecg_signal = self.clip_or_pad(ecg_signal)
         ecg_signal = self.normalize(ecg_signal)
@@ -104,6 +130,14 @@ class ECGStandardizer:
 
 
 class ECGSegmenter:
+    """Cuts a continuous recording into fixed-length, optionally overlapping segments.
+
+    Args:
+        segment_duration_seconds: Length of each segment in seconds
+        sampling_rate: Sampling rate of the incoming signal (Hz)
+        overlap: Fraction of a segment shared with its successor, in [0, 1)
+    """
+
     def __init__(
         self,
         segment_duration_seconds: float,
@@ -116,7 +150,16 @@ class ECGSegmenter:
         self.segment_length = int(segment_duration_seconds * sampling_rate)
         self.stride = int(self.segment_length * (1 - overlap))
 
-    def segment(self, ecg_signal: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    def segment(self, ecg_signal: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Cut the signal into segments.
+
+        Args:
+            ecg_signal: Signal of shape (leads, samples) or (samples,)
+
+        Returns:
+            Tuple of (segments, start indices); both empty when the signal is
+            shorter than one segment.
+        """
         if ecg_signal.ndim == 1:
             ecg_signal = ecg_signal[np.newaxis, :]
 
@@ -137,7 +180,15 @@ class ECGSegmenter:
 
 
 class RhythmAnnotationExtractor:
-    RHYTHM_MAP: ClassVar[Dict[str, int]] = {
+    """Expands wfdb rhythm annotations into per-sample label timelines.
+
+    Args:
+        sampling_rate: Rate of the (possibly resampled) signal the labels
+            must align with (Hz)
+        binary_classification: Collapse all rhythms to AF (1) vs Non-AF (0)
+    """
+
+    RHYTHM_MAP: ClassVar[dict[str, int]] = {
         "(AFIB": 1,
         "(AFL": 2,
         "(J": 3,
@@ -154,10 +205,21 @@ class RhythmAnnotationExtractor:
 
     def extract_labels(
         self,
-        annotation,
+        annotation: Any,
         signal_length: int,
-        original_sampling_rate: Optional[int] = None,
+        original_sampling_rate: int | None = None,
     ) -> np.ndarray:
+        """Expand a wfdb annotation into one label per signal sample.
+
+        Args:
+            annotation: wfdb annotation with sample and aux_note attributes
+            signal_length: Length of the (resampled) signal in samples
+            original_sampling_rate: Rate the annotation indices refer to,
+                used to rescale them onto the resampled signal
+
+        Returns:
+            Integer label per sample, 0 where no rhythm is annotated.
+        """
         labels = np.zeros(signal_length, dtype=np.int64)
 
         if not hasattr(annotation, "aux_note") or not hasattr(annotation, "sample"):
@@ -167,7 +229,9 @@ class RhythmAnnotationExtractor:
         if original_sampling_rate is not None and original_sampling_rate != self.sampling_rate:
             scale = self.sampling_rate / original_sampling_rate
 
-        for i, (sample_idx, aux_note) in enumerate(zip(annotation.sample, annotation.aux_note)):
+        for i, (sample_idx, aux_note) in enumerate(
+            zip(annotation.sample, annotation.aux_note, strict=False)
+        ):
             scaled_idx = int(sample_idx * scale)
             if scaled_idx >= signal_length:
                 break
@@ -187,6 +251,16 @@ class RhythmAnnotationExtractor:
     def segment_with_labels(
         self, labels: np.ndarray, segment_start_indices: np.ndarray, segment_length: int
     ) -> np.ndarray:
+        """Assign each segment the majority label of its samples.
+
+        Args:
+            labels: Per-sample label timeline from extract_labels
+            segment_start_indices: Segment start positions from ECGSegmenter
+            segment_length: Segment length in samples
+
+        Returns:
+            One label per segment.
+        """
         segment_labels = []
 
         for start_idx in segment_start_indices:
@@ -201,8 +275,54 @@ class RhythmAnnotationExtractor:
 
 
 def convert_to_tensor(
-    data: Union[np.ndarray, torch.Tensor], dtype: torch.dtype = torch.float32
+    data: np.ndarray | torch.Tensor, dtype: torch.dtype = torch.float32
 ) -> torch.Tensor:
+    """Convert an array to a tensor of the given dtype, passing tensors through."""
     if isinstance(data, torch.Tensor):
         return data.to(dtype)
     return torch.from_numpy(data).to(dtype)
+
+
+def read_rhythm_record(
+    record_path: str | Path,
+    *,
+    standardizer: "ECGStandardizer",
+    segmenter: "ECGSegmenter",
+    rhythm_extractor: "RhythmAnnotationExtractor",
+    native_sampling_rate: int,
+    use_both_leads: bool = False,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Read one rhythm-annotated wfdb record and segment it.
+
+    This is the pipeline shared by the rhythm-annotation datasets (LTAFDB,
+    MIT-BIH AFDB): read the record and its .atr annotation, select leads,
+    resample to the target rate, expand the rhythm annotation into a
+    per-sample label timeline, and cut the signal into fixed-length segments.
+
+    Callers finish the job per storage strategy: optional subsampling, then
+    ``rhythm_extractor.segment_with_labels`` and per-segment normalisation.
+
+    Args:
+        record_path: Path to the record, without extension
+        standardizer: Resampler/normaliser configured for the target rate
+        segmenter: Fixed-length segmenter configured for the target rate
+        rhythm_extractor: Annotation-to-label expander
+        native_sampling_rate: Sampling rate the record was stored at
+        use_both_leads: Keep both leads instead of only the first
+
+    Returns:
+        Tuple of (segments, segment start indices, per-sample label timeline).
+    """
+    record = wfdb.rdrecord(str(record_path))
+    annotation = wfdb.rdann(str(record_path), "atr")
+
+    signals = record.p_signal.T
+    if not use_both_leads:
+        signals = signals[0:1, :]
+
+    standardized = standardizer.resample(signals, native_sampling_rate)
+    label_timeline = rhythm_extractor.extract_labels(
+        annotation, standardized.shape[-1], native_sampling_rate
+    )
+    segments, start_indices = segmenter.segment(standardized)
+    return segments, start_indices, label_timeline

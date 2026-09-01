@@ -1,11 +1,19 @@
 import csv
+import logging
 import os
 import random
 import warnings
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
+from torch import nn
+from torch.utils.data import DataLoader
+
+from deepecgkit.utils.device import resolve_device
+
+logger = logging.getLogger(__name__)
 
 try:
     from tqdm import tqdm
@@ -43,7 +51,13 @@ class ECGTrainer:
         >>> trainer.fit(data_module, epochs=50)
     """
 
-    def __init__(self, model, train_config, device="auto", use_plateau_scheduler=True):
+    def __init__(
+        self,
+        model: nn.Module,
+        train_config: dict[str, Any],
+        device: str | torch.device = "auto",
+        use_plateau_scheduler: bool = True,
+    ) -> None:
         self.model = model
         self.train_config = train_config
 
@@ -63,39 +77,31 @@ class ECGTrainer:
         else:
             self.criterion = torch.nn.MSELoss()
 
-        if device == "auto":
-            if torch.cuda.is_available():
-                self.device = torch.device("cuda")
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                self.device = torch.device("mps")
-            else:
-                self.device = torch.device("cpu")
-        else:
-            self.device = torch.device(device)
+        self.device = resolve_device(device)
 
         self.model.to(self.device)
         self.criterion.to(self.device)
 
-        self.optimizer = None
-        self.scheduler = None
-        self.test_predictions = []
-        self.test_targets = []
-        self.test_probabilities = []
-        self.test_logits = []
-        self.log_dir = None
-        self.best_checkpoint_path = None
+        self.optimizer: torch.optim.Optimizer | None = None
+        self.scheduler: Any = None
+        self.test_predictions: list[torch.Tensor] = []
+        self.test_targets: list[torch.Tensor] = []
+        self.test_probabilities: list[torch.Tensor] = []
+        self.test_logits: list[torch.Tensor] = []
+        self.log_dir: str | None = None
+        self.best_checkpoint_path: str | None = None
         self.best_val_loss = float("inf")
-        self.model_config = {}
+        self.model_config: dict[str, Any] = {}
 
     @property
-    def _is_binary(self):
+    def _is_binary(self) -> bool:
         return isinstance(self.criterion, torch.nn.BCEWithLogitsLoss) and not self.multi_label
 
     @property
-    def _is_classification(self):
-        return isinstance(self.criterion, (torch.nn.CrossEntropyLoss, torch.nn.BCEWithLogitsLoss))
+    def _is_classification(self) -> bool:
+        return isinstance(self.criterion, torch.nn.CrossEntropyLoss | torch.nn.BCEWithLogitsLoss)
 
-    def _calculate_loss(self, y_hat, y):
+    def _calculate_loss(self, y_hat: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         if self.multi_label:
             return self.criterion(y_hat, y.float())
         if self._is_binary:
@@ -104,7 +110,7 @@ class ECGTrainer:
             return self.criterion(y_hat, y.long())
         return self.criterion(y_hat.float(), y.float())
 
-    def _compute_acc(self, y_hat, y):
+    def _compute_acc(self, y_hat: torch.Tensor, y: torch.Tensor) -> float:
         with torch.no_grad():
             if self.multi_label:
                 preds = (y_hat > 0).float()
@@ -114,7 +120,7 @@ class ECGTrainer:
                 return (preds == y.long()).float().mean().item()
             return (torch.argmax(y_hat, dim=1) == y.long()).float().mean().item()
 
-    def _setup_optimizer(self):
+    def _setup_optimizer(self) -> None:
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
         if self.use_plateau_scheduler:
             self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -126,7 +132,7 @@ class ECGTrainer:
         else:
             self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=1, gamma=0.9)
 
-    def _run_epoch(self, dataloader, train=True):
+    def _run_epoch(self, dataloader: DataLoader, train: bool = True) -> tuple[float, float | None]:
         if train:
             self.model.train()
         else:
@@ -167,16 +173,16 @@ class ECGTrainer:
 
     def fit(
         self,
-        data_module,
-        epochs=50,
-        early_stopping_patience=10,
-        checkpoint_dir=None,
-        log_dir=None,
-        progress_bar=True,
-        gradient_clip_val=None,
-        save_top_k=3,
-        restore_best=True,
-    ):
+        data_module: Any,
+        epochs: int = 50,
+        early_stopping_patience: int = 10,
+        checkpoint_dir: str | Path | None = None,
+        log_dir: str | Path | None = None,
+        progress_bar: bool = True,
+        gradient_clip_val: float | None = None,
+        save_top_k: int = 3,
+        restore_best: bool = True,
+    ) -> None:
         """Train the model.
 
         On completion the weights achieving the lowest validation loss are restored,
@@ -276,7 +282,7 @@ class ECGTrainer:
                     patience_counter += 1
                     if patience_counter >= early_stopping_patience:
                         if not use_tqdm:
-                            print(f"Early stopping at epoch {epoch + 1}")
+                            logger.info(f"Early stopping at epoch {epoch + 1}")
                         break
         finally:
             if csv_file is not None:
@@ -285,7 +291,7 @@ class ECGTrainer:
         if restore_best:
             self.restore_best_checkpoint()
 
-    def restore_best_checkpoint(self):
+    def restore_best_checkpoint(self) -> bool:
         """Reload the weights of the best-validation-loss checkpoint written during fit.
 
         Returns:
@@ -306,7 +312,7 @@ class ECGTrainer:
         self.model.to(self.device)
         return True
 
-    def test(self, data_module):
+    def test(self, data_module: Any) -> dict[str, float]:
         """Evaluate the model on the test set.
 
         Args:
@@ -321,7 +327,7 @@ class ECGTrainer:
         test_loader = data_module.test_dataloader()
         return self._evaluate_loader(test_loader)
 
-    def validate(self, data_module):
+    def validate(self, data_module: Any) -> dict[str, float]:
         """Evaluate the model on the validation set.
 
         Args:
@@ -336,7 +342,7 @@ class ECGTrainer:
         val_loader = data_module.val_dataloader()
         return self._evaluate_loader(val_loader)
 
-    def _evaluate_loader(self, dataloader):
+    def _evaluate_loader(self, dataloader: DataLoader) -> dict[str, float]:
         self.model.eval()
         self.test_predictions = []
         self.test_targets = []
@@ -389,7 +395,7 @@ class ECGTrainer:
             results["test_acc"] = total_acc / max(n_batches, 1)
         return results
 
-    def get_test_results(self):
+    def get_test_results(self) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
         """Get test predictions, targets, and probabilities as numpy arrays.
 
         Returns:
@@ -404,7 +410,7 @@ class ECGTrainer:
             torch.cat(self.test_probabilities).numpy(),
         )
 
-    def get_test_logits(self):
+    def get_test_logits(self) -> np.ndarray | None:
         """Get the raw model outputs from the most recent evaluation pass.
 
         Logits are kept alongside probabilities because temperature scaling
@@ -421,14 +427,14 @@ class ECGTrainer:
             return None
         return torch.cat(self.test_logits).numpy()
 
-    def save_checkpoint(self, path, epoch=None):
+    def save_checkpoint(self, path: str | Path, epoch: int | None = None) -> None:
         """Save a checkpoint.
 
         Args:
             path: File path to save to
             epoch: Current epoch number (optional)
         """
-        checkpoint = {
+        checkpoint: dict[str, Any] = {
             "model_state_dict": self.model.state_dict(),
             "train_config": self.train_config,
             "model_config": self.model_config,
@@ -440,7 +446,12 @@ class ECGTrainer:
         torch.save(checkpoint, path)
 
     @classmethod
-    def load_checkpoint(cls, path, model=None, device="auto"):
+    def load_checkpoint(
+        cls,
+        path: str | Path,
+        model: nn.Module | None = None,
+        device: str | torch.device = "auto",
+    ) -> "ECGTrainer":
         """Load a trainer from a checkpoint.
 
         Args:
@@ -466,7 +477,7 @@ class ECGTrainer:
         return trainer
 
     @staticmethod
-    def seed_everything(seed):
+    def seed_everything(seed: int) -> None:
         """Set random seeds for reproducibility.
 
         Args:
@@ -482,8 +493,8 @@ class ECGTrainer:
 class _NullContext:
     """Minimal no-op context manager for Python 3.8 compat."""
 
-    def __enter__(self):
+    def __enter__(self) -> "_NullContext":
         return self
 
-    def __exit__(self, *args):
+    def __exit__(self, *args: object) -> None:
         pass

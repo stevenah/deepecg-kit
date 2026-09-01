@@ -8,7 +8,7 @@ for.
 ```python
 from deepecgkit import FeatureExtractor
 
-extractor = FeatureExtractor.from_checkpoint("runs/best.ckpt", model_name="kanres")
+extractor = FeatureExtractor.from_checkpoint("runs/best.pt", model_name="kanres")
 result = extractor.extract(signals)
 
 result.features        # (num_samples, 64) numpy array
@@ -17,7 +17,7 @@ result.feature_dim     # 64
 ```
 
 ```bash
-deepecg extract-features --checkpoint runs/best.ckpt -m kanres \
+deepecg extract-features --checkpoint runs/best.pt -m kanres \
     --dataset af-classification --split test --output features.npz
 ```
 
@@ -64,7 +64,7 @@ Datasets, loaders and data modules yield `(signal, label)` pairs, so labels come
 ## Loading weights
 
 ```python
-FeatureExtractor.from_checkpoint("runs/best.ckpt", model_name="kanres")
+FeatureExtractor.from_checkpoint("runs/best.pt", model_name="kanres")
 FeatureExtractor.from_pretrained("weights.pt", model_name="kanres")
 FeatureExtractor(model, model_name="kanres")
 ```
@@ -87,7 +87,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 
 probe = Pipeline([
-    ("ecg", FeatureExtractor.from_checkpoint("runs/best.ckpt", model_name="kanres")),
+    ("ecg", FeatureExtractor.from_checkpoint("runs/best.pt", model_name="kanres")),
     ("clf", LogisticRegression(max_iter=1000)),
 ])
 probe.fit(train_signals, train_labels)
@@ -107,8 +107,12 @@ result.save("features.csv")   # columns f0..fN plus label
 
 ## Model constraints
 
-Verified by running every architecture. Feed a signal outside these bounds and you get a shape
-error from inside the network, so check here first.
+Feed a signal outside these bounds and you get a shape error from inside the network, so check
+here first. The authoritative bounds live in the model registry, declared next to each
+architecture's `@register_model` decorator, and can be queried as
+`deepecgkit.registry.get_model_info(name)["min_input_length"]` /
+`["max_input_length"]` (`None` meaning no floor beyond 1, or no ceiling). The table below is a
+convenience copy.
 
 | Model | `feature_dim` | Min samples | Max samples | Leads recoverable |
 |---|---|---|---|---|

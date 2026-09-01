@@ -1,9 +1,8 @@
 import ast
-import os
-import shutil
-import zipfile
+import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import ClassVar, Dict, List, Optional, Tuple, Union
+from typing import ClassVar
 
 import numpy as np
 import pandas as pd
@@ -13,9 +12,11 @@ from tqdm import tqdm
 
 from deepecgkit.registry import register_dataset
 
-from ..utils.download import download_file
+from ..utils.download import download_and_extract_zip
 from .base import BaseECGDataset
 from .preprocessing import ECGStandardizer, convert_to_tensor
+
+logger = logging.getLogger(__name__)
 
 
 @register_dataset(
@@ -49,8 +50,8 @@ class PTBXLDataset(BaseECGDataset):
         https://physionet.org/content/ptb-xl/1.0.3/
     """
 
-    CLASS_LABELS_SUPERCLASS: ClassVar[List[str]] = ["NORM", "MI", "STTC", "CD", "HYP"]
-    CLASS_LABELS_SUBCLASS: ClassVar[List[str]] = [
+    CLASS_LABELS_SUPERCLASS: ClassVar[list[str]] = ["NORM", "MI", "STTC", "CD", "HYP"]
+    CLASS_LABELS_SUBCLASS: ClassVar[list[str]] = [
         "NORM",
         "IMI",
         "ASMI",
@@ -75,7 +76,7 @@ class PTBXLDataset(BaseECGDataset):
         "CRBBB",
         "CLBBB",
     ]
-    CLASS_LABELS_FORM: ClassVar[List[str]] = [
+    CLASS_LABELS_FORM: ClassVar[list[str]] = [
         "NDT",
         "NST_",
         "DIG",
@@ -96,7 +97,7 @@ class PTBXLDataset(BaseECGDataset):
         "STE_",
         "PRC(S)",
     ]
-    CLASS_LABELS_RHYTHM: ClassVar[List[str]] = [
+    CLASS_LABELS_RHYTHM: ClassVar[list[str]] = [
         "SR",
         "AFIB",
         "STACH",
@@ -111,11 +112,7 @@ class PTBXLDataset(BaseECGDataset):
         "TRIGU",
     ]
 
-    LABEL_MAPPING_SUPERCLASS: ClassVar[Dict[str, int]] = {
-        label: i for i, label in enumerate(CLASS_LABELS_SUPERCLASS)
-    }
-
-    LEADS: ClassVar[List[str]] = [
+    LEADS: ClassVar[list[str]] = [
         "I",
         "II",
         "III",
@@ -134,18 +131,19 @@ class PTBXLDataset(BaseECGDataset):
 
     def __init__(
         self,
-        data_dir: Optional[Union[str, Path]] = None,
+        data_dir: str | Path | None = None,
         sampling_rate: int = 500,
         task: str = "superclass",
         use_high_resolution: bool = True,
-        folds: Optional[List[int]] = None,
-        leads: Optional[List[str]] = None,
+        folds: list[int] | None = None,
+        leads: list[str] | None = None,
         normalization: str = "zscore",
         multi_label: bool = True,
-        transform: Optional[callable] = None,
-        target_transform: Optional[callable] = None,
+        transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
+        target_transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
         download: bool = False,
         force_download: bool = False,
+        strict: bool = False,
         verbose: bool = True,
     ):
         """Initialize the PTB-XL dataset.
@@ -176,6 +174,7 @@ class PTBXLDataset(BaseECGDataset):
         self.use_high_resolution = use_high_resolution
         self.folds = folds
         self.multi_label = multi_label
+        self.strict = strict
         self.verbose = verbose
         self._leads = leads
 
@@ -190,12 +189,12 @@ class PTBXLDataset(BaseECGDataset):
             clip_method="center",
         )
 
-        self.signals: List[np.ndarray] = []
-        self.labels: List[np.ndarray] = []
-        self.record_names: List[str] = []
-        self.patient_ids: List[str] = []
-        self.metadata_df: Optional[pd.DataFrame] = None
-        self.scp_statements: Optional[pd.DataFrame] = None
+        self.signals: list[np.ndarray] = []
+        self.labels: list[np.ndarray] = []
+        self.record_names: list[str] = []
+        self.patient_ids: list[str] = []
+        self.metadata_df: pd.DataFrame | None = None
+        self.scp_statements: pd.DataFrame | None = None
         self.source_sampling_rate = source_sampling_rate
 
         super().__init__(
@@ -208,74 +207,32 @@ class PTBXLDataset(BaseECGDataset):
             force_download=force_download,
         )
 
-    @staticmethod
-    def _fix_record_list(records: List[str]) -> List[str]:
-        """Fix corrupted RECORDS file from PhysioNet.
-
-        The PTB-XL RECORDS file on PhysioNet has a missing newline that
-        concatenates two record paths (e.g. 'records100/...records500/...').
-        This splits them back into separate entries.
-        """
-        fixed = []
-        for rec in records:
-            if "records100" in rec and "records500" in rec:
-                idx = rec.index("records500")
-                fixed.append(rec[:idx])
-                fixed.append(rec[idx:])
-            else:
-                fixed.append(rec)
-        return fixed
-
     DOWNLOAD_URL: ClassVar[str] = (
         "https://physionet.org/static/published-projects/ptb-xl/"
         "ptb-xl-a-large-publicly-available-electrocardiography-dataset-1.0.3.zip"
     )
 
-    def download(self):
+    @classmethod
+    def _download(cls, data_dir: Path, verbose: bool = True) -> None:
         """Download the PTB-XL dataset from PhysioNet as a single ZIP."""
-        if self.verbose:
-            print(f"Downloading PTB-XL dataset to {self.data_dir}")
-            print("Note: This is a large dataset (~2.5GB). Download may take a while.")
-
-        os.makedirs(self.data_dir, exist_ok=True)
-
-        zip_path = self.data_dir / "ptb-xl-1.0.3.zip"
-        download_file(
-            self.DOWNLOAD_URL,
-            zip_path,
+        if verbose:
+            logger.info(f"Downloading PTB-XL dataset to {data_dir}")
+            logger.info("Note: This is a large dataset (~2.5GB). Download may take a while.")
+        download_and_extract_zip(
+            cls.DOWNLOAD_URL,
+            data_dir,
+            zip_name="ptb-xl-1.0.3.zip",
             desc="Downloading PTB-XL",
-            max_retries=5,
+            nested_dirs=("ptb-xl-a-large-publicly-available-electrocardiography-dataset-1.0.3",),
+            verbose=verbose,
         )
+        if verbose:
+            logger.info("Download complete!")
 
-        if self.verbose:
-            print("Extracting dataset...")
-
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            zf.extractall(self.data_dir)
-
-        nested_dir = (
-            self.data_dir / "ptb-xl-a-large-publicly-available-electrocardiography-dataset-1.0.3"
-        )
-        if nested_dir.is_dir():
-            for item in nested_dir.iterdir():
-                dest = self.data_dir / item.name
-                if dest.exists():
-                    if dest.is_dir():
-                        shutil.rmtree(dest)
-                    else:
-                        dest.unlink()
-                shutil.move(str(item), str(dest))
-            nested_dir.rmdir()
-
-        zip_path.unlink(missing_ok=True)
-
-        if self.verbose:
-            print("Download complete!")
-
-    def _load_data(self):
+    def _load_data(self) -> None:
         """Load the PTB-XL dataset into memory."""
         if self.verbose:
-            print("Loading PTB-XL dataset...")
+            logger.info("Loading PTB-XL dataset...")
 
         metadata_path = self.data_dir / "ptbxl_database.csv"
         if not metadata_path.exists():
@@ -297,7 +254,7 @@ class PTBXLDataset(BaseECGDataset):
         if self.folds is not None:
             self.metadata_df = self.metadata_df[self.metadata_df.strat_fold.isin(self.folds)]
             if self.verbose:
-                print(f"Using folds: {self.folds} ({len(self.metadata_df)} records)")
+                logger.info(f"Using folds: {self.folds} ({len(self.metadata_df)} records)")
 
         label_columns = self._get_label_columns()
 
@@ -312,7 +269,10 @@ class PTBXLDataset(BaseECGDataset):
             else self.metadata_df.iterrows()
         )
 
+        attempted_records = 0
+        loaded_records = 0
         for ecg_id, row in iterator:
+            attempted_records += 1
             try:
                 record_path = (
                     self.data_dir / row.filename_hr
@@ -337,17 +297,19 @@ class PTBXLDataset(BaseECGDataset):
                 self.labels.append(labels)
                 self.record_names.append(str(ecg_id))
                 self.patient_ids.append(str(row.patient_id))
+                loaded_records += 1
 
-            except Exception as e:
-                if self.verbose:
-                    print(f"Error loading record {ecg_id}: {e}")
+            except self.RECORD_ERRORS as e:
+                self._record_load_error(str(ecg_id), e)
                 continue
 
+        self._finish_load(loaded_records, attempted_records)
+
         if self.verbose:
-            print(f"Successfully loaded {len(self.signals)} records")
+            logger.info(f"Successfully loaded {len(self.signals)} records")
             self._print_class_distribution()
 
-    def _get_label_columns(self) -> List[str]:
+    def _get_label_columns(self) -> list[str]:
         """Get the label columns based on the task."""
         if self.task == "superclass":
             return self.CLASS_LABELS_SUPERCLASS
@@ -377,7 +339,7 @@ class PTBXLDataset(BaseECGDataset):
             )
             return sorted(set(all_labels))
 
-    def _extract_labels(self, scp_codes: Dict[str, float], label_columns: List[str]) -> np.ndarray:
+    def _extract_labels(self, scp_codes: dict[str, float], label_columns: list[str]) -> np.ndarray:
         """Extract labels from SCP codes."""
         if self.multi_label:
             labels = np.zeros(len(label_columns), dtype=np.float32)
@@ -416,27 +378,27 @@ class PTBXLDataset(BaseECGDataset):
                     return np.array(label_columns.index(code), dtype=np.int64)
             return np.array(0, dtype=np.int64)
 
-    def _print_class_distribution(self):
+    def _print_class_distribution(self) -> None:
         """Print class distribution statistics."""
         if len(self.labels) == 0:
             return
 
         label_columns = self._get_label_columns()
-        print(f"\nClass distribution ({self.task}):")
+        logger.info(f"\nClass distribution ({self.task}):")
 
         if self.multi_label:
             labels_array = np.stack(self.labels)
             for i, class_name in enumerate(label_columns):
                 count = int(labels_array[:, i].sum())
                 if count > 0:
-                    print(f"  {class_name}: {count}")
+                    logger.info(f"  {class_name}: {count}")
         else:
             unique, counts = np.unique(self.labels, return_counts=True)
-            for label_idx, count in zip(unique, counts):
+            for label_idx, count in zip(unique, counts, strict=False):
                 if label_idx < len(label_columns):
-                    print(f"  {label_columns[label_idx]}: {count}")
+                    logger.info(f"  {label_columns[label_idx]}: {count}")
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         """Get a sample from the dataset.
 
         Args:
@@ -474,12 +436,12 @@ class PTBXLDataset(BaseECGDataset):
         return len(self._get_label_columns())
 
     @property
-    def class_names(self) -> List[str]:
+    def class_names(self) -> list[str]:
         """Get the names of the classes in the dataset."""
         return self._get_label_columns()
 
     @property
-    def group_ids(self) -> List[str]:
+    def group_ids(self) -> list[str]:
         """Patient identifiers, used so a patient never spans multiple splits.
 
         PTB-XL contains multiple ECGs for some patients, so grouping by ecg_id
@@ -491,7 +453,7 @@ class PTBXLDataset(BaseECGDataset):
         """
         return list(self.patient_ids)
 
-    def get_record_info(self, idx: int) -> Dict:
+    def get_record_info(self, idx: int) -> dict:
         """Get record information for a specific sample.
 
         Args:
@@ -514,7 +476,7 @@ class PTBXLDataset(BaseECGDataset):
             "labels": self.labels[idx].tolist() if self.multi_label else int(self.labels[idx]),
         }
 
-    def get_class_distribution(self) -> Dict[str, int]:
+    def get_class_distribution(self) -> dict[str, int]:
         """Get the distribution of classes in the dataset.
 
         Returns:
@@ -537,10 +499,10 @@ class PTBXLDataset(BaseECGDataset):
 
     def get_folds_split(
         self,
-        train_folds: Optional[List[int]] = None,
-        val_folds: Optional[List[int]] = None,
-        test_folds: Optional[List[int]] = None,
-    ) -> Dict[str, "PTBXLDataset"]:
+        train_folds: list[int] | None = None,
+        val_folds: list[int] | None = None,
+        test_folds: list[int] | None = None,
+    ) -> dict[str, "PTBXLDataset"]:
         """Create train/val/test splits based on stratified folds.
 
         The PTB-XL dataset comes with 10 pre-defined stratified folds.

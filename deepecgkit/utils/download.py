@@ -1,16 +1,20 @@
+import logging
+import shutil
 import time
 import urllib.request
 import zipfile
 from pathlib import Path
-from typing import List, Optional, Union
 
 from tqdm import tqdm
+
+logger = logging.getLogger(__name__)
 
 
 class DownloadProgressBar(tqdm):
     """Progress bar for downloads."""
 
-    def update_to(self, b=1, bsize=1, tsize=None):
+    def update_to(self, b: int = 1, bsize: int = 1, tsize: int | None = None) -> None:
+        """tqdm reporthook: advance the bar to block b of size bsize."""
         if tsize is not None:
             self.total = tsize
         self.update(b * bsize - self.n)
@@ -18,8 +22,8 @@ class DownloadProgressBar(tqdm):
 
 def download_file(
     url: str,
-    file_path: Union[str, Path],
-    desc: Optional[str] = None,
+    file_path: str | Path,
+    desc: str | None = None,
     force: bool = False,
     max_retries: int = 3,
 ) -> None:
@@ -40,16 +44,18 @@ def download_file(
             try:
                 with zipfile.ZipFile(file_path, "r") as zip_ref:
                     if zip_ref.testzip() is not None:
-                        print(f"Corrupted zip file detected at {file_path}, re-downloading...")
+                        logger.warning(
+                            f"Corrupted zip file detected at {file_path}, re-downloading..."
+                        )
                         file_path.unlink()
                     else:
-                        print(f"File already exists at {file_path}, skipping download.")
+                        logger.info(f"File already exists at {file_path}, skipping download.")
                         return
             except zipfile.BadZipFile:
-                print(f"Corrupted zip file detected at {file_path}, re-downloading...")
+                logger.warning(f"Corrupted zip file detected at {file_path}, re-downloading...")
                 file_path.unlink()
         else:
-            print(f"File already exists at {file_path}, skipping download.")
+            logger.info(f"File already exists at {file_path}, skipping download.")
             return
 
     last_exception = None
@@ -71,8 +77,8 @@ def download_file(
 
             if attempt < max_retries - 1:
                 wait_time = 2**attempt
-                print(f"Download attempt {attempt + 1} failed: {e}")
-                print(f"Retrying in {wait_time} seconds...")
+                logger.warning(f"Download attempt {attempt + 1} failed: {e}")
+                logger.info(f"Retrying in {wait_time} seconds...")
                 time.sleep(wait_time)
             else:
                 raise RuntimeError(
@@ -80,44 +86,74 @@ def download_file(
                 ) from last_exception
 
 
-def download_and_extract(
-    urls: List[str],
-    file_paths: List[Union[str, Path]],
-    extract_dir: Optional[Union[str, Path]] = None,
-    descs: Optional[List[str]] = None,
-    force: bool = False,
-) -> None:
-    """Download files and optionally extract zip files.
+def flatten_directory(nested_dir: Path, dest_dir: Path) -> None:
+    """Move everything inside nested_dir up into dest_dir and remove it.
+
+    Existing entries in dest_dir with the same names are replaced.
 
     Args:
-        urls: List of URLs to download from
-        file_paths: List of paths to save the files to
-        extract_dir: Directory to extract zip files to. If None, files are not extracted
-        descs: List of descriptions for the progress bars
-        force: If True, re-download even if files exist
+        nested_dir: Directory whose contents should move up
+        dest_dir: Directory receiving the contents
     """
-    if descs is None:
-        descs = [f"Downloading file {i + 1}/{len(urls)}" for i in range(len(urls))]
+    for item in nested_dir.iterdir():
+        dest = dest_dir / item.name
+        if dest.exists():
+            if dest.is_dir():
+                shutil.rmtree(dest)
+            else:
+                dest.unlink()
+        shutil.move(str(item), str(dest))
+    nested_dir.rmdir()
 
-    for url, file_path_str, desc in zip(urls, file_paths, descs):
-        file_path = Path(file_path_str)
-        download_file(url, file_path, desc, force=force, max_retries=3)
 
-        if extract_dir is not None and file_path.suffix.lower() == ".zip":
-            extract_dir = Path(extract_dir)
-            extracted_marker = extract_dir / f".{file_path.stem}_extracted"
+def download_and_extract_zip(
+    url: str,
+    dest_dir: str | Path,
+    *,
+    zip_name: str,
+    desc: str,
+    nested_dirs: tuple[str, ...] | None = None,
+    flatten_files_dir: bool = True,
+    verbose: bool = True,
+    max_retries: int = 5,
+) -> None:
+    """Download a dataset archive, extract it in place, and tidy the layout.
 
-            if extracted_marker.exists() and not force:
-                print(f"{file_path.name} already extracted, skipping...")
-                continue
+    PhysioNet zips wrap their content in a versioned top-level directory and
+    sometimes a further files/ directory; both are flattened away so record
+    files end up directly under dest_dir. The archive is deleted afterwards.
 
-            print(f"Extracting {file_path.name} to {extract_dir}...")
-            try:
-                with zipfile.ZipFile(file_path, "r") as zip_ref:
-                    zip_ref.extractall(extract_dir)
-                extracted_marker.touch()
-                file_path.unlink()
-            except Exception as e:
-                if extracted_marker.exists():
-                    extracted_marker.unlink()
-                raise RuntimeError(f"Failed to extract {file_path}: {e}") from e
+    Args:
+        url: URL of the zip archive
+        dest_dir: Directory to extract into (created if missing)
+        zip_name: File name for the downloaded archive
+        desc: Description for the download progress bar
+        nested_dirs: Top-level directory names to flatten when present;
+            defaults to the archive name without its extension
+        flatten_files_dir: Also flatten a files/ directory containing .hea
+            record files, as some PhysioNet archives nest records there
+        verbose: Print progress messages
+        max_retries: Download attempts before giving up
+    """
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    zip_path = dest_dir / zip_name
+    download_file(url, zip_path, desc=desc, max_retries=max_retries)
+
+    if verbose:
+        logger.info("Extracting dataset...")
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        zf.extractall(dest_dir)
+
+    for name in nested_dirs if nested_dirs is not None else (zip_path.stem,):
+        nested = dest_dir / name
+        if nested.is_dir():
+            flatten_directory(nested, dest_dir)
+
+    if flatten_files_dir:
+        files_dir = dest_dir / "files"
+        if files_dir.is_dir() and any(files_dir.glob("*.hea")):
+            flatten_directory(files_dir, dest_dir)
+
+    zip_path.unlink(missing_ok=True)

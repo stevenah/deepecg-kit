@@ -2,7 +2,8 @@
 Main ECG model evaluator class.
 """
 
-from typing import Any, Dict, List, Optional, Union
+import logging
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -12,25 +13,18 @@ from sklearn.model_selection import KFold
 
 from deepecgkit.evaluation.calibration import calibration_report
 from deepecgkit.evaluation.metrics import (
+    CALIBRATION_REPORT_KEYS,
     DEFAULT_CALIBRATION_BINS,
     calculate_classification_metrics,
     calculate_regression_metrics,
 )
+from deepecgkit.utils.device import resolve_device
+
+logger = logging.getLogger(__name__)
 
 MAX_CLASSIFICATION_CLASSES = 20
 
-CALIBRATION_ROW_ORDER = (
-    "ece",
-    "adaptive_ece",
-    "mce",
-    "brier",
-    "temperature",
-    "ece_temp",
-    "adaptive_ece_temp",
-    "mce_temp",
-    "brier_temp",
-    "calibration_bins",
-)
+CALIBRATION_ROW_ORDER = (*CALIBRATION_REPORT_KEYS, "calibration_bins")
 
 
 class ECGEvaluator:
@@ -55,7 +49,7 @@ class ECGEvaluator:
 
     def __init__(
         self,
-        metrics: Optional[List[str]] = None,
+        metrics: list[str] | None = None,
         task_type: str = "auto",
         device: str = "auto",
         calibration_bins: int = DEFAULT_CALIBRATION_BINS,
@@ -66,18 +60,15 @@ class ECGEvaluator:
         self.y_scores = None
         self.y_true = None
 
-        if device == "auto":
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        else:
-            self.device = device
+        self.device = resolve_device(device)
 
     def evaluate(
         self,
-        model: Optional[Union[torch.nn.Module, np.ndarray]] = None,
-        test_data: Optional[Union[torch.utils.data.DataLoader, np.ndarray, tuple]] = None,
+        model: torch.nn.Module | np.ndarray | None = None,
+        test_data: torch.utils.data.DataLoader | np.ndarray | tuple | None = None,
         return_predictions: bool = False,
-        y_scores: Optional[np.ndarray] = None,
-    ) -> Dict[str, float]:
+        y_scores: np.ndarray | None = None,
+    ) -> dict[str, float]:
         """
         Evaluate model performance.
 
@@ -103,8 +94,8 @@ class ECGEvaluator:
 
     def _process_input_data(
         self,
-        model: Optional[Union[torch.nn.Module, np.ndarray]],
-        test_data: Optional[Union[torch.utils.data.DataLoader, np.ndarray, tuple]],
+        model: torch.nn.Module | np.ndarray | None,
+        test_data: torch.utils.data.DataLoader | np.ndarray | tuple | None,
     ) -> tuple:
         """Process input data to get predictions and targets."""
         if isinstance(model, np.ndarray):
@@ -114,7 +105,7 @@ class ECGEvaluator:
     def _process_numpy_input(
         self,
         model: np.ndarray,
-        test_data: Optional[Union[torch.utils.data.DataLoader, np.ndarray, tuple]],
+        test_data: torch.utils.data.DataLoader | np.ndarray | tuple | None,
     ) -> tuple:
         """Process input when model is a numpy array."""
         predictions = model
@@ -130,7 +121,7 @@ class ECGEvaluator:
             targets = test_data
         return predictions, targets
 
-    def _calculate_metrics(self, predictions: np.ndarray, targets: np.ndarray) -> Dict[str, float]:
+    def _calculate_metrics(self, predictions: np.ndarray, targets: np.ndarray) -> dict[str, float]:
         """Calculate metrics based on predictions and targets."""
         metrics = {}
         for metric_name in self.metrics:
@@ -154,8 +145,8 @@ class ECGEvaluator:
 
     def _get_predictions(
         self,
-        model: Optional[Union[torch.nn.Module, Any]],
-        test_data: Optional[Union[torch.utils.data.DataLoader, np.ndarray, tuple]],
+        model: torch.nn.Module | Any | None,
+        test_data: torch.utils.data.DataLoader | np.ndarray | tuple | None,
     ) -> tuple:
         """Extract predictions and targets from model and data."""
         if model is None and isinstance(test_data, tuple):
@@ -188,7 +179,7 @@ class ECGEvaluator:
         targets = []
         with torch.no_grad():
             for batch in test_data:
-                if isinstance(batch, (list, tuple)) and len(batch) == 2:
+                if isinstance(batch, list | tuple) and len(batch) == 2:
                     x, y = batch
                 else:
                     x, y = batch, None
@@ -237,8 +228,8 @@ class ECGEvaluator:
         return pred, np.zeros(len(pred))
 
     def _calibration_rows(
-        self, predictions: np.ndarray, calibration_fit: Optional[tuple]
-    ) -> List[Dict[str, Any]]:
+        self, predictions: np.ndarray, calibration_fit: tuple | None
+    ) -> list[dict[str, Any]]:
         """Build the calibration rows appended to the report.
 
         Rows whose value is unavailable are omitted rather than emitted as NaN,
@@ -271,10 +262,10 @@ class ECGEvaluator:
                 fit_logits=fit_logits,
             )
         except Exception as error:
-            print(f"Warning: Could not compute calibration metrics: {error}")
+            logger.warning(f"Could not compute calibration metrics: {error}")
             return []
 
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         for name in CALIBRATION_ROW_ORDER:
             value = report.get(name)
             if value is None:
@@ -298,8 +289,8 @@ class ECGEvaluator:
         return "regression"
 
     def cross_validate(
-        self, model_class: type, data: Any, k_folds: int = 5, **model_kwargs
-    ) -> Dict[str, List[float]]:
+        self, model_class: type, data: Any, k_folds: int = 5, **model_kwargs: Any
+    ) -> dict[str, list[float]]:
         """
         Perform k-fold cross-validation.
 
@@ -318,10 +309,10 @@ class ECGEvaluator:
             raise ValueError("Data must be (X, y) tuple for cross-validation")
 
         kf = KFold(n_splits=k_folds, shuffle=True, random_state=42)
-        fold_results = {metric: [] for metric in self.metrics}
+        fold_results: dict[str, list[float]] = {metric: [] for metric in self.metrics}
 
         for fold, (train_idx, val_idx) in enumerate(kf.split(x)):
-            print(f"Evaluating fold {fold + 1}/{k_folds}")
+            logger.info(f"Evaluating fold {fold + 1}/{k_folds}")
 
             x_train, x_val = x[train_idx], x[val_idx]
             y_train, y_val = y[train_idx], y[val_idx]
@@ -345,7 +336,7 @@ class ECGEvaluator:
         test_data: Any,
         n_bootstrap: int = 1000,
         confidence_level: float = 0.95,
-    ) -> Dict[str, Dict[str, float]]:
+    ) -> dict[str, dict[str, float]]:
         """
         Bootstrap evaluation for confidence intervals.
 
@@ -364,7 +355,7 @@ class ECGEvaluator:
             raise ValueError("Bootstrap evaluation requires ground truth targets")
 
         n_samples = len(targets)
-        bootstrap_results = {metric: [] for metric in self.metrics}
+        bootstrap_results: dict[str, list[float]] = {metric: [] for metric in self.metrics}
 
         for _ in range(n_bootstrap):
             indices = np.random.choice(n_samples, n_samples, replace=True)
@@ -407,9 +398,9 @@ class ECGEvaluator:
         self,
         model: Any,
         test_data: Any,
-        save_path: Optional[str] = None,
-        y_scores: Optional[np.ndarray] = None,
-        calibration_fit: Optional[tuple] = None,
+        save_path: str | None = None,
+        y_scores: np.ndarray | None = None,
+        calibration_fit: tuple | None = None,
     ) -> pd.DataFrame:
         """
         Generate comprehensive evaluation report.
@@ -472,6 +463,6 @@ class ECGEvaluator:
 
         if save_path:
             report_df.to_csv(save_path, index=False)
-            print(f"Report saved to {save_path}")
+            logger.info(f"Report saved to {save_path}")
 
         return report_df

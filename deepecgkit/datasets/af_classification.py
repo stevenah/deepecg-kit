@@ -1,8 +1,8 @@
-import os
-import shutil
+import logging
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
-from typing import ClassVar, Dict, List, Optional, Tuple, Union
+from typing import ClassVar
 
 import numpy as np
 import pandas as pd
@@ -12,9 +12,11 @@ from tqdm import tqdm
 
 from deepecgkit.registry import register_dataset
 
-from ..utils.download import download_file
+from ..utils.download import download_and_extract_zip, flatten_directory
 from .base import BaseECGDataset
-from .preprocessing import ECGSegmenter, ECGStandardizer, convert_to_tensor
+from .preprocessing import ECGSegmenter, ECGStandardizer
+
+logger = logging.getLogger(__name__)
 
 
 @register_dataset(
@@ -40,7 +42,7 @@ class AFClassificationDataset(BaseECGDataset):
         https://physionet.org/content/challenge-2017/1.0.0/
     """
 
-    CLASS_LABELS: ClassVar[List[str]] = [
+    CLASS_LABELS: ClassVar[list[str]] = [
         "Normal",
         "AF",
         "Other",
@@ -49,27 +51,28 @@ class AFClassificationDataset(BaseECGDataset):
 
     REFERENCE_FILE: ClassVar[str] = "REFERENCE-v3.csv"
 
-    LABEL_MAPPING: ClassVar[Dict[str, int]] = {
+    LABEL_MAPPING: ClassVar[dict[str, int]] = {
         "N": 0,
         "A": 1,
         "O": 2,
         "~": 3,
     }
 
-    LEADS: ClassVar[List[str]] = ["ECG"]
+    LEADS: ClassVar[list[str]] = ["ECG"]
     DOWNLOAD_URL: ClassVar[str] = "https://physionet.org/content/challenge-2017/get-zip/1.0.0/"
     NATIVE_SAMPLING_RATE: ClassVar[int] = 300
 
     def __init__(
         self,
-        data_dir: Optional[Union[str, Path]] = None,
+        data_dir: str | Path | None = None,
         sampling_rate: int = 300,
         segment_duration_seconds: float = 10.0,
         segment_overlap: float = 0.0,
         normalization: str = "zscore",
+        strict: bool = False,
         subset: str = "training",
-        transform: Optional[callable] = None,
-        target_transform: Optional[callable] = None,
+        transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
+        target_transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
         download: bool = False,
         force_download: bool = False,
         version: str = "1.0.0",
@@ -80,6 +83,7 @@ class AFClassificationDataset(BaseECGDataset):
 
         self.version = version
         self.subset = subset
+        self.strict = strict
         self.verbose = verbose
         self.segment_duration_seconds = segment_duration_seconds
         self.segment_overlap = segment_overlap
@@ -95,10 +99,10 @@ class AFClassificationDataset(BaseECGDataset):
             overlap=segment_overlap,
         )
 
-        self.signals: List[np.ndarray] = []
-        self.labels: List[int] = []
-        self.record_names: List[str] = []
-        self.reference_data: Optional[pd.DataFrame] = None
+        self.signals: list[np.ndarray] = []
+        self.labels: list[int] = []
+        self.record_names: list[str] = []
+        self.reference_data: pd.DataFrame | None = None
 
         super().__init__(
             data_dir=data_dir,
@@ -110,74 +114,58 @@ class AFClassificationDataset(BaseECGDataset):
             force_download=force_download,
         )
 
-    def download(self):
+    @classmethod
+    def _download(cls, data_dir: Path, verbose: bool = True) -> None:
         """Download the AF Classification dataset from PhysioNet as a single ZIP."""
-        if self.verbose:
-            print(f"Downloading PhysioNet Challenge 2017 dataset to {self.data_dir}")
-            print("Note: This is a large dataset (~1.4GB). Download may take a while.")
-
-        os.makedirs(self.data_dir, exist_ok=True)
-
-        zip_path = self.data_dir / "challenge-2017-1.0.0.zip"
-        download_file(
-            self.DOWNLOAD_URL,
-            zip_path,
+        if verbose:
+            logger.info(f"Downloading PhysioNet Challenge 2017 dataset to {data_dir}")
+            logger.info("Note: This is a large dataset (~1.4GB). Download may take a while.")
+        download_and_extract_zip(
+            cls.DOWNLOAD_URL,
+            data_dir,
+            zip_name="challenge-2017-1.0.0.zip",
             desc="Downloading PhysioNet Challenge 2017",
-            max_retries=5,
+            nested_dirs=(),
+            flatten_files_dir=False,
+            verbose=verbose,
         )
+        cls._flatten_nested_dir(data_dir, verbose)
+        cls._extract_inner_zips(data_dir, verbose)
+        if verbose:
+            logger.info("Download complete!")
 
-        if self.verbose:
-            print("Extracting dataset...")
-
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            zf.extractall(self.data_dir)
-
-        self._flatten_nested_dir()
-        self._extract_inner_zips()
-
-        zip_path.unlink(missing_ok=True)
-
-        if self.verbose:
-            print("Download complete!")
-
-    def _flatten_nested_dir(self):
+    @classmethod
+    def _flatten_nested_dir(cls, data_dir: Path, verbose: bool = True) -> None:
         """Flatten a nested extraction directory if present from a previous download."""
-        for child in self.data_dir.iterdir():
+        for child in data_dir.iterdir():
             if not child.is_dir() or child.name in ("__MACOSX", "training2017", "sample2017"):
                 continue
-            if self.verbose:
-                print(f"Flattening nested directory {child.name}...")
-            for item in child.iterdir():
-                dest = self.data_dir / item.name
-                if dest.exists():
-                    if dest.is_dir():
-                        shutil.rmtree(dest)
-                    else:
-                        dest.unlink()
-                shutil.move(str(item), str(dest))
-            child.rmdir()
+            if verbose:
+                logger.info(f"Flattening nested directory {child.name}...")
+            flatten_directory(child, data_dir)
             return
 
-    def _extract_inner_zips(self):
+    @classmethod
+    def _extract_inner_zips(cls, data_dir: Path, verbose: bool = True) -> None:
         """Extract inner zip files like training2017.zip."""
-        for zf_path in self.data_dir.glob("*.zip"):
+        for zf_path in data_dir.glob("*.zip"):
             folder_name = zf_path.stem
-            target_dir = self.data_dir / folder_name
+            target_dir = data_dir / folder_name
             if target_dir.exists():
                 continue
-            if self.verbose:
-                print(f"Extracting {zf_path.name}...")
+            if verbose:
+                logger.info(f"Extracting {zf_path.name}...")
             with zipfile.ZipFile(zf_path, "r") as zf:
-                zf.extractall(self.data_dir)
+                zf.extractall(data_dir)
             zf_path.unlink()
 
-    def _load_data(self):
+    def _load_data(self) -> None:
         """Load the AF Classification dataset into memory."""
         if self.verbose:
-            print(f"Loading AF Classification dataset ({self.subset} subset)...")
+            logger.info(f"Loading AF Classification dataset ({self.subset} subset)...")
 
-        self._flatten_nested_dir()
-        self._extract_inner_zips()
+        self._flatten_nested_dir(self.data_dir, self.verbose)
+        self._extract_inner_zips(self.data_dir, self.verbose)
 
         reference_path = self.data_dir / self.REFERENCE_FILE
         if not reference_path.exists():
@@ -210,6 +198,8 @@ class AFClassificationDataset(BaseECGDataset):
             else self.reference_data.iterrows()
         )
 
+        attempted_records = 0
+        loaded_records = 0
         for _, row in iterator:
             record_name = row["record_name"]
             label = row["label"]
@@ -217,6 +207,7 @@ class AFClassificationDataset(BaseECGDataset):
             mat_file = data_folder / f"{record_name}.mat"
 
             if mat_file.exists():
+                attempted_records += 1
                 try:
                     mat_data = scipy.io.loadmat(str(mat_file))
 
@@ -232,7 +223,7 @@ class AFClassificationDataset(BaseECGDataset):
 
                     if label not in self.LABEL_MAPPING:
                         if self.verbose:
-                            print(f"Warning: Unknown label '{label}' for record {record_name}")
+                            logger.warning(f"Unknown label '{label}' for record {record_name}")
                         continue
 
                     label_idx = self.LABEL_MAPPING[label]
@@ -249,53 +240,15 @@ class AFClassificationDataset(BaseECGDataset):
                         self.signals.append(normalized)
                         self.labels.append(label_idx)
                         self.record_names.append(record_name)
+                    loaded_records += 1
 
-                except Exception as e:
-                    if self.verbose:
-                        print(f"Error loading record {record_name}: {e}")
+                except self.RECORD_ERRORS as e:
+                    self._record_load_error(record_name, e)
                     continue
 
+        self._finish_load(loaded_records, attempted_records)
+
         if self.verbose:
-            print(f"Successfully loaded {len(self.signals)} segments from {self.subset} subset")
-
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        signal = self.signals[idx]
-        label = self.labels[idx]
-
-        signal = convert_to_tensor(signal, dtype=torch.float32)
-        label = torch.tensor(label, dtype=torch.long)
-
-        if self.transform is not None:
-            signal = self.transform(signal)
-        if self.target_transform is not None:
-            label = self.target_transform(label)
-
-        return signal, label
-
-    def __len__(self) -> int:
-        return len(self.labels)
-
-    @property
-    def num_classes(self) -> int:
-        """Get the number of classes in the dataset."""
-        return len(self.CLASS_LABELS)
-
-    @property
-    def class_names(self) -> List[str]:
-        """Get the names of the classes in the dataset."""
-        return self.CLASS_LABELS
-
-    def get_record_info(self, idx: int) -> Dict:
-        record_name = self.record_names[idx]
-        label_idx = self.labels[idx]
-
-        return {
-            "record_name": record_name,
-            "label": label_idx,
-            "class_name": self.CLASS_LABELS[label_idx],
-            "signal_shape": self.signals[idx].shape,
-        }
-
-    def get_class_distribution(self) -> Dict[str, int]:
-        unique, counts = np.unique(self.labels, return_counts=True)
-        return {self.class_names[int(label)]: int(count) for label, count in zip(unique, counts)}
+            logger.info(
+                f"Successfully loaded {len(self.signals)} segments from {self.subset} subset"
+            )

@@ -1,6 +1,7 @@
 import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import ClassVar, Dict, List, Optional, Tuple, Type, Union
+from typing import Any, ClassVar
 
 import numpy as np
 import torch
@@ -43,10 +44,10 @@ class _RemappedDataset(Dataset):
 
     def __init__(
         self,
-        dataset,
-        label_map: Dict[int, Optional[int]],
-        target_transform: Optional[callable] = None,
-    ):
+        dataset: Any,
+        label_map: dict[int, int | None],
+        target_transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
+    ) -> None:
         self._dataset = dataset
         self._label_map = label_map
         self._target_transform = target_transform
@@ -67,7 +68,7 @@ class _RemappedDataset(Dataset):
         else:
             self.record_names = []
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         signal, label = self._dataset[self._indices[idx]]
         new_label = torch.tensor(self._label_map[label.item()], dtype=torch.long)
         if self._target_transform is not None:
@@ -97,10 +98,10 @@ class UnifiedAFDataset(BaseECGDataset):
       - Other (O) → Non-AF and Noisy (~) is dropped in binary mode
     """
 
-    CLASS_LABELS: ClassVar[List[str]] = ["Normal", "AF", "AFL", "J"]
-    LEADS: ClassVar[List[str]] = ["ECG"]
+    CLASS_LABELS: ClassVar[list[str]] = ["Normal", "AF", "AFL", "J"]
+    LEADS: ClassVar[list[str]] = ["ECG"]
 
-    AVAILABLE_DATASETS: ClassVar[Dict[str, Type[BaseECGDataset]]] = {
+    AVAILABLE_DATASETS: ClassVar[dict[str, type[BaseECGDataset]]] = {
         "physionet2017": AFClassificationDataset,
         "mitbih_afdb": MITBIHAFDBDataset,
         "ltafdb": LTAFDBDataset,
@@ -112,18 +113,18 @@ class UnifiedAFDataset(BaseECGDataset):
 
     def __init__(
         self,
-        data_dir: Optional[Union[str, Path]] = None,
+        data_dir: str | Path | None = None,
         sampling_rate: int = 300,
         segment_duration_seconds: float = 10.0,
-        datasets: Optional[List[str]] = None,
+        datasets: list[str] | None = None,
         binary_classification: bool = False,
         normalization: str = "zscore",
-        transform: Optional[callable] = None,
-        target_transform: Optional[callable] = None,
+        transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
+        target_transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
         download: bool = False,
         force_download: bool = False,
         verbose: bool = True,
-        dataset_kwargs: Optional[Dict[str, Dict]] = None,
+        dataset_kwargs: dict[str, dict] | None = None,
     ):
         self.segment_duration_seconds = segment_duration_seconds
         self.binary_classification = binary_classification
@@ -141,10 +142,10 @@ class UnifiedAFDataset(BaseECGDataset):
                 )
 
         self.dataset_names = datasets
-        self.datasets = []
-        self.dataset_sizes = []
-        self.loaded_dataset_names = []
-        self.record_names = []
+        self.datasets: list[Any] = []
+        self.dataset_sizes: list[int] = []
+        self.loaded_dataset_names: list[str] = []
+        self.record_names: list[str] = []
 
         super().__init__(
             data_dir=data_dir,
@@ -156,33 +157,26 @@ class UnifiedAFDataset(BaseECGDataset):
             force_download=force_download,
         )
 
-    def download(self):
+    def download(self) -> None:
         for dataset_name in self.dataset_names:
             dataset_class = self.AVAILABLE_DATASETS[dataset_name]
             dataset_dir = self._resolve_dataset_dir(dataset_name)
 
             if dataset_dir.exists() and any(dataset_dir.iterdir()):
                 if self.verbose:
-                    print(f"\n{'=' * 60}")
-                    print(f"Skipping {dataset_name}: already exists at {dataset_dir}")
-                    print(f"{'=' * 60}")
+                    logger.info(f"\n{'=' * 60}")
+                    logger.info(f"Skipping {dataset_name}: already exists at {dataset_dir}")
+                    logger.info(f"{'=' * 60}")
                 continue
 
             if self.verbose:
-                print(f"\n{'=' * 60}")
-                print(f"Downloading dataset: {dataset_name}")
-                print(f"{'=' * 60}")
+                logger.info(f"\n{'=' * 60}")
+                logger.info(f"Downloading dataset: {dataset_name}")
+                logger.info(f"{'=' * 60}")
 
-            dataset_dir.mkdir(parents=True, exist_ok=True)
+            dataset_class.download_to(dataset_dir, verbose=self.verbose)
 
-            # Minimal instance for download only — sub-dataset download()
-            # methods only require self.data_dir and self.verbose.
-            instance = object.__new__(dataset_class)
-            instance.data_dir = dataset_dir
-            instance.verbose = self.verbose
-            instance.download()
-
-    def _get_dataset_kwargs(self, dataset_name: str) -> Dict:
+    def _get_dataset_kwargs(self, dataset_name: str) -> dict:
         base_kwargs = {
             "sampling_rate": self.sampling_rate,
             "transform": self.transform,
@@ -203,15 +197,15 @@ class UnifiedAFDataset(BaseECGDataset):
 
         return base_kwargs
 
-    def _load_data(self):
+    def _load_data(self) -> None:
         if self.verbose:
-            print("\nLoading unified AF dataset...")
+            logger.info("\nLoading unified AF dataset...")
 
         for dataset_name in self.dataset_names:
             if self.verbose:
-                print(f"\n{'=' * 60}")
-                print(f"Loading: {dataset_name}")
-                print(f"{'=' * 60}")
+                logger.info(f"\n{'=' * 60}")
+                logger.info(f"Loading: {dataset_name}")
+                logger.info(f"{'=' * 60}")
 
             dataset_class = self.AVAILABLE_DATASETS[dataset_name]
             dataset_dir = self._resolve_dataset_dir(dataset_name)
@@ -236,39 +230,39 @@ class UnifiedAFDataset(BaseECGDataset):
                     )
                     dropped = original_len - len(dataset)
                     if dropped > 0 and self.verbose:
-                        print(f"  Dropped {dropped} samples with unmappable labels (Other/Noisy)")
+                        logger.info(
+                            f"  Dropped {dropped} samples with unmappable labels (Other/Noisy)"
+                        )
 
                 self.datasets.append(dataset)
                 self.dataset_sizes.append(len(dataset))
                 self.loaded_dataset_names.append(dataset_name)
 
                 if self.verbose:
-                    print(f"Loaded {len(dataset)} samples from {dataset_name}")
+                    logger.info(f"Loaded {len(dataset)} samples from {dataset_name}")
                     if hasattr(dataset, "get_class_distribution"):
                         dist = dataset.get_class_distribution()
-                        print(f"Class distribution: {dist}")
+                        logger.info(f"Class distribution: {dist}")
 
             except Exception as e:
                 logger.warning("Failed to load %s: %s", dataset_name, e)
-                if self.verbose:
-                    print(f"Failed to load {dataset_name}: {e}")
                 continue
 
         if len(self.datasets) == 0:
             raise RuntimeError("No datasets were successfully loaded")
 
-        self.concat_dataset = ConcatDataset(self.datasets)
+        self.concat_dataset: ConcatDataset = ConcatDataset(self.datasets)
         self._collect_record_names()
 
         if self.verbose:
-            print(f"\n{'=' * 60}")
-            print("Unified dataset created")
-            print(f"Total datasets: {len(self.datasets)}")
-            print(f"Total samples: {len(self.concat_dataset)}")
-            print(f"{'=' * 60}")
+            logger.info(f"\n{'=' * 60}")
+            logger.info("Unified dataset created")
+            logger.info(f"Total datasets: {len(self.datasets)}")
+            logger.info(f"Total samples: {len(self.concat_dataset)}")
+            logger.info(f"{'=' * 60}")
             self._print_overall_distribution()
 
-    def _collect_record_names(self):
+    def _collect_record_names(self) -> None:
         """Build globally unique record identifiers across the merged source datasets.
 
         Record names are namespaced by source dataset so that identically named
@@ -280,8 +274,8 @@ class UnifiedAFDataset(BaseECGDataset):
         Raises:
             RuntimeError: If any source dataset does not expose usable record names.
         """
-        record_names = []
-        for dataset_name, dataset in zip(self.loaded_dataset_names, self.datasets):
+        record_names: list[str] = []
+        for dataset_name, dataset in zip(self.loaded_dataset_names, self.datasets, strict=False):
             source_records = getattr(dataset, "record_names", None)
             if not source_records or len(source_records) != len(dataset):
                 raise RuntimeError(
@@ -295,7 +289,7 @@ class UnifiedAFDataset(BaseECGDataset):
 
         self.record_names = record_names
 
-    def _print_overall_distribution(self):
+    def _print_overall_distribution(self) -> None:
         if len(self.datasets) == 0:
             return
 
@@ -308,29 +302,19 @@ class UnifiedAFDataset(BaseECGDataset):
             return
 
         unique, counts = np.unique(all_labels, return_counts=True)
-        print("\nOverall class distribution:")
-        for label_idx, count in zip(unique, counts):
+        logger.info("\nOverall class distribution:")
+        for label_idx, count in zip(unique, counts, strict=False):
             class_name = self.class_names[label_idx]
             percentage = (count / len(all_labels)) * 100
-            print(f"  {class_name}: {count} ({percentage:.1f}%)")
+            logger.info(f"  {class_name}: {count} ({percentage:.1f}%)")
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         return self.concat_dataset[idx]
 
     def __len__(self) -> int:
         return len(self.concat_dataset)
 
-    @property
-    def num_classes(self) -> int:
-        return 2 if self.binary_classification else len(self.CLASS_LABELS)
-
-    @property
-    def class_names(self) -> List[str]:
-        if self.binary_classification:
-            return ["Non-AF", "AF"]
-        return self.CLASS_LABELS
-
-    def get_dataset_info(self) -> Dict:
+    def get_dataset_info(self) -> dict:
         return {
             "num_datasets": len(self.datasets),
             "dataset_names": self.dataset_names,
@@ -340,7 +324,7 @@ class UnifiedAFDataset(BaseECGDataset):
             "class_names": self.class_names,
         }
 
-    def get_class_distribution(self) -> Dict[str, int]:
+    def get_class_distribution(self) -> dict[str, int]:
         all_labels = []
         for dataset in self.datasets:
             if hasattr(dataset, "labels"):
@@ -350,4 +334,7 @@ class UnifiedAFDataset(BaseECGDataset):
             return {}
 
         unique, counts = np.unique(all_labels, return_counts=True)
-        return {self.class_names[int(label)]: int(count) for label, count in zip(unique, counts)}
+        return {
+            self.class_names[int(label)]: int(count)
+            for label, count in zip(unique, counts, strict=False)
+        }

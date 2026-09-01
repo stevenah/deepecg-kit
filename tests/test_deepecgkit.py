@@ -176,28 +176,28 @@ class TestIntegrationScenarios:
 
         train_loader = datamodule.train_dataloader()
 
-        try:
-            for i, batch in enumerate(train_loader):
-                if i >= 2:
-                    break
+        saw_batch = False
+        for i, batch in enumerate(train_loader):
+            if i >= 2:
+                break
+            saw_batch = True
 
-                x, y = batch
-                y_hat = trainer.model(x)
-                loss = trainer._calculate_loss(y_hat, y)
-                assert isinstance(loss, torch.Tensor)
+            x, y = batch
+            y_hat = trainer.model(x)
+            loss = trainer._calculate_loss(y_hat, y)
+            assert isinstance(loss, torch.Tensor)
 
-                trainer.model.eval()
-                with torch.no_grad():
-                    predictions = trainer.model(batch[0])
+            trainer.model.eval()
+            with torch.no_grad():
+                predictions = trainer.model(batch[0])
 
-                evaluator = ECGEvaluator(
-                    task_type="classification", metrics=["accuracy", "precision", "recall", "f1"]
-                )
-                results = evaluator.evaluate(predictions.numpy(), batch[1].numpy())
-                assert "accuracy" in results
+            evaluator = ECGEvaluator(
+                task_type="classification", metrics=["accuracy", "precision", "recall", "f1"]
+            )
+            results = evaluator.evaluate(predictions.numpy(), batch[1].numpy())
+            assert "accuracy" in results
 
-        except Exception:
-            pytest.skip("Mock data insufficient for integration test")
+        assert saw_batch, "train_loader yielded no batches from the mock dataset"
 
     def test_model_comparison(self, sample_batch_ecg, sample_labels):
         """Test comparing different models."""
@@ -275,7 +275,7 @@ class TestIntegrationScenarios:
 
         metrics = calculate_classification_metrics(y_true, y_pred)
         assert "accuracy" in metrics
-        assert isinstance(metrics["accuracy"], (float, np.floating))
+        assert isinstance(metrics["accuracy"], float | np.floating)
 
     def test_device_compatibility_workflow(self):
         """Test complete workflow with different devices."""
@@ -349,7 +349,7 @@ class TestPackageConsistency:
         assert isinstance(metrics, dict)
         for key, value in metrics.items():
             assert isinstance(key, str)
-            assert isinstance(value, (float, np.floating))
+            assert isinstance(value, float | np.floating)
 
     def test_error_handling_consistency(self):
         """Test consistent error handling across modules."""

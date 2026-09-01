@@ -11,7 +11,7 @@ attribution from the P-wave region, against the 25% that region's width would ea
 ```python
 from deepecgkit.explainability import ECGExplainer
 
-explainer = ECGExplainer.from_checkpoint("runs/best.ckpt", "kanres", sampling_rate=500.0)
+explainer = ECGExplainer.from_checkpoint("runs/best.pt", "kanres", sampling_rate=500.0)
 result = explainer.explain(signals)
 
 result.values            # (samples, leads, time) attribution, the input's own shape
@@ -25,7 +25,7 @@ result.crop_offset       # samples dropped from the front to fit the model
 ```
 
 ```bash
-deepecg explain --checkpoint runs/best.ckpt -m kanres -d ptbxl \
+deepecg explain --checkpoint runs/best.pt -m kanres -d ptbxl \
     --method integrated-gradients --sampling-rate 500 -o explanations/
 ```
 
@@ -142,6 +142,12 @@ The same bounds that govern feature extraction govern attribution, because attri
 forward pass. One thing differs: a recording above an architecture's ceiling is now centre-cropped
 for you and a `RuntimeWarning` says so, rather than failing inside the network. A recording below the
 minimum still raises, because cropping cannot make a signal longer.
+
+The authoritative bounds live in the model registry, declared next to each architecture's
+`@register_model` decorator, and can be queried as
+`deepecgkit.registry.get_model_info(name)["min_input_length"]` /
+`["max_input_length"]` (`None` meaning no floor beyond 1, or no ceiling). The table below is a
+convenience copy.
 
 | Model | Min samples | Max samples | Centre-cropped above max |
 |---|---|---|---|

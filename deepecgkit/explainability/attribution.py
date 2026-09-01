@@ -12,17 +12,23 @@ leads, and a share of attribution falling in the P-wave region, are.
 
 import json
 import warnings
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
+from typing import Any
 
 import numpy as np
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, Dataset, RandomSampler, TensorDataset
+from torch.utils.data import DataLoader, Dataset
 
-from deepecgkit.datasets.io import as_model_input, read_ecg_recording
+from deepecgkit._batching import as_inference_dataloader
+from deepecgkit._model_loading import (
+    load_pretrained_resolving_name,
+    model_input_channels,
+    split_wrapper_kwargs,
+)
 from deepecgkit.datasets.modules import ECGDataModule
 from deepecgkit.datasets.ptbxl import PTBXLDataset
 from deepecgkit.explainability.beats import (
@@ -34,10 +40,8 @@ from deepecgkit.explainability.beats import (
     pqrst_fractions,
 )
 from deepecgkit.explainability.constraints import fit_to_constraints, resolve_model_name
-from deepecgkit.features import _resolve_device
-from deepecgkit.models.factory import build_model_from_checkpoint, infer_input_channels
-from deepecgkit.models.pretrained import from_pretrained as _load_pretrained
-from deepecgkit.models.pretrained import model_name_for_weights
+from deepecgkit.models.factory import build_model_from_checkpoint
+from deepecgkit.utils.device import resolve_device as _resolve_device
 
 try:
     from tqdm import tqdm
@@ -55,13 +59,13 @@ __all__ = [
     "saliency",
 ]
 
-METHODS: Tuple[str, ...] = ("saliency", "integrated-gradients", "occlusion")
+METHODS: tuple[str, ...] = ("saliency", "integrated-gradients", "occlusion")
 
-SPLITS: Tuple[str, ...] = ("train", "val", "test", "all")
+SPLITS: tuple[str, ...] = ("train", "val", "test", "all")
 
-ExplainInput = Union[np.ndarray, torch.Tensor, str, Path, Dataset, DataLoader, ECGDataModule]
+ExplainInput = np.ndarray | torch.Tensor | str | Path | Dataset | DataLoader | ECGDataModule
 
-TargetSpec = Union[None, int, str, np.ndarray, torch.Tensor]
+TargetSpec = int | str | np.ndarray | torch.Tensor | None
 
 
 @contextmanager
@@ -208,7 +212,7 @@ def integrated_gradients(
     signals: torch.Tensor,
     target: TargetSpec = None,
     steps: int = 64,
-    baseline: Optional[torch.Tensor] = None,
+    baseline: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Attribute by integrating gradients along a path from a baseline.
 
@@ -328,7 +332,7 @@ def occlusion(
     return total / counts.clamp(min=1.0)
 
 
-_METHODS: Dict[str, Callable[..., torch.Tensor]] = {
+_METHODS: dict[str, Callable[..., torch.Tensor]] = {
     "saliency": saliency,
     "integrated-gradients": integrated_gradients,
     "occlusion": occlusion,
@@ -373,7 +377,7 @@ def lead_importance(values: np.ndarray) -> np.ndarray:
     )
 
 
-def default_lead_names(leads: int) -> List[str]:
+def default_lead_names(leads: int) -> list[str]:
     """Name the leads, using the standard twelve-lead order where it applies.
 
     Args:
@@ -421,14 +425,14 @@ class Attribution:
     lead_importance: np.ndarray
     target: np.ndarray
     method: str
-    model_name: Optional[str] = None
+    model_name: str | None = None
     sampling_rate: float = 500.0
     crop_offset: int = 0
-    lead_names: Optional[List[str]] = None
-    beat_profile: Optional[np.ndarray] = None
-    beat_times_ms: Optional[np.ndarray] = None
-    pqrst_fractions: Optional[Dict[str, float]] = field(default=None)
-    pqrst_enrichment: Optional[Dict[str, float]] = field(default=None)
+    lead_names: list[str] | None = None
+    beat_profile: np.ndarray | None = None
+    beat_times_ms: np.ndarray | None = None
+    pqrst_fractions: dict[str, float] | None = field(default=None)
+    pqrst_enrichment: dict[str, float] | None = field(default=None)
     beat_count: int = 0
 
     @property
@@ -448,7 +452,7 @@ class Attribution:
         """
         return self.lead_importance.mean(axis=0).astype(np.float32)
 
-    def summary(self) -> Dict[str, Any]:
+    def summary(self) -> dict[str, Any]:
         """Describe the attribution in JSON-serialisable form.
 
         Returns:
@@ -466,13 +470,15 @@ class Attribution:
             "sampling_rate": float(self.sampling_rate),
             "crop_offset": int(self.crop_offset),
             "targets": [int(value) for value in self.target],
-            "lead_importance": {name: float(value) for name, value in zip(names, mean_importance)},
+            "lead_importance": {
+                name: float(value) for name, value in zip(names, mean_importance, strict=False)
+            },
             "beat_count": int(self.beat_count),
             "pqrst_fractions": self.pqrst_fractions,
             "pqrst_enrichment": self.pqrst_enrichment,
         }
 
-    def save(self, path: Union[str, Path]) -> None:
+    def save(self, path: str | Path) -> None:
         """Write the attribution arrays to disk.
 
         Args:
@@ -490,7 +496,7 @@ class Attribution:
             )
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "values": self.values,
             "signal": self.signal,
             "lead_importance": self.lead_importance,
@@ -552,18 +558,18 @@ class ECGExplainer:
     def __init__(
         self,
         model: nn.Module,
-        model_name: Optional[str] = None,
+        model_name: str | None = None,
         method: str = "saliency",
         batch_size: int = 8,
         device: str = "auto",
         sampling_rate: float = 500.0,
-        lead_names: Optional[List[str]] = None,
-        max_samples: Optional[int] = None,
+        lead_names: list[str] | None = None,
+        max_samples: int | None = None,
         ig_steps: int = 64,
         occlusion_window: int = 100,
         occlusion_stride: int = 50,
         align_beats: bool = True,
-        detect_lead: Optional[int] = None,
+        detect_lead: int | None = None,
         num_workers: int = 0,
         progress: bool = False,
     ) -> None:
@@ -586,10 +592,10 @@ class ECGExplainer:
     @classmethod
     def from_checkpoint(
         cls,
-        checkpoint: Union[str, Path],
+        checkpoint: str | Path,
         model_name: str,
-        input_channels: Optional[int] = None,
-        output_size: Optional[int] = None,
+        input_channels: int | None = None,
+        output_size: int | None = None,
         **kwargs: Any,
     ) -> "ECGExplainer":
         """Build an explainer from a saved checkpoint.
@@ -616,8 +622,8 @@ class ECGExplainer:
     @classmethod
     def from_pretrained(
         cls,
-        weights: Union[str, Path],
-        model_name: Optional[str] = None,
+        weights: str | Path,
+        model_name: str | None = None,
         **kwargs: Any,
     ) -> "ECGExplainer":
         """Build an explainer from registered pretrained weights or a file.
@@ -635,39 +641,14 @@ class ECGExplainer:
         Raises:
             ValueError: If the model name is neither given nor inferable.
         """
-        resolved = model_name or model_name_for_weights(str(weights))
-        if resolved is None:
-            raise ValueError(
-                f"Could not determine which model '{weights}' belongs to. Pass model_name "
-                f"explicitly."
-            )
-        explainer_keys = {
-            "align_beats",
-            "batch_size",
-            "detect_lead",
-            "device",
-            "ig_steps",
-            "lead_names",
-            "max_samples",
-            "method",
-            "num_workers",
-            "occlusion_stride",
-            "occlusion_window",
-            "progress",
-            "sampling_rate",
-        }
-        explainer_kwargs = {k: v for k, v in kwargs.items() if k in explainer_keys}
-        model_kwargs = {k: v for k, v in kwargs.items() if k not in explainer_keys}
-        model = _load_pretrained(resolved, weights, **model_kwargs)
+        explainer_kwargs, model_kwargs = split_wrapper_kwargs(cls, kwargs)
+        model, resolved = load_pretrained_resolving_name(weights, model_name, **model_kwargs)
         return cls(model, model_name=resolved, **explainer_kwargs)
 
     @property
-    def input_channels(self) -> Optional[int]:
+    def input_channels(self) -> int | None:
         """Lead count recovered from the model, or None when unrecoverable."""
-        declared = getattr(self.model, "input_channels", None)
-        if isinstance(declared, int):
-            return declared
-        return infer_input_channels(self.model.state_dict())
+        return model_input_channels(self.model)
 
     def explain(
         self, data: ExplainInput, target: TargetSpec = None, split: str = "test"
@@ -696,9 +677,9 @@ class ECGExplainer:
         device = _resolve_device(self.device)
         loader = self._as_dataloader(data, split)
 
-        value_chunks: List[np.ndarray] = []
-        signal_chunks: List[np.ndarray] = []
-        target_chunks: List[np.ndarray] = []
+        value_chunks: list[np.ndarray] = []
+        signal_chunks: list[np.ndarray] = []
+        target_chunks: list[np.ndarray] = []
         crop_offset = 0
         seen = 0
 
@@ -708,7 +689,7 @@ class ECGExplainer:
                 iterator = tqdm(loader, desc=f"Attributing ({self.method})")
 
             for batch in iterator:
-                signals = batch[0] if isinstance(batch, (list, tuple)) else batch
+                signals = batch[0] if isinstance(batch, list | tuple) else batch
                 signals = signals.to(device=device, dtype=torch.float32)
 
                 if self.max_samples is not None:
@@ -818,11 +799,11 @@ class ECGExplainer:
         if lead is None:
             lead = 1 if values.shape[1] > 1 else 0
 
-        profiles: List[np.ndarray] = []
-        weights: List[int] = []
-        times: Optional[np.ndarray] = None
+        profiles: list[np.ndarray] = []
+        weights: list[int] = []
+        times: np.ndarray | None = None
 
-        for attribution, trace in zip(values, signal):
+        for attribution, trace in zip(values, signal, strict=False):
             peaks = detect_r_peaks(trace[lead], self.sampling_rate)
             profile, axis, count = beat_aligned_attribution(
                 attribution, peaks, self.sampling_rate, BEAT_WINDOW_MS
@@ -851,83 +832,25 @@ class ECGExplainer:
         result.pqrst_enrichment = pqrst_enrichment(result.pqrst_fractions, times, PQRST_WINDOWS_MS)
 
     def _as_dataloader(self, data: ExplainInput, split: str) -> DataLoader:
-        """Normalise any supported input to a non-shuffling DataLoader.
-
-        Args:
-            data: Any supported input
-            split: Split name, used only for an ECGDataModule
-
-        Returns:
-            A loader yielding either signals alone or (signals, labels).
-
-        Raises:
-            TypeError: If the input type is not supported.
-            RuntimeError: If a data module split is unavailable.
-        """
-        if isinstance(data, ECGDataModule):
-            if data.dataset is None or data.train_dataset is None:
-                data.setup()
-            subset = data.dataset if split == "all" else getattr(data, f"{split}_dataset")
-            if subset is None:
-                raise RuntimeError(f"Data module has no '{split}' split available.")
-            return self._build_loader(subset)
-
-        if isinstance(data, DataLoader):
-            if isinstance(data.sampler, RandomSampler):
-                warnings.warn(
-                    "The supplied DataLoader shuffles, so explained rows will not follow "
-                    "dataset order and cannot be joined to external metadata. Pass "
-                    "shuffle=False for a reproducible ordering.",
-                    RuntimeWarning,
-                    stacklevel=3,
-                )
-            return data
-
-        if isinstance(data, Dataset):
-            return self._build_loader(data)
-
-        if isinstance(data, (str, Path)):
-            array = as_model_input(read_ecg_recording(data), self.input_channels)
-            return self._build_loader(TensorDataset(torch.as_tensor(array)))
-
-        if isinstance(data, torch.Tensor):
-            array = as_model_input(data.detach().cpu().numpy(), self.input_channels)
-            return self._build_loader(TensorDataset(torch.as_tensor(array)))
-
-        if isinstance(data, np.ndarray):
-            array = as_model_input(data, self.input_channels)
-            return self._build_loader(TensorDataset(torch.as_tensor(array)))
-
-        raise TypeError(
-            f"Unsupported input type: {type(data).__name__}. Pass an array, tensor, file path, "
-            f"Dataset, DataLoader, or ECGDataModule."
-        )
-
-    def _build_loader(self, dataset: Dataset) -> DataLoader:
-        """Wrap a dataset in a loader that preserves ordering.
-
-        Args:
-            dataset: Any map-style dataset
-
-        Returns:
-            A DataLoader with shuffling disabled.
-        """
-        return DataLoader(
-            dataset,
+        """Normalise any supported input to a non-shuffling DataLoader."""
+        return as_inference_dataloader(
+            data,
+            split=split,
             batch_size=self.batch_size,
-            shuffle=False,
             num_workers=self.num_workers,
+            input_channels=self.input_channels,
+            verb="explained",
         )
 
 
 def explain(
     data: ExplainInput,
-    model: Optional[nn.Module] = None,
-    checkpoint: Optional[Union[str, Path]] = None,
-    weights: Optional[Union[str, Path]] = None,
-    model_name: Optional[str] = None,
-    input_channels: Optional[int] = None,
-    output_size: Optional[int] = None,
+    model: nn.Module | None = None,
+    checkpoint: str | Path | None = None,
+    weights: str | Path | None = None,
+    model_name: str | None = None,
+    input_channels: int | None = None,
+    output_size: int | None = None,
     target: TargetSpec = None,
     split: str = "test",
     **kwargs: Any,

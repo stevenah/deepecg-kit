@@ -20,17 +20,15 @@ import torch
 from deepecgkit import FeatureExtractor
 from deepecgkit.datasets import ECGDataModule
 from deepecgkit.models.factory import build_model
-from deepecgkit.registry import get_dataset, get_model_names
-
-MINIMUM_LENGTHS = {"afmodel": 7971, "deep-res-cnn": 127, "mamba": 50, "medformer": 50}
-
-MAXIMUM_LENGTHS = {"dualnet": 5000, "medformer": 5009, "transformer": 5000, "mamba": 25049}
+from deepecgkit.registry import get_dataset, get_model_info, get_model_names
 
 
 def signal_length_for(model_name: str, requested: int) -> int:
     """Clamp a requested signal length into a model's supported range."""
-    length = max(requested, MINIMUM_LENGTHS.get(model_name, 1))
-    return min(length, MAXIMUM_LENGTHS.get(model_name, length))
+    info = get_model_info(model_name)
+    length = max(requested, info.get("min_input_length") or 1)
+    maximum = info.get("max_input_length")
+    return min(length, maximum) if maximum else length
 
 
 def parse_args():

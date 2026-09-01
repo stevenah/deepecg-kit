@@ -1,14 +1,20 @@
-"""Evaluation artifact saving helpers for the CLI."""
+"""Writing evaluation artifacts: metrics CSV, predictions, and plots.
+
+This is the single evaluation-artifact writer. The train command uses it for
+its post-training test pass, and `deepecg evaluate -o` writes the same set,
+so the analysis pipeline can consume either kind of run directory:
+
+- classification_metrics.csv (one wide row, calibration columns included)
+- predictions.txt
+- confusion_matrix.png, calibration_curve.png, prediction_distribution.png
+"""
 
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
-from sklearn.calibration import calibration_curve
-from sklearn.metrics import confusion_matrix, precision_recall_fscore_support, roc_auc_score
+from sklearn.metrics import precision_recall_fscore_support, roc_auc_score
 
 from deepecgkit.cli.logger import CLILogger
 from deepecgkit.evaluation.calibration import calibration_report
@@ -21,6 +27,8 @@ from deepecgkit.evaluation.metrics import (
 from deepecgkit.evaluation.visualization import (
     plot_calibration_curve,
     plot_confusion_matrix,
+    plot_multilabel_calibration_curve,
+    plot_multilabel_confusion_matrices,
 )
 
 
@@ -28,11 +36,11 @@ def _calibration_columns(
     y_true: np.ndarray,
     y_prob: np.ndarray,
     logger: CLILogger,
-    val_targets: Optional[np.ndarray] = None,
-    val_logits: Optional[np.ndarray] = None,
-    test_logits: Optional[np.ndarray] = None,
+    val_targets: np.ndarray | None = None,
+    val_logits: np.ndarray | None = None,
+    test_logits: np.ndarray | None = None,
     n_bins: int = DEFAULT_CALIBRATION_BINS,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Compute calibration for the metrics row and report it to the console.
 
     The temperature is fitted on the validation split and every number is
@@ -88,18 +96,18 @@ def _calibration_columns(
     return report
 
 
-def _save_single_label_evaluation(
+def save_single_label_evaluation(
     y_true: np.ndarray,
     y_pred: np.ndarray,
     y_prob: np.ndarray,
     model_name: str,
     dataset_name: str,
-    class_names: Optional[list],
+    class_names: list | None,
     output_path: Path,
     logger: CLILogger,
-    val_targets: Optional[np.ndarray] = None,
-    val_logits: Optional[np.ndarray] = None,
-    test_logits: Optional[np.ndarray] = None,
+    val_targets: np.ndarray | None = None,
+    val_logits: np.ndarray | None = None,
+    test_logits: np.ndarray | None = None,
 ) -> None:
     """Save evaluation artifacts for single-label classification."""
     plot_confusion_matrix(
@@ -185,18 +193,18 @@ def _save_single_label_evaluation(
     logger.info(f"Classification metrics saved to {metrics_csv_path}")
 
 
-def _save_multi_label_evaluation(
+def save_multi_label_evaluation(
     y_true: np.ndarray,
     y_pred: np.ndarray,
     y_prob: np.ndarray,
     model_name: str,
     dataset_name: str,
-    class_names: Optional[list],
+    class_names: list | None,
     output_path: Path,
     logger: CLILogger,
-    val_targets: Optional[np.ndarray] = None,
-    val_logits: Optional[np.ndarray] = None,
-    test_logits: Optional[np.ndarray] = None,
+    val_targets: np.ndarray | None = None,
+    val_logits: np.ndarray | None = None,
+    test_logits: np.ndarray | None = None,
 ) -> None:
     """Save evaluation artifacts for multi-label classification."""
 
@@ -217,60 +225,22 @@ def _save_multi_label_evaluation(
             f.write(row + "\n")
     logger.info(f"Test predictions saved to {predictions_path}")
 
-    # Per-class binary confusion matrices
-    ncols = min(num_classes, 3)
-    nrows = (num_classes + ncols - 1) // ncols
-    fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 4 * nrows))
-    axes_flat = np.array(axes).flatten() if num_classes > 1 else [axes]
-
-    for i in range(num_classes):
-        cm = confusion_matrix(y_true[:, i], y_pred[:, i], labels=[0, 1])
-        sns.heatmap(
-            cm,
-            annot=True,
-            fmt="d",
-            cmap="Blues",
-            xticklabels=["Neg", "Pos"],
-            yticklabels=["Neg", "Pos"],
-            ax=axes_flat[i],
-        )
-        axes_flat[i].set_title(display_names[i])
-        axes_flat[i].set_ylabel("True")
-        axes_flat[i].set_xlabel("Predicted")
-
-    for i in range(num_classes, len(axes_flat)):
-        axes_flat[i].set_visible(False)
-
-    fig.suptitle(f"{model_name} on {dataset_name} - Per-Class Confusion Matrices")
-    fig.tight_layout()
-    fig.savefig(str(output_path / "confusion_matrix.png"), dpi=300, bbox_inches="tight")
-    plt.close(fig)
+    plot_multilabel_confusion_matrices(
+        y_true,
+        y_pred,
+        class_names=display_names,
+        title=f"{model_name} on {dataset_name} - Per-Class Confusion Matrices",
+        save_path=str(output_path / "confusion_matrix.png"),
+    )
     logger.info(f"Confusion matrices saved to {output_path / 'confusion_matrix.png'}")
 
-    # Calibration curves (per-class, using multi-hot targets directly)
-    plt.figure(figsize=(8, 6))
-    for i in range(num_classes):
-        if y_true[:, i].sum() == 0:
-            continue
-        try:
-            fraction_pos, mean_pred = calibration_curve(
-                y_true[:, i],
-                y_prob[:, i],
-                n_bins=10,
-                strategy="uniform",
-            )
-            plt.plot(mean_pred, fraction_pos, "s-", label=display_names[i])
-        except ValueError:
-            continue
-    plt.plot([0, 1], [0, 1], "k--", label="Perfectly calibrated")
-    plt.xlabel("Mean Predicted Probability")
-    plt.ylabel("Fraction of Positives")
-    plt.title(f"{model_name} on {dataset_name} - Calibration")
-    plt.legend(loc="lower right", fontsize="small")
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(str(output_path / "calibration_curve.png"), dpi=300, bbox_inches="tight")
-    plt.close()
+    plot_multilabel_calibration_curve(
+        y_true,
+        y_prob,
+        class_names=display_names,
+        title=f"{model_name} on {dataset_name} - Calibration",
+        save_path=str(output_path / "calibration_curve.png"),
+    )
     logger.info(f"Calibration curve saved to {output_path / 'calibration_curve.png'}")
 
     # Per-class metrics
@@ -331,3 +301,33 @@ def _save_multi_label_evaluation(
     metrics_csv_path = output_path / "classification_metrics.csv"
     metrics_df.to_csv(metrics_csv_path, index=False)
     logger.info(f"Classification metrics saved to {metrics_csv_path}")
+
+
+def save_evaluation(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    y_prob: np.ndarray,
+    model_name: str,
+    dataset_name: str,
+    class_names: list | None,
+    output_path: Path,
+    logger: CLILogger,
+    val_targets: np.ndarray | None = None,
+    val_logits: np.ndarray | None = None,
+    test_logits: np.ndarray | None = None,
+) -> None:
+    """Write the full evaluation artifact set, dispatching on the label shape."""
+    saver = save_multi_label_evaluation if y_true.ndim > 1 else save_single_label_evaluation
+    saver(
+        y_true,
+        y_pred,
+        y_prob,
+        model_name,
+        dataset_name,
+        class_names,
+        output_path,
+        logger,
+        val_targets=val_targets,
+        val_logits=val_logits,
+        test_logits=test_logits,
+    )

@@ -1,14 +1,16 @@
+from typing import ClassVar
+
 import torch
 from torch import nn
 
-from deepecgkit.models.pretrained import PretrainedMixin
+from deepecgkit.models.base import ECGModelBase
 from deepecgkit.registry import register_model
 
 
-def _init_cnn(m: nn.Module):
+def _init_cnn(m: nn.Module) -> None:
     if getattr(m, "bias", None) is not None:
         nn.init.constant_(m.bias, 0)
-    if isinstance(m, (nn.Conv1d, nn.Linear)):
+    if isinstance(m, nn.Conv1d | nn.Linear):
         nn.init.kaiming_normal_(m.weight)
     for child in m.children():
         _init_cnn(child)
@@ -83,7 +85,7 @@ class XResBlock(nn.Module):
     name="xresnet1d-benchmark",
     description="XResNet1d from PTB-XL benchmark (fixed feature dim, concat pooling)",
 )
-class XResNet1dBenchmark(PretrainedMixin, nn.Module):
+class XResNet1dBenchmark(ECGModelBase):
     """
     XResNet1d adapted from the PTB-XL benchmarking repository.
 
@@ -119,6 +121,8 @@ class XResNet1dBenchmark(PretrainedMixin, nn.Module):
         >>> features = model.extract_features(x)
         >>> print(features.shape)  # (32, 128) with concat_pooling
     """
+
+    HEAD_ATTR: ClassVar[str] = "head"
 
     def __init__(
         self,
@@ -200,29 +204,9 @@ class XResNet1dBenchmark(PretrainedMixin, nn.Module):
             ]
         )
 
-    @property
-    def feature_dim(self) -> int:
-        return self._feature_dim
-
     def extract_features(self, x: torch.Tensor) -> torch.Tensor:
         x = self.stem(x)
         x = self.stem_pool(x)
         x = self.res_layers(x)
         pooled = torch.cat([p(x) for p in self.pool], dim=1)
         return torch.flatten(pooled, 1)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.extract_features(x)
-        return self.head(x)
-
-
-def xresnet1d18_benchmark(**kwargs) -> XResNet1dBenchmark:
-    return XResNet1dBenchmark(expansion=1, layers=[2, 2, 2, 2], **kwargs)
-
-
-def xresnet1d50_benchmark(**kwargs) -> XResNet1dBenchmark:
-    return XResNet1dBenchmark(expansion=4, layers=[3, 4, 6, 3], **kwargs)
-
-
-def xresnet1d101_benchmark(**kwargs) -> XResNet1dBenchmark:
-    return XResNet1dBenchmark(expansion=4, layers=[3, 4, 23, 3], **kwargs)

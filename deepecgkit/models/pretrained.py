@@ -8,7 +8,7 @@ creating a cycle.
 """
 
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Type, TypeVar, Union
+from typing import Any, TypeVar
 
 import torch
 from torch import nn
@@ -28,7 +28,7 @@ _LIGHTNING_PREFIX = "model."
 _BUILD_KEYS = ("input_channels", "output_size")
 
 
-def _strip_lightning_prefix(state_dict: Dict[str, Any]) -> Dict[str, Any]:
+def _strip_lightning_prefix(state_dict: dict[str, Any]) -> dict[str, Any]:
     """Remove the wrapper prefix PyTorch Lightning adds to every weight key.
 
     Args:
@@ -43,7 +43,7 @@ def _strip_lightning_prefix(state_dict: Dict[str, Any]) -> Dict[str, Any]:
     return state_dict
 
 
-def _split_checkpoint(obj: Any) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def _split_checkpoint(obj: Any) -> tuple[dict[str, Any], dict[str, Any]]:
     """Separate model weights from any recorded build configuration.
 
     Three layouts are recognised: a bare state dict, a checkpoint written by
@@ -79,7 +79,7 @@ def _split_checkpoint(obj: Any) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     )
 
 
-def model_name_for_weights(weight_name: str) -> Optional[str]:
+def model_name_for_weights(weight_name: str) -> str | None:
     """Return the registry name of the model a set of pretrained weights targets.
 
     The weight registry records the model's class name while the model registry
@@ -117,9 +117,9 @@ class PretrainedMixin:
 
     @classmethod
     def from_pretrained(
-        cls: Type[T],
-        weights: Union[str, Path],
-        map_location: Optional[Union[str, torch.device]] = None,
+        cls: type[T],
+        weights: str | Path,
+        map_location: str | torch.device | None = None,
         force_download: bool = False,
         **kwargs: Any,
     ) -> T:
@@ -158,8 +158,8 @@ class PretrainedMixin:
 
 def from_pretrained(
     model_name: str,
-    weights: Union[str, Path],
-    map_location: Optional[Union[str, torch.device]] = None,
+    weights: str | Path,
+    map_location: str | torch.device | None = None,
     force_download: bool = False,
     **kwargs: Any,
 ) -> nn.Module:

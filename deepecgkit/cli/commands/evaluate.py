@@ -1,31 +1,33 @@
 """Evaluate command."""
 
-from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+import traceback
+from typing import Any
 
 import numpy as np
 import torch
 
-from deepecgkit.cli.logger import CLILogger
-from deepecgkit.cli.registry import (
-    DATASET_NAMES,
-    MODEL_NAMES,
-    _get_dataset_registry,
-    _get_model_registry,
+from deepecgkit.cli import defaults
+from deepecgkit.cli._common import (
+    build_data_module,
+    dataset_kwargs_for,
+    infer_input_channels_from,
+    prepare_output_dir,
+    require_dataset,
+    require_file,
+    require_model,
 )
+from deepecgkit.cli.logger import CLILogger
+from deepecgkit.cli.registry import DATASET_NAMES, MODEL_NAMES
+from deepecgkit.cli.run_dir import load_run_context, verify_split
 from deepecgkit.datasets import ECGDataModule
 from deepecgkit.evaluation.calibration import calibration_report
 from deepecgkit.evaluation.metrics import DEFAULT_CALIBRATION_BINS
+from deepecgkit.evaluation.report import save_evaluation
 from deepecgkit.models.factory import build_model_from_checkpoint
 from deepecgkit.training import ECGTrainer
 
-AF_DATASETS = {"mitbih-afdb", "ltafdb", "unified-af"}
-DEFAULT_SEED = 42
-DEFAULT_VAL_SPLIT = 0.2
-DEFAULT_TEST_SPLIT = 0.1
 
-
-def _read_train_config(checkpoint: str) -> Dict[str, Any]:
+def _read_train_config(checkpoint: str) -> dict[str, Any]:
     """Read the training configuration recorded in a checkpoint.
 
     Args:
@@ -43,10 +45,10 @@ def _read_train_config(checkpoint: str) -> Dict[str, Any]:
 
 def _dataset_kwargs_for_checkpoint(
     dataset_name: str,
-    train_config: Dict[str, Any],
+    train_config: dict[str, Any],
     force_download: bool,
-    data_dir: Optional[str],
-) -> Tuple[Dict[str, Any], bool]:
+    data_dir: str | None,
+) -> tuple[dict[str, Any], bool]:
     """Rebuild the dataset in the labelling mode the checkpoint was trained in.
 
     A checkpoint records whether it was trained multi-label or as a collapsed
@@ -67,21 +69,17 @@ def _dataset_kwargs_for_checkpoint(
     multi_label = bool(train_config.get("multi_label", False))
     binary_classification = bool(train_config.get("binary_classification", False))
 
-    kwargs: Dict[str, Any] = {"force_download": force_download}
-    if data_dir:
-        kwargs["data_dir"] = data_dir
-
-    if dataset_name == "ptbxl":
-        kwargs["task"] = "superclass"
-        kwargs["multi_label"] = multi_label
-
-    if dataset_name in AF_DATASETS:
-        kwargs["binary_classification"] = binary_classification
-
+    kwargs = dataset_kwargs_for(
+        dataset_name,
+        force_download=force_download,
+        data_dir=data_dir,
+        multi_label=multi_label,
+        binary_classification=binary_classification,
+    )
     return kwargs, multi_label
 
 
-def _check_target_shape(data_module: ECGDataModule, multi_label: bool) -> Optional[str]:
+def _check_target_shape(data_module: ECGDataModule, multi_label: bool) -> str | None:
     """Confirm the rebuilt dataset produces targets of the expected rank.
 
     Args:
@@ -103,7 +101,7 @@ def _check_target_shape(data_module: ECGDataModule, multi_label: bool) -> Option
     )
 
 
-def _collect_split(trainer: ECGTrainer, data_module: ECGDataModule, split: str) -> Tuple:
+def _collect_split(trainer: ECGTrainer, data_module: ECGDataModule, split: str) -> tuple:
     """Run one split and take a copy of the arrays it produced.
 
     ECGTrainer reuses a single set of buffers for every evaluation pass, so the
@@ -115,14 +113,14 @@ def _collect_split(trainer: ECGTrainer, data_module: ECGDataModule, split: str) 
         split: Either "test" or "val"
 
     Returns:
-        Tuple of (summary metrics, targets, probabilities, logits).
+        Tuple of (summary metrics, predictions, targets, probabilities, logits).
     """
     results = trainer.test(data_module) if split == "test" else trainer.validate(data_module)
-    _, targets, probabilities = trainer.get_test_results()
-    return results, targets, probabilities, trainer.get_test_logits()
+    predictions, targets, probabilities = trainer.get_test_results()
+    return results, predictions, targets, probabilities, trainer.get_test_logits()
 
 
-def _log_calibration(report: Dict[str, Any], n_bins: int, logger: CLILogger) -> None:
+def _log_calibration(report: dict[str, Any], n_bins: int, logger: CLILogger) -> None:
     """Print the calibration block, before and after temperature scaling.
 
     Args:
@@ -161,19 +159,20 @@ def evaluate(
     checkpoint: str,
     dataset_name: str,
     model_name: str,
-    data_dir: Optional[str] = None,
+    data_dir: str | None = None,
     batch_size: int = 32,
     num_workers: int = 4,
     accelerator: str = "auto",
     devices: int = 1,
     force_download: bool = False,
     split: str = "test",
-    seed: int = DEFAULT_SEED,
-    val_split: float = DEFAULT_VAL_SPLIT,
-    test_split: float = DEFAULT_TEST_SPLIT,
+    seed: int = defaults.SEED,
+    val_split: float = defaults.VAL_SPLIT,
+    test_split: float = defaults.TEST_SPLIT,
     calibration_bins: int = DEFAULT_CALIBRATION_BINS,
     calibrate: bool = True,
-    logger: Optional[CLILogger] = None,
+    output_dir: str | None = None,
+    logger: CLILogger | None = None,
 ) -> int:
     """Evaluate a trained model on a dataset.
 
@@ -201,6 +200,8 @@ def evaluate(
         calibration_bins: Bins for the calibration metrics
         calibrate: Whether to run the extra validation pass that fits a
             temperature
+        output_dir: When given, write the full artifact set (metrics CSV,
+            predictions, plots) into this directory
         logger: CLI logger
 
     Returns:
@@ -208,27 +209,41 @@ def evaluate(
     """
     logger = logger or CLILogger()
 
-    checkpoint_path = Path(checkpoint)
-    if not checkpoint_path.exists():
-        logger.error(f"Checkpoint not found: {checkpoint}")
-        return 1
-
-    dataset_registry = _get_dataset_registry()
-    model_registry = _get_model_registry()
-
-    if dataset_name not in dataset_registry:
-        logger.error(f"Unknown dataset: {dataset_name}")
-        logger.info(f"Available datasets: {', '.join(DATASET_NAMES)}")
-        return 1
-
-    if model_name not in model_registry:
-        logger.error(f"Unknown model: {model_name}")
-        logger.info(f"Available models: {', '.join(MODEL_NAMES)}")
-        return 1
+    for code in (
+        require_file(checkpoint, "Checkpoint", logger),
+        require_dataset(dataset_name, logger),
+        require_model(model_name, logger),
+    ):
+        if code is not None:
+            return code
 
     if split not in ("test", "val"):
         logger.error(f"Invalid split: {split}. Use 'test' or 'val'.")
         return 1
+
+    context = load_run_context(checkpoint)
+    if context.source != "none":
+        for attr, recorded, default in (
+            ("seed", context.seed, defaults.SEED),
+            ("val_split", context.val_split, defaults.VAL_SPLIT),
+            ("test_split", context.test_split, defaults.TEST_SPLIT),
+        ):
+            current = {"seed": seed, "val_split": val_split, "test_split": test_split}[attr]
+            if recorded is None or recorded == current:
+                continue
+            if current == default:
+                logger.info(f"Using {attr}={recorded} recorded in {context.run_dir}")
+                if attr == "seed":
+                    seed = recorded
+                elif attr == "val_split":
+                    val_split = recorded
+                else:
+                    test_split = recorded
+            else:
+                logger.warning(
+                    f"--{attr.replace('_', '-')} {current} differs from the recorded "
+                    f"training value {recorded}; the rebuilt split will not match training."
+                )
 
     try:
         train_config = _read_train_config(checkpoint)
@@ -242,27 +257,26 @@ def evaluate(
                 "or as a collapsed binary problem."
             )
 
-        logger.info(f"Creating data module with {dataset_name} dataset...")
-        data_module = ECGDataModule(
-            dataset_class=dataset_registry[dataset_name],
+        data_module = build_data_module(
+            dataset_name,
             batch_size=batch_size,
             num_workers=num_workers,
             val_split=val_split,
             test_split=test_split,
             seed=seed,
-            stratify=True,
-            download=True,
             dataset_kwargs=dataset_kwargs,
+            logger=logger,
         )
-        data_module.setup()
+
+        if context.run_dir is not None:
+            verify_split(data_module, context.run_dir, logger)
 
         mismatch = _check_target_shape(data_module, multi_label)
         if mismatch:
             logger.error(mismatch)
             return 1
 
-        sample_signal, _ = data_module.dataset[0]
-        input_channels = int(sample_signal.shape[0])
+        input_channels = infer_input_channels_from(data_module)
 
         logger.info(f"Loading model from {checkpoint}...")
         model, _ = build_model_from_checkpoint(
@@ -275,7 +289,7 @@ def evaluate(
         if calibrate and split != "val":
             logger.info("Running validation pass to fit calibration temperature...")
             try:
-                _, fit_targets, _, fit_logits = _collect_split(trainer, data_module, "val")
+                _, _, fit_targets, _, fit_logits = _collect_split(trainer, data_module, "val")
             except Exception as e:
                 logger.warning(f"Validation pass failed, so no temperature will be fitted: {e}")
                 fit_targets = None
@@ -287,7 +301,9 @@ def evaluate(
             )
 
         logger.info(f"Running evaluation on {split} split...")
-        results, targets, probabilities, logits = _collect_split(trainer, data_module, split)
+        results, predictions, targets, probabilities, logits = _collect_split(
+            trainer, data_module, split
+        )
 
         if results:
             logger.info("\nEvaluation Results:")
@@ -295,7 +311,23 @@ def evaluate(
             for key, value in results.items():
                 logger.info(f"  {key}: {value:.4f}")
 
-        if targets is not None and probabilities is not None:
+        if output_dir is not None and targets is not None and predictions is not None:
+            output_path = prepare_output_dir(output_dir)
+            class_names = getattr(data_module.dataset, "class_names", None)
+            save_evaluation(
+                targets,
+                predictions,
+                probabilities,
+                model_name,
+                dataset_name,
+                class_names,
+                output_path,
+                logger,
+                val_targets=fit_targets,
+                val_logits=fit_logits,
+                test_logits=logits,
+            )
+        elif targets is not None and probabilities is not None:
             report = calibration_report(
                 targets,
                 probabilities,
@@ -309,4 +341,135 @@ def evaluate(
         return 0
     except Exception as e:
         logger.error(f"Evaluation failed: {e}")
+        logger.debug(traceback.format_exc())
         return 1
+
+
+def add_parser(subparsers: Any) -> Any:
+    """Register the evaluate subcommand's arguments."""
+    parser = subparsers.add_parser("evaluate", help="Evaluate a trained model")
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        required=True,
+        help="Path to model checkpoint",
+    )
+    parser.add_argument(
+        "--model",
+        "-m",
+        type=str,
+        required=True,
+        choices=MODEL_NAMES,
+        help="Model architecture to load",
+    )
+    parser.add_argument(
+        "--dataset",
+        "-d",
+        type=str,
+        required=True,
+        choices=DATASET_NAMES,
+        help="Dataset to evaluate on",
+    )
+    parser.add_argument(
+        "--data-dir",
+        type=str,
+        default=None,
+        help="Directory containing the dataset",
+    )
+    parser.add_argument(
+        "--batch-size",
+        "-b",
+        type=int,
+        default=defaults.BATCH_SIZE,
+        help=f"Batch size (default: {defaults.BATCH_SIZE})",
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=defaults.NUM_WORKERS,
+        help=f"Number of data loading workers (default: {defaults.NUM_WORKERS})",
+    )
+    parser.add_argument(
+        "--accelerator",
+        type=str,
+        default=defaults.ACCELERATOR,
+        choices=defaults.ACCELERATOR_CHOICES,
+        help="Accelerator to use (default: auto)",
+    )
+    parser.add_argument(
+        "--devices",
+        type=int,
+        default=defaults.DEVICES,
+        help=f"Number of devices to use (default: {defaults.DEVICES})",
+    )
+    parser.add_argument(
+        "--force-download",
+        action="store_true",
+        help="Force re-download the dataset even if it exists",
+    )
+    parser.add_argument(
+        "--split",
+        type=str,
+        default="test",
+        choices=["test", "val"],
+        help="Dataset split to evaluate on (default: test)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=defaults.SEED,
+        help=f"Seed that produced the split during training (default: {defaults.SEED})",
+    )
+    parser.add_argument(
+        "--val-split",
+        type=float,
+        default=defaults.VAL_SPLIT,
+        help=f"Validation fraction used during training (default: {defaults.VAL_SPLIT})",
+    )
+    parser.add_argument(
+        "--test-split",
+        type=float,
+        default=defaults.TEST_SPLIT,
+        help=f"Test fraction used during training (default: {defaults.TEST_SPLIT})",
+    )
+    parser.add_argument(
+        "--calibration-bins",
+        type=int,
+        default=DEFAULT_CALIBRATION_BINS,
+        help=f"Bins for the calibration metrics (default: {DEFAULT_CALIBRATION_BINS})",
+    )
+    parser.add_argument(
+        "--no-calibration",
+        action="store_true",
+        help="Skip the validation pass that fits the temperature",
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        type=str,
+        default=None,
+        help="Directory to write metrics CSV, predictions and plots into (default: console only)",
+    )
+    parser.set_defaults(handler="evaluate", to_kwargs=_to_kwargs)
+    return parser
+
+
+def _to_kwargs(args: Any) -> dict[str, Any]:
+    return {
+        "checkpoint": args.checkpoint,
+        "dataset_name": args.dataset,
+        "model_name": args.model,
+        "data_dir": args.data_dir,
+        "batch_size": args.batch_size,
+        "num_workers": args.num_workers,
+        "accelerator": args.accelerator,
+        "devices": args.devices,
+        "force_download": args.force_download,
+        "split": args.split,
+        "seed": args.seed,
+        "val_split": args.val_split,
+        "test_split": args.test_split,
+        "calibration_bins": args.calibration_bins,
+        "calibrate": not args.no_calibration,
+        "output_dir": args.output,
+    }

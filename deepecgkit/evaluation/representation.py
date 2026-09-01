@@ -19,9 +19,10 @@ encoder.
 
 import json
 import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -72,7 +73,7 @@ PROBE_SAMPLING_RATE = 300
 PROBE_INPUT_CHANNELS = 1
 PROBE_SEGMENT_SECONDS = 10.0
 
-PROTOCOL_DATASET_KWARGS: Dict[str, Dict[str, Any]] = {"ptbxl": {"leads": ["II"]}}
+PROTOCOL_DATASET_KWARGS: dict[str, dict[str, Any]] = {"ptbxl": {"leads": ["II"]}}
 
 RANDOM_INIT_OUTPUT_SIZE = 2
 
@@ -104,7 +105,7 @@ KEEP_ALL = "all"
 KEEP_EMBEDDINGS_MODES = (KEEP_NONE, KEEP_DIAGONAL, KEEP_ALL)
 
 
-def _nan_metrics() -> Dict[str, float]:
+def _nan_metrics() -> dict[str, float]:
     """Return the metric dictionary used when a cell could not be scored.
 
     Returns:
@@ -132,23 +133,23 @@ class ProbeResult:
         note: Why a metric is missing, when one is
     """
 
-    metrics: Dict[str, float]
+    metrics: dict[str, float]
     metric: str = DEFAULT_PROBE_METRIC
-    task: Optional[str] = None
+    task: str | None = None
     n_train: int = 0
     n_test: int = 0
     feature_dim: int = 0
-    model_name: Optional[str] = None
-    source: Optional[str] = None
-    target: Optional[str] = None
-    note: Optional[str] = field(default=None)
+    model_name: str | None = None
+    source: str | None = None
+    target: str | None = None
+    note: str | None = field(default=None)
 
     @property
     def score(self) -> float:
         """Value of the headline metric."""
         return float(self.metrics.get(self.metric, float("nan")))
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Render the result as JSON-serialisable primitives.
 
         Returns:
@@ -199,7 +200,7 @@ def build_probe(
     return Pipeline([("scaler", StandardScaler()), ("probe", estimator)])
 
 
-def _as_arrays(data: Union[FeatureSet, Tuple[Any, Any]]) -> Tuple[np.ndarray, np.ndarray]:
+def _as_arrays(data: FeatureSet | tuple[Any, Any]) -> tuple[np.ndarray, np.ndarray]:
     """Normalise a FeatureSet or a (features, labels) pair to two arrays.
 
     Args:
@@ -220,7 +221,7 @@ def _as_arrays(data: Union[FeatureSet, Tuple[Any, Any]]) -> Tuple[np.ndarray, np
             )
         return np.asarray(data.features), np.asarray(data.labels)
 
-    if isinstance(data, (tuple, list)) and len(data) == 2:
+    if isinstance(data, tuple | list) and len(data) == 2:
         return np.asarray(data[0]), np.asarray(data[1])
 
     raise TypeError(
@@ -241,7 +242,7 @@ def _is_multilabel(labels: np.ndarray) -> bool:
     return labels.ndim > 1 and labels.shape[-1] > 1
 
 
-def _multilabel_metrics(y_true: np.ndarray, y_prob: np.ndarray) -> Dict[str, float]:
+def _multilabel_metrics(y_true: np.ndarray, y_prob: np.ndarray) -> dict[str, float]:
     """Score independent per-label sigmoids without collapsing them to one class.
 
     calculate_classification_metrics takes the argmax of any two-dimensional
@@ -267,8 +268,8 @@ def _multilabel_metrics(y_true: np.ndarray, y_prob: np.ndarray) -> Dict[str, flo
     except ValueError:
         pass
 
-    aurocs: List[float] = []
-    balanced: List[float] = []
+    aurocs: list[float] = []
+    balanced: list[float] = []
     for column in range(y_true.shape[1]):
         truth = y_true[:, column]
         if len(np.unique(truth)) < 2:
@@ -282,7 +283,7 @@ def _multilabel_metrics(y_true: np.ndarray, y_prob: np.ndarray) -> Dict[str, flo
     return metrics
 
 
-def _single_label_metrics(y_true: np.ndarray, y_prob: np.ndarray) -> Dict[str, float]:
+def _single_label_metrics(y_true: np.ndarray, y_prob: np.ndarray) -> dict[str, float]:
     """Score a class-index target against a probability matrix.
 
     Args:
@@ -308,7 +309,7 @@ def _single_label_metrics(y_true: np.ndarray, y_prob: np.ndarray) -> Dict[str, f
     return metrics
 
 
-def _probe_metrics(y_true: np.ndarray, y_prob: np.ndarray, task: str) -> Dict[str, float]:
+def _probe_metrics(y_true: np.ndarray, y_prob: np.ndarray, task: str) -> dict[str, float]:
     """Dispatch scoring on the resolved label shape.
 
     Args:
@@ -341,12 +342,12 @@ def _probe_probabilities(pipeline: Pipeline, features: np.ndarray) -> np.ndarray
 
 
 def linear_probe(
-    train: Union[FeatureSet, Tuple[Any, Any]],
-    test: Union[FeatureSet, Tuple[Any, Any]],
+    train: FeatureSet | tuple[Any, Any],
+    test: FeatureSet | tuple[Any, Any],
     metric: str = DEFAULT_PROBE_METRIC,
-    model_name: Optional[str] = None,
-    source: Optional[str] = None,
-    target: Optional[str] = None,
+    model_name: str | None = None,
+    source: str | None = None,
+    target: str | None = None,
     **probe_kwargs: Any,
 ) -> ProbeResult:
     """Fit a standardised logistic probe on training embeddings and score it on held-out ones.
@@ -424,8 +425,8 @@ def probe_encoder(
     train_split: str = "train",
     test_split: str = "test",
     metric: str = DEFAULT_PROBE_METRIC,
-    source: Optional[str] = None,
-    target: Optional[str] = None,
+    source: str | None = None,
+    target: str | None = None,
     **probe_kwargs: Any,
 ) -> ProbeResult:
     """Embed two splits of one data module with a frozen encoder and probe them.
@@ -481,15 +482,15 @@ class TransferMatrix:
         class_names: Class names per target, for labelling an embedding plot
     """
 
-    sources: List[str]
-    targets: List[str]
+    sources: list[str]
+    targets: list[str]
     values: np.ndarray
     metric: str = DEFAULT_PROBE_METRIC
-    results: Dict[str, ProbeResult] = field(default_factory=dict)
-    model_name: Optional[str] = None
-    protocol: Dict[str, Any] = field(default_factory=dict)
-    embeddings: Dict[str, FeatureSet] = field(default_factory=dict)
-    class_names: Dict[str, List[str]] = field(default_factory=dict)
+    results: dict[str, ProbeResult] = field(default_factory=dict)
+    model_name: str | None = None
+    protocol: dict[str, Any] = field(default_factory=dict)
+    embeddings: dict[str, FeatureSet] = field(default_factory=dict)
+    class_names: dict[str, list[str]] = field(default_factory=dict)
 
     def to_frame(self) -> pd.DataFrame:
         """Render the headline metric as a labelled table.
@@ -499,7 +500,7 @@ class TransferMatrix:
         """
         return pd.DataFrame(self.values, index=list(self.sources), columns=list(self.targets))
 
-    def embedding_for(self, source: str, target: str) -> Optional[FeatureSet]:
+    def embedding_for(self, source: str, target: str) -> FeatureSet | None:
         """Look up the retained held-out embeddings behind one cell.
 
         Args:
@@ -511,7 +512,7 @@ class TransferMatrix:
         """
         return self.embeddings.get(f"{source}{TRANSFER_KEY_SEPARATOR}{target}")
 
-    def result_for(self, source: str, target: str) -> Optional[ProbeResult]:
+    def result_for(self, source: str, target: str) -> ProbeResult | None:
         """Look up the full result behind one cell.
 
         Args:
@@ -523,7 +524,7 @@ class TransferMatrix:
         """
         return self.results.get(f"{source}{TRANSFER_KEY_SEPARATOR}{target}")
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Render the whole matrix as JSON-serialisable primitives.
 
         Returns:
@@ -540,7 +541,7 @@ class TransferMatrix:
             "cells": {key: result.to_dict() for key, result in self.results.items()},
         }
 
-    def save(self, path: Union[str, Path]) -> None:
+    def save(self, path: str | Path) -> None:
         """Write the matrix to disk, choosing the format from the suffix.
 
         Args:
@@ -569,7 +570,7 @@ class TransferMatrix:
 
 def protocol_data_module(
     dataset_name: str,
-    data_dir: Optional[str] = None,
+    data_dir: str | None = None,
     sampling_rate: int = PROBE_SAMPLING_RATE,
     batch_size: int = 32,
     num_workers: int = 0,
@@ -604,7 +605,7 @@ def protocol_data_module(
     Returns:
         A data module that has not yet been set up.
     """
-    dataset_kwargs: Dict[str, Any] = {
+    dataset_kwargs: dict[str, Any] = {
         "force_download": force_download,
         "verbose": verbose,
     }
@@ -674,15 +675,15 @@ def _keeps_embedding(mode: str, source: str, target: str) -> bool:
 
 
 def cross_dataset_transfer(
-    checkpoints: Dict[str, Union[str, Path]],
+    checkpoints: dict[str, str | Path],
     model_name: str,
-    targets: Optional[Sequence[str]] = None,
+    targets: Sequence[str] | None = None,
     input_channels: int = PROBE_INPUT_CHANNELS,
     metric: str = DEFAULT_PROBE_METRIC,
     include_random_init: bool = True,
-    data_modules: Optional[Dict[str, ECGDataModule]] = None,
+    data_modules: dict[str, ECGDataModule] | None = None,
     sampling_rate: int = PROBE_SAMPLING_RATE,
-    data_dir: Optional[str] = None,
+    data_dir: str | None = None,
     download: bool = True,
     force_download: bool = False,
     batch_size: int = 32,
@@ -761,14 +762,14 @@ def cross_dataset_transfer(
     if not resolved_targets:
         raise ValueError("No probe targets were given.")
 
-    extractor_kwargs: Dict[str, Any] = {
+    extractor_kwargs: dict[str, Any] = {
         "batch_size": batch_size,
         "device": device,
         "num_workers": num_workers,
         "progress": progress,
     }
 
-    modules: Dict[str, ECGDataModule] = dict(data_modules or {})
+    modules: dict[str, ECGDataModule] = dict(data_modules or {})
     for name in resolved_targets:
         if name in modules:
             continue
@@ -786,8 +787,8 @@ def cross_dataset_transfer(
             verbose=verbose,
         )
 
-    sources: List[str] = []
-    extractors: Dict[str, FeatureExtractor] = {}
+    sources: list[str] = []
+    extractors: dict[str, FeatureExtractor] = {}
     if include_random_init:
         sources.append(RANDOM_INIT)
         extractors[RANDOM_INIT] = _random_init_extractor(
@@ -803,9 +804,9 @@ def cross_dataset_transfer(
         )
 
     values = np.full((len(sources), len(resolved_targets)), np.nan, dtype=float)
-    results: Dict[str, ProbeResult] = {}
-    retained: Dict[str, FeatureSet] = {}
-    class_names: Dict[str, List[str]] = {}
+    results: dict[str, ProbeResult] = {}
+    retained: dict[str, FeatureSet] = {}
+    class_names: dict[str, list[str]] = {}
     for row, source in enumerate(sources):
         for column, target in enumerate(resolved_targets):
             module = modules[target]
@@ -861,7 +862,7 @@ def embed_2d(
     features: Any,
     method: str = "tsne",
     perplexity: float = DEFAULT_PERPLEXITY,
-    pca_components: Optional[int] = DEFAULT_PCA_COMPONENTS,
+    pca_components: int | None = DEFAULT_PCA_COMPONENTS,
     random_state: int = 42,
 ) -> np.ndarray:
     """Project embeddings to two dimensions for plotting.

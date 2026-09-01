@@ -2,8 +2,9 @@
 Data module for ECG datasets.
 """
 
+import logging
 import warnings
-from typing import Dict, Optional, Type, Union
+from collections.abc import Callable
 
 import numpy as np
 import torch
@@ -11,6 +12,8 @@ from torch.utils.data import DataLoader, Dataset
 
 from deepecgkit.datasets.base import BaseECGDataset
 from deepecgkit.datasets.splitting import DataSplitter
+
+logger = logging.getLogger(__name__)
 
 
 class ECGDataModule:
@@ -21,13 +24,13 @@ class ECGDataModule:
 
     def __init__(
         self,
-        dataset: Optional[Union[BaseECGDataset, Dataset]] = None,
-        dataset_class: Optional[Type[BaseECGDataset]] = None,
-        data_dir: Optional[str] = None,
+        dataset: BaseECGDataset | Dataset | None = None,
+        dataset_class: type[BaseECGDataset] | None = None,
+        data_dir: str | None = None,
         sampling_rate: int = 500,
-        leads: Optional[list] = None,
-        transform: Optional[callable] = None,
-        target_transform: Optional[callable] = None,
+        leads: list | None = None,
+        transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
+        target_transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
         download: bool = False,
         batch_size: int = 32,
         val_split: float = 0.2,
@@ -39,7 +42,7 @@ class ECGDataModule:
         persistent_workers: bool = True,
         prefetch_factor: int = 2,
         verbose: bool = True,
-        dataset_kwargs: Optional[Dict] = None,
+        dataset_kwargs: dict | None = None,
     ):
         """Initialize the ECG data module.
 
@@ -84,7 +87,7 @@ class ECGDataModule:
         self.val_dataset = None
         self.test_dataset = None
 
-    def setup(self, stage: Optional[str] = None):
+    def setup(self, stage: str | None = None) -> None:
         """Set up the datasets.
 
         Args:
@@ -134,9 +137,20 @@ class ECGDataModule:
                 # Check if we have enough samples per class for stratification
                 _, counts = np.unique(stratify_labels, return_counts=True)
                 if np.min(counts) < 2:
-                    stratify_labels = None  # Disable stratification
-            except Exception:
-                stratify_labels = None  # Fallback to no stratification
+                    warnings.warn(
+                        "Stratified splitting disabled: at least one class has fewer "
+                        "than 2 samples.",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+                    stratify_labels = None
+            except (RuntimeError, ValueError, TypeError, IndexError) as error:
+                warnings.warn(
+                    f"Stratified splitting disabled: could not collect labels ({error}).",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                stratify_labels = None
 
         # Extract groups for patient-level splitting (prevents data leakage)
         groups = None
@@ -153,7 +167,7 @@ class ECGDataModule:
             groups = np.array(group_ids)
             if self.verbose:
                 n_groups = len(np.unique(groups))
-                print(f"Using grouped splitting ({n_groups} groups)")
+                logger.info(f"Using grouped splitting ({n_groups} groups)")
         else:
             warnings.warn(
                 f"{type(self.dataset).__name__} exposes no group ids, so the split is "
@@ -175,9 +189,9 @@ class ECGDataModule:
         self.train_dataset, self.val_dataset, self.test_dataset = splitter.split()
 
         if self.verbose:
-            print(f"Dataset size: {len(self.train_dataset)}")
-            print(f"Validation set size: {len(self.val_dataset)}")
-            print(f"Test set size: {len(self.test_dataset)}")
+            logger.info(f"Dataset size: {len(self.train_dataset)}")
+            logger.info(f"Validation set size: {len(self.val_dataset)}")
+            logger.info(f"Test set size: {len(self.test_dataset)}")
 
     def train_dataloader(self) -> DataLoader:
         """Get the training data loader."""
@@ -221,7 +235,7 @@ class ECGDataModule:
             prefetch_factor=self.prefetch_factor if self.num_workers > 0 else None,
         )
 
-    def get_metadata(self) -> Dict:
+    def get_metadata(self) -> dict:
         """Get metadata about the dataset.
 
         Returns:
@@ -237,6 +251,6 @@ class ECGDataModule:
             "num_workers": self.num_workers,
         }
 
-    def print_metadata(self):
+    def print_metadata(self) -> None:
         """Print metadata about the dataset."""
         print(self.get_metadata())

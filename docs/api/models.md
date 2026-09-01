@@ -25,7 +25,7 @@ with a consistent interface: `__init__(input_channels, output_size, **kwargs)`.
 
 ::: deepecgkit.models.kanres_x.KanResWideX
 
-::: deepecgkit.models.kanres_wide_x.KanResDeepX
+::: deepecgkit.models.kanres_deep_x.KanResDeepX
 
 ::: deepecgkit.models.deep_res_cnn.DeepResCNN
 

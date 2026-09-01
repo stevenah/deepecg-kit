@@ -1,15 +1,16 @@
 import torch
 from torch import nn
 
-from deepecgkit.models.pretrained import PretrainedMixin
+from deepecgkit.models.base import ECGModelBase
 from deepecgkit.registry import register_model
 
 
 @register_model(
     name="fcn-wang",
     description="Fully Convolutional Network (Wang et al.) for time series classification",
+    min_input_length=2,
 )
-class FCNWang(PretrainedMixin, nn.Module):
+class FCNWang(ECGModelBase):
     """
     Fully Convolutional Network for ECG signal classification.
 
@@ -54,11 +55,15 @@ class FCNWang(PretrainedMixin, nn.Module):
         if kernel_sizes is None:
             kernel_sizes = [8, 5, 3]
 
-        assert len(filters) == len(kernel_sizes)
+        if len(filters) != len(kernel_sizes):
+            raise ValueError(
+                f"filters and kernel_sizes must have the same length, got "
+                f"{len(filters)} and {len(kernel_sizes)}"
+            )
 
         blocks = []
         in_ch = input_channels
-        for nf, ks in zip(filters, kernel_sizes):
+        for nf, ks in zip(filters, kernel_sizes, strict=False):
             blocks.append(
                 nn.Sequential(
                     nn.Conv1d(in_ch, nf, kernel_size=ks, padding=(ks - 1) // 2, bias=False),
@@ -74,16 +79,7 @@ class FCNWang(PretrainedMixin, nn.Module):
         self._feature_dim = filters[-1]
         self.classifier = nn.Linear(self._feature_dim, output_size)
 
-    @property
-    def feature_dim(self) -> int:
-        return self._feature_dim
-
     def extract_features(self, x: torch.Tensor) -> torch.Tensor:
         x = self.conv_blocks(x)
         x = self.global_pool(x)
         return torch.flatten(x, 1)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.extract_features(x)
-        x = self.dropout(x)
-        return self.classifier(x)

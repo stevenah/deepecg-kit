@@ -1,9 +1,9 @@
 import csv
 import os
-from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+from deepecgkit.utils.device import resolve_device
 from deepecgkit.utils.weights import (
     list_pretrained_weights,
     load_pretrained_weights,
@@ -15,6 +15,7 @@ __all__ = [
     "load_pretrained_weights",
     "read_csv",
     "register_weights",
+    "resolve_device",
 ]
 
 
@@ -23,8 +24,8 @@ def read_csv(
     delimiter: str = ",",
     transpose: bool = False,
     skip_header: bool = True,
-    dtype: Optional[type] = None,
-) -> Tuple[np.ndarray, Dict[str, int]]:
+    dtype: type | None = None,
+) -> tuple[np.ndarray, dict[str, int]]:
     """
     Read CSV file and return data array and header mapping.
 
@@ -41,8 +42,8 @@ def read_csv(
     if not os.path.exists(csv_file):
         raise FileNotFoundError(f"CSV file not found: {csv_file}")
 
-    data: List[List[str]] = []
-    header: Dict[str, int] = {}
+    data: list[list[str]] = []
+    header: dict[str, int] = {}
 
     try:
         with open(csv_file) as f:

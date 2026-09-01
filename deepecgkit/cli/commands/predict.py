@@ -1,48 +1,49 @@
 """Predict command."""
 
 import json
+import traceback
 from pathlib import Path
-from typing import Optional
+from typing import Any
 
 import torch
 
+from deepecgkit.cli import defaults
+from deepecgkit.cli._common import require_file, require_model
 from deepecgkit.cli.logger import CLILogger
-from deepecgkit.cli.registry import _get_model_registry
+from deepecgkit.cli.registry import MODEL_NAMES
 from deepecgkit.datasets.io import SUPPORTED_ECG_SUFFIXES, as_model_input, read_ecg_recording
 from deepecgkit.models.factory import build_model_from_checkpoint, infer_input_channels
+from deepecgkit.utils.device import resolve_device
 
 
 def predict(
     checkpoint: str,
     input_path: str,
-    output_path: Optional[str] = None,
+    output_path: str | None = None,
     batch_size: int = 1,
     accelerator: str = "auto",
-    model_name: Optional[str] = None,
-    logger: Optional[CLILogger] = None,
+    model_name: str | None = None,
+    logger: CLILogger | None = None,
 ) -> int:
     """Run inference on ECG data."""
     logger = logger or CLILogger()
 
-    checkpoint_file = Path(checkpoint)
-    if not checkpoint_file.exists():
-        logger.error(f"Checkpoint not found: {checkpoint}")
-        return 1
+    for code in (
+        require_file(checkpoint, "Checkpoint", logger),
+        require_file(input_path, "Input file", logger),
+    ):
+        if code is not None:
+            return code
 
     input_file = Path(input_path)
-    if not input_file.exists():
-        logger.error(f"Input file not found: {input_path}")
-        return 1
 
     try:
         if model_name is None:
             logger.error("--model is required for predict command")
             return 1
 
-        model_registry = _get_model_registry()
-        if model_name not in model_registry:
-            logger.error(f"Unknown model: {model_name}")
-            return 1
+        if (code := require_model(model_name, logger)) is not None:
+            return code
 
         if input_file.suffix not in SUPPORTED_ECG_SUFFIXES:
             logger.error(f"Unsupported input format: {input_file.suffix}")
@@ -76,7 +77,7 @@ def predict(
         tensor = torch.tensor(data, dtype=torch.float32)
 
         logger.info("Running inference...")
-        device = "cuda" if accelerator == "gpu" and torch.cuda.is_available() else "cpu"
+        device = resolve_device(accelerator)
         model = model.to(device)
         tensor = tensor.to(device)
 
@@ -110,10 +111,73 @@ def predict(
         else:
             logger.info("\nPrediction Results:")
             logger.info("-" * 40)
-            for i, (pred, prob) in enumerate(zip(results["predictions"], results["probabilities"])):
+            for i, (pred, prob) in enumerate(
+                zip(results["predictions"], results["probabilities"], strict=False)
+            ):
                 logger.info(f"  Sample {i}: class={pred}, confidence={max(prob):.4f}")
 
         return 0
     except Exception as e:
         logger.error(f"Prediction failed: {e}")
+        logger.debug(traceback.format_exc())
         return 1
+
+
+def add_parser(subparsers: Any) -> Any:
+    """Register the predict subcommand's arguments."""
+    parser = subparsers.add_parser("predict", help="Run inference on ECG data")
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        required=True,
+        help="Path to model checkpoint",
+    )
+    parser.add_argument(
+        "--model",
+        "-m",
+        type=str,
+        required=True,
+        choices=MODEL_NAMES,
+        help="Model architecture to load",
+    )
+    parser.add_argument(
+        "--input",
+        "-i",
+        type=str,
+        required=True,
+        help="Path to input ECG file (.npy, .csv, or WFDB .dat/.hea)",
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        type=str,
+        default=None,
+        help="Path to save predictions (JSON format)",
+    )
+    parser.add_argument(
+        "--batch-size",
+        "-b",
+        type=int,
+        default=1,
+        help="Batch size (default: 1)",
+    )
+    parser.add_argument(
+        "--accelerator",
+        type=str,
+        default=defaults.ACCELERATOR,
+        choices=defaults.ACCELERATOR_CHOICES,
+        help="Accelerator to use (default: auto)",
+    )
+    parser.set_defaults(handler="predict", to_kwargs=_to_kwargs)
+    return parser
+
+
+def _to_kwargs(args: Any) -> dict[str, Any]:
+    return {
+        "checkpoint": args.checkpoint,
+        "input_path": args.input,
+        "output_path": args.output,
+        "batch_size": args.batch_size,
+        "accelerator": args.accelerator,
+        "model_name": args.model,
+    }

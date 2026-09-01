@@ -3,8 +3,8 @@ Pytest configuration and fixtures for deepecgkit tests.
 """
 
 import tempfile
+from collections.abc import Generator
 from pathlib import Path
-from typing import Generator, Tuple
 
 import numpy as np
 import pytest
@@ -186,7 +186,7 @@ def _sample_from_rows(probabilities: np.ndarray, rng) -> np.ndarray:
 
 
 @pytest.fixture
-def calibrated_multiclass_predictions() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def calibrated_multiclass_predictions() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Four-class predictions whose labels were drawn from the predictions themselves.
 
     A model whose labels come from its own predicted distribution is calibrated
@@ -200,7 +200,7 @@ def calibrated_multiclass_predictions() -> Tuple[np.ndarray, np.ndarray, np.ndar
 
 
 @pytest.fixture
-def overconfident_multiclass_predictions() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def overconfident_multiclass_predictions() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """The calibrated four-class predictions sharpened by a known factor.
 
     The labels are unchanged and only the logits are multiplied, so the
@@ -214,7 +214,7 @@ def overconfident_multiclass_predictions() -> Tuple[np.ndarray, np.ndarray, np.n
 
 
 @pytest.fixture
-def calibrated_binary_predictions() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def calibrated_binary_predictions() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Single-logit binary predictions stored as the two columns [1 - p, p].
 
     This is the layout ECGTrainer produces for the binary_classification flag,
@@ -228,7 +228,7 @@ def calibrated_binary_predictions() -> Tuple[np.ndarray, np.ndarray, np.ndarray]
 
 
 @pytest.fixture
-def overconfident_binary_predictions() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def overconfident_binary_predictions() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """The calibrated binary predictions sharpened by a known factor."""
     rng = np.random.default_rng(CALIBRATION_SEED + 1)
     logits = rng.normal(0.0, CALIBRATION_LOGIT_SCALE, size=CALIBRATION_SAMPLES)
@@ -239,7 +239,7 @@ def overconfident_binary_predictions() -> Tuple[np.ndarray, np.ndarray, np.ndarr
 
 
 @pytest.fixture
-def calibrated_multilabel_predictions() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def calibrated_multilabel_predictions() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Five independent sigmoid outputs with multi-hot targets, as PTB-XL produces."""
     rng = np.random.default_rng(CALIBRATION_SEED + 2)
     logits = rng.normal(0.0, CALIBRATION_LOGIT_SCALE, size=(CALIBRATION_SAMPLES, 5))
@@ -249,7 +249,7 @@ def calibrated_multilabel_predictions() -> Tuple[np.ndarray, np.ndarray, np.ndar
 
 
 @pytest.fixture
-def overconfident_multilabel_predictions() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def overconfident_multilabel_predictions() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """The calibrated multi-label predictions sharpened by a known factor."""
     rng = np.random.default_rng(CALIBRATION_SEED + 2)
     logits = rng.normal(0.0, CALIBRATION_LOGIT_SCALE, size=(CALIBRATION_SAMPLES, 5))
@@ -268,7 +268,7 @@ PROBE_CLASS_MARGIN = 3.0
 PROBE_FEATURE_SCALES = (1.0, 1e6, 1e-3, 1.0, 1e4, 1.0, 1e-2, 1.0)
 
 
-def _scaled_separable(n_samples: int, rng) -> Tuple[np.ndarray, np.ndarray]:
+def _scaled_separable(n_samples: int, rng) -> tuple[np.ndarray, np.ndarray]:
     """Draw features whose class is linearly readable but whose columns differ in scale."""
     labels = rng.integers(0, PROBE_CLASSES, size=n_samples)
     features = rng.normal(0.0, 1.0, size=(n_samples, PROBE_WIDTH))
@@ -277,7 +277,7 @@ def _scaled_separable(n_samples: int, rng) -> Tuple[np.ndarray, np.ndarray]:
 
 
 @pytest.fixture
-def probe_features() -> Tuple[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray]]:
+def probe_features() -> tuple[tuple[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]]:
     """Train and test embeddings whose four classes are linearly separable.
 
     The columns span six orders of magnitude, which is the regime that makes
@@ -288,8 +288,8 @@ def probe_features() -> Tuple[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, n
 
 
 @pytest.fixture
-def probe_features_multilabel() -> Tuple[
-    Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray]
+def probe_features_multilabel() -> tuple[
+    tuple[np.ndarray, np.ndarray], tuple[np.ndarray, np.ndarray]
 ]:
     """Train and test embeddings with five independent labels, as PTB-XL produces.
 
@@ -299,7 +299,7 @@ def probe_features_multilabel() -> Tuple[
     rng = np.random.default_rng(PROBE_SEED + 1)
     basis = rng.normal(0.0, 1.0, size=(PROBE_LABELS, PROBE_WIDTH))
 
-    def draw(n_samples: int) -> Tuple[np.ndarray, np.ndarray]:
+    def draw(n_samples: int) -> tuple[np.ndarray, np.ndarray]:
         labels = (rng.random((n_samples, PROBE_LABELS)) < 0.4).astype(int)
         features = labels @ basis * 2.0 + rng.normal(0.0, 0.5, size=(n_samples, PROBE_WIDTH))
         return features, labels

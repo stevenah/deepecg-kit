@@ -1,111 +1,79 @@
-
-
-
-.PHONY: help install install-dev test test-cov lint format clean build check version bump-patch bump-minor bump-major release-patch release-minor release-major publish publish-test docs-install docs-serve docs-build docs-clean
+.PHONY: help install install-pip test test-cov lint typecheck check fix dev clean clean-all \
+	build version bump-patch bump-minor bump-major release-patch release-minor release-major \
+	docs-serve docs-build docs-clean
 
 .DEFAULT_GOAL := help
 
-PYTHON := python
 PACKAGE := deepecgkit
 
-help: 
-	@awk 'BEGIN {FS = ":.*?
+help: ## Show this help
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_ -]+:.*?## / {sub(/ .*/, "", $$1); printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-install: 
-	pip install -e .
+install: ## Install package + dev tools (uv)
+	uv sync --group dev
 
-install-dev: 
+install-pip: ## Editable install for non-uv users
 	pip install -e ".[dev]"
 
-test:
-	uv run pytest tests/ -v
+test: ## Run test suite
+	uv run pytest
 
-test-cov:
-	uv run pytest tests/ -v --cov=$(PACKAGE) --cov-report=term-missing
+test-cov: ## Run tests with coverage report
+	uv run pytest --cov --cov-report=term-missing
 
-lint: 
-	ruff check . --fix
+lint: ## Ruff lint + format check (read-only)
+	uv run ruff check .
+	uv run ruff format --check .
 
-format: 
-	ruff format .
+typecheck: ## mypy (advisory until annotations land)
+	uv run mypy $(PACKAGE)
 
-check: lint format
+check: lint test ## Read-only gate, mirrors CI
 
-clean: 
-	rm -rf build/ dist/ *.egg-info/ .pytest_cache/ .coverage htmlcov/ .mypy_cache/ .ruff_cache/
-	find . -name __pycache__ -exec rm -rf {} +
-	find . -name "*.pyc" -delete
+fix: ## Auto-fix lint issues and format code
+	uv run ruff check . --fix
+	uv run ruff format .
 
-build: clean
-	$(PYTHON) -m build
+dev: install fix test ## Setup + fix + test
 
-publish: build ## Upload to PyPI
-	twine upload dist/*
+clean: ## Remove build artifacts and caches (skips .venv)
+	rm -rf build/ dist/ *.egg-info/ .pytest_cache/ .coverage .coverage.* htmlcov/ .mypy_cache/ .ruff_cache/
+	find . -name .venv -prune -o -name __pycache__ -type d -print0 | xargs -0 rm -rf
+	find . -name .venv -prune -o -name "*.pyc" -type f -print0 | xargs -0 rm -f
 
-publish-test: build ## Upload to TestPyPI
-	twine upload --repository testpypi dist/*
+clean-all: clean docs-clean ## Also remove stale Lightning-era checkpoints/ (not runs/ or data)
+	rm -rf checkpoints/
 
-dev: install-dev check test
+build: ## Build sdist + wheel
+	uv build
 
-docs-install:
-	uv sync --group docs
+version: ## Print current version
+	@grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2
 
-docs-serve: docs-install
-	uv run mkdocs serve
+bump-patch bump-minor bump-major: bump-%: ## Bump version and refresh lockfile
+	@V=$$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2) && \
+	MAJOR=$$(echo $$V | cut -d. -f1) && MINOR=$$(echo $$V | cut -d. -f2) && PATCH=$$(echo $$V | cut -d. -f3) && \
+	case "$*" in \
+	  patch) NEW="$$MAJOR.$$MINOR.$$((PATCH + 1))";; \
+	  minor) NEW="$$MAJOR.$$((MINOR + 1)).0";; \
+	  major) NEW="$$((MAJOR + 1)).0.0";; \
+	esac && \
+	sed -i.bak "s/^version = \"$$V\"/version = \"$$NEW\"/" pyproject.toml && rm pyproject.toml.bak && \
+	uv lock && echo "$$V -> $$NEW"
 
-docs-build: docs-install
-	uv run mkdocs build
+release-patch release-minor release-major: release-%: check bump-% ## Tag and push a release (CI publishes)
+	@V=$$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2) && \
+	git add pyproject.toml uv.lock && \
+	git commit -m "Release v$$V" && \
+	git tag -a "v$$V" -m "Release v$$V" && \
+	git push && git push --tags && \
+	echo "Released v$$V — release workflow publishes the GitHub release and PyPI package"
 
-docs-clean:
+docs-serve: ## Serve docs locally with live reload
+	uv run --group docs mkdocs serve
+
+docs-build: ## Build docs (strict)
+	uv run --group docs mkdocs build --strict
+
+docs-clean: ## Remove built docs
 	rm -rf site/
-
-version:
-	@grep -m1 'version = ' pyproject.toml | cut -d'"' -f2
-
-bump-patch:
-	@V=$$(grep -m1 'version = ' pyproject.toml | cut -d'"' -f2) && \
-	MAJOR=$$(echo $$V | cut -d. -f1) && \
-	MINOR=$$(echo $$V | cut -d. -f2) && \
-	PATCH=$$(echo $$V | cut -d. -f3) && \
-	NEW="$$MAJOR.$$MINOR.$$((PATCH + 1))" && \
-	sed -i.bak "s/version = \"$$V\"/version = \"$$NEW\"/" pyproject.toml && rm pyproject.toml.bak && \
-	echo "$$V → $$NEW"
-
-bump-minor:
-	@V=$$(grep -m1 'version = ' pyproject.toml | cut -d'"' -f2) && \
-	MAJOR=$$(echo $$V | cut -d. -f1) && \
-	MINOR=$$(echo $$V | cut -d. -f2) && \
-	NEW="$$MAJOR.$$((MINOR + 1)).0" && \
-	sed -i.bak "s/version = \"$$V\"/version = \"$$NEW\"/" pyproject.toml && rm pyproject.toml.bak && \
-	echo "$$V → $$NEW"
-
-bump-major:
-	@V=$$(grep -m1 'version = ' pyproject.toml | cut -d'"' -f2) && \
-	MAJOR=$$(echo $$V | cut -d. -f1) && \
-	NEW="$$((MAJOR + 1)).0.0" && \
-	sed -i.bak "s/version = \"$$V\"/version = \"$$NEW\"/" pyproject.toml && rm pyproject.toml.bak && \
-	echo "$$V → $$NEW"
-
-release-patch: check test bump-patch
-	@V=$$(grep -m1 'version = ' pyproject.toml | cut -d'"' -f2) && \
-	git add pyproject.toml && \
-	git commit -m "Release v$$V" && \
-	git tag -a "v$$V" -m "Release v$$V" && \
-	git push && git push --tags && \
-	echo "Released v$$V"
-
-release-minor: check test bump-minor
-	@V=$$(grep -m1 'version = ' pyproject.toml | cut -d'"' -f2) && \
-	git add pyproject.toml && \
-	git commit -m "Release v$$V" && \
-	git tag -a "v$$V" -m "Release v$$V" && \
-	git push && git push --tags && \
-	echo "Released v$$V"
-
-release-major: check test bump-major
-	@V=$$(grep -m1 'version = ' pyproject.toml | cut -d'"' -f2) && \
-	git add pyproject.toml && \
-	git commit -m "Release v$$V" && \
-	git tag -a "v$$V" -m "Release v$$V" && \
-	git push && git push --tags && \
-	echo "Released v$$V"

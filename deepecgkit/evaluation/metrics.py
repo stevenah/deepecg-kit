@@ -2,8 +2,9 @@
 Evaluation metrics for ECG models.
 """
 
+import logging
 import warnings
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import numpy as np
 from sklearn.metrics import (
@@ -17,6 +18,8 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 
+logger = logging.getLogger(__name__)
+
 BINARY_THRESHOLD = 0.5
 MULTICLASS_THRESHOLD = 2
 
@@ -29,6 +32,21 @@ BINNING_QUANTILE = "quantile"
 
 DEFAULT_CALIBRATION_BINS = 15
 CALIBRATION_METRIC_NAMES = ("ece", "adaptive_ece", "mce", "brier")
+
+#: Keys emitted by calibration_report: the four binned metrics, the fitted
+#: temperature, and the rescaled variants. The evaluator's report rows and the
+#: analysis pipeline's expected columns both derive from this.
+CALIBRATION_REPORT_KEYS = (
+    "ece",
+    "adaptive_ece",
+    "mce",
+    "brier",
+    "temperature",
+    "ece_temp",
+    "adaptive_ece_temp",
+    "mce_temp",
+    "brier_temp",
+)
 
 
 def resolve_average(y_true: np.ndarray, average: str = "auto") -> str:
@@ -54,9 +72,9 @@ def resolve_average(y_true: np.ndarray, average: str = "auto") -> str:
 def calculate_classification_metrics(
     y_true: np.ndarray,
     y_pred: np.ndarray,
-    metrics: Optional[List[str]] = None,
+    metrics: list[str] | None = None,
     average: str = "auto",
-) -> Dict[str, float]:
+) -> dict[str, float]:
     """
     Calculate classification metrics.
 
@@ -94,7 +112,7 @@ def calculate_classification_metrics(
     n_classes = len(np.unique(y_true))
     avg = resolve_average(y_true, average)
 
-    def _compute_metric(metric):
+    def _compute_metric(metric: str) -> Any:
         result = np.nan
         if metric == "accuracy":
             result = accuracy_score(y_true, y_pred_labels)
@@ -123,13 +141,13 @@ def calculate_classification_metrics(
         try:
             results[metric] = _compute_metric(metric)
         except Exception as e:
-            print(f"Warning: Could not compute {metric}: {e}")
+            logger.warning(f"Could not compute {metric}: {e}")
             results[metric] = np.nan
 
     return results
 
 
-def resolve_task_shape(y_true: np.ndarray, y_prob: np.ndarray, task: Optional[str] = None) -> str:
+def resolve_task_shape(y_true: np.ndarray, y_prob: np.ndarray, task: str | None = None) -> str:
     """Resolve which of the three prediction shapes produced these arrays.
 
     ECGTrainer emits exactly three shapes and the correct calibration
@@ -244,7 +262,7 @@ def _calibration_error(
     return float(np.sum(weights * gaps)), float(np.max(gaps))
 
 
-def _decision_streams(y_true: np.ndarray, y_prob: np.ndarray, shape: str) -> List[tuple]:
+def _decision_streams(y_true: np.ndarray, y_prob: np.ndarray, shape: str) -> list[tuple]:
     """Split predictions into the binary decision streams calibration scores.
 
     For multi-class and binary problems this is the single top-label stream of
@@ -278,8 +296,8 @@ def _calibration_errors(
     y_prob: np.ndarray,
     n_bins: int,
     strategy: str,
-    task: Optional[str],
-) -> Dict[str, Any]:
+    task: str | None,
+) -> dict[str, Any]:
     """Expected and maximum calibration error, with per-class detail.
 
     Args:
@@ -325,7 +343,7 @@ def expected_calibration_error(
     y_true: np.ndarray,
     y_prob: np.ndarray,
     n_bins: int = DEFAULT_CALIBRATION_BINS,
-    task: Optional[str] = None,
+    task: str | None = None,
 ) -> float:
     """Expected calibration error over equal-width probability bins.
 
@@ -355,7 +373,7 @@ def adaptive_calibration_error(
     y_true: np.ndarray,
     y_prob: np.ndarray,
     n_bins: int = DEFAULT_CALIBRATION_BINS,
-    task: Optional[str] = None,
+    task: str | None = None,
 ) -> float:
     """Expected calibration error over equal-mass probability bins.
 
@@ -385,7 +403,7 @@ def maximum_calibration_error(
     y_true: np.ndarray,
     y_prob: np.ndarray,
     n_bins: int = DEFAULT_CALIBRATION_BINS,
-    task: Optional[str] = None,
+    task: str | None = None,
 ) -> float:
     """Largest confidence-accuracy gap across equal-width bins.
 
@@ -407,7 +425,7 @@ def maximum_calibration_error(
     return _calibration_errors(y_true, y_prob, n_bins, BINNING_UNIFORM, task)["mce"]
 
 
-def brier_score(y_true: np.ndarray, y_prob: np.ndarray, task: Optional[str] = None) -> float:
+def brier_score(y_true: np.ndarray, y_prob: np.ndarray, task: str | None = None) -> float:
     """Mean squared error of the predicted probability vector.
 
     Two conventions are in use and this function applies the one that is
@@ -447,8 +465,8 @@ def calculate_calibration_metrics(
     y_true: np.ndarray,
     y_prob: np.ndarray,
     n_bins: int = DEFAULT_CALIBRATION_BINS,
-    task: Optional[str] = None,
-) -> Dict[str, Any]:
+    task: str | None = None,
+) -> dict[str, Any]:
     """Calculate every calibration metric in one pass.
 
     The bin count and resolved task shape are returned alongside the values
@@ -466,11 +484,11 @@ def calculate_calibration_metrics(
         keys "n_bins" and "task", and for multi-label inputs the per-class
         arrays "per_class_ece", "per_class_mce" and "per_class_brier".
     """
-    results: Dict[str, Any] = {"n_bins": int(n_bins), "task": None}
+    results: dict[str, Any] = {"n_bins": int(n_bins), "task": None}
     try:
         results["task"] = resolve_task_shape(y_true, y_prob, task)
     except ValueError as error:
-        print(f"Warning: Could not resolve task shape: {error}")
+        logger.warning(f"Could not resolve task shape: {error}")
         for name in CALIBRATION_METRIC_NAMES:
             results[name] = np.nan
         return results
@@ -483,7 +501,7 @@ def calculate_calibration_metrics(
             results["per_class_ece"] = uniform["per_class_ece"]
             results["per_class_mce"] = uniform["per_class_mce"]
     except Exception as error:
-        print(f"Warning: Could not compute ece: {error}")
+        logger.warning(f"Could not compute ece: {error}")
         results["ece"] = np.nan
         results["mce"] = np.nan
 
@@ -492,7 +510,7 @@ def calculate_calibration_metrics(
             y_true, y_prob, n_bins=n_bins, task=results["task"]
         )
     except Exception as error:
-        print(f"Warning: Could not compute adaptive_ece: {error}")
+        logger.warning(f"Could not compute adaptive_ece: {error}")
         results["adaptive_ece"] = np.nan
 
     try:
@@ -502,15 +520,15 @@ def calculate_calibration_metrics(
             targets = np.asarray(y_true, dtype=float)
             results["per_class_brier"] = ((matrix - targets) ** 2).mean(axis=0)
     except Exception as error:
-        print(f"Warning: Could not compute brier: {error}")
+        logger.warning(f"Could not compute brier: {error}")
         results["brier"] = np.nan
 
     return results
 
 
 def calculate_regression_metrics(
-    y_true: np.ndarray, y_pred: np.ndarray, metrics: Optional[List[str]] = None
-) -> Dict[str, float]:
+    y_true: np.ndarray, y_pred: np.ndarray, metrics: list[str] | None = None
+) -> dict[str, float]:
     """
     Calculate regression metrics.
 
@@ -538,13 +556,13 @@ def calculate_regression_metrics(
             elif metric == "rmse":
                 results[metric] = np.sqrt(mean_squared_error(y_true, y_pred))
         except Exception as e:
-            print(f"Warning: Could not compute {metric}: {e}")
+            logger.warning(f"Could not compute {metric}: {e}")
             results[metric] = np.nan
 
     return results
 
 
-def confusion_matrix_analysis(y_true: np.ndarray, y_pred: np.ndarray) -> Dict[str, Any]:
+def confusion_matrix_analysis(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, Any]:
     """
     Detailed confusion matrix analysis.
 
