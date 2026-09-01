@@ -114,6 +114,57 @@ Exactly one weight source (`--checkpoint` or `--weights`) and one data source (`
 Output format follows the extension: `.npz` keeps features, labels and metadata; `.npy` stores
 features only; `.csv` writes columns `f0..fN` plus a label column.
 
+### `deepecg explain`
+
+Attribute a model's predictions back to the signal and write the arrays and figures to a directory.
+See [Explainability](explainability.md) for what the numbers mean.
+
+```bash
+deepecg explain --checkpoint model.ckpt -m kanres -d af-classification -o explanations/
+deepecg explain --checkpoint model.ckpt -m kanres -i ecg.npy -o explanations/ \
+    --method integrated-gradients --ig-steps 128
+deepecg explain -w kanres-af-30s -m kanres -i ecg.npy -o explanations/ --no-plots
+```
+
+Exactly one weight source (`--checkpoint` or `--weights`) and one data source (`--dataset` or
+`--input`) are required, as with `extract-features`. Unlike `extract-features`, `--output` is a
+directory rather than a file.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--checkpoint` | *one required* | Path to a model checkpoint |
+| `--weights`, `-w` | *one required* | Pretrained weight name or path to a weights file |
+| `--dataset`, `-d` | *one required* | Dataset to explain predictions on |
+| `--input`, `-i` | *one required* | Input ECG file (`.npy`, `.csv`, WFDB `.dat`/`.hea`) |
+| `--model`, `-m` | *required* | Model architecture |
+| `--output`, `-o` | *required* | Output directory, created if absent |
+| `--method` | `saliency` | `saliency`, `integrated-gradients`, or `occlusion` |
+| `--target-class` | predicted class | Class index to explain, or `all` |
+| `--sampling-rate` | 500 | Sampling rate in Hz, used to place the beat windows |
+| `--max-samples` | 8 | Maximum number of recordings to explain |
+| `--ig-steps` | 64 | Path steps, integrated gradients only |
+| `--occlusion-window` | 100 | Occlusion window in samples, occlusion only |
+| `--occlusion-stride` | 50 | Occlusion stride in samples, occlusion only |
+| `--detect-lead` | second lead | Lead index R-peaks are detected on |
+| `--no-plots` | false | Write the arrays and summary only |
+| `--data-dir` | None | Directory containing the dataset |
+| `--split` | `test` | Split to explain: `train`, `val`, `test`, `all` |
+| `--batch-size`, `-b` | 8 | Batch size |
+| `--num-workers` | 4 | Data loading workers |
+| `--accelerator` | auto | Device: `auto`, `cpu`, `gpu`, `mps` |
+| `--input-channels` | auto | Lead count, for models whose weights do not encode it |
+| `--force-download` | false | Force re-download the dataset |
+
+The output directory receives `attribution.npz` (the attribution, the signal the model saw, the lead
+distribution and the beat profile), `summary.json` (the run's provenance and headline numbers), and,
+unless `--no-plots` is given, `signal_attribution.png`, `lead_importance.png` and
+`beat_profile.png`. The beat figure is skipped with a warning when no complete beats were detected.
+
+`--max-samples` defaults to 8 because attribution is expensive: integrated gradients costs
+`--ig-steps` forward and backward passes per recording, and occlusion costs one forward pass per
+window per lead. `--target-class all` multiplies the whole run by the class count and stores the
+result under an extra leading axis in `values_by_class`.
+
 ### `deepecg resume`
 
 Resume training from a checkpoint.

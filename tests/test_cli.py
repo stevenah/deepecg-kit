@@ -23,6 +23,7 @@ from deepecgkit.cli import (
     _get_dataset_registry,
     _get_model_registry,
     evaluate,
+    explain,
     list_datasets,
     list_models,
     load_config,
@@ -973,3 +974,317 @@ class TestExtractFeaturesCommand:
         assert loaded["features"].shape == (6, 64)
         assert int(loaded["feature_dim"]) == 64
         assert str(loaded["model_name"]) == "kanres"
+
+
+class TestExplainCommand:
+    """Test the explain command."""
+
+    def _checkpoint(self, temp_dir, leads=1, output_size=4):
+        """Write a kanres checkpoint the command can load."""
+        path = temp_dir / "m.ckpt"
+        model = build_model("kanres", input_channels=leads, output_size=output_size)
+        torch.save(
+            {
+                "model_state_dict": model.state_dict(),
+                "model_config": {
+                    "name": "kanres",
+                    "input_channels": leads,
+                    "output_size": output_size,
+                },
+                "train_config": {},
+            },
+            str(path),
+        )
+        return path
+
+    def _recording(self, temp_dir, leads=1, length=3000, samples=1):
+        """Write a synthetic ECG with detectable beats to a .npy file."""
+        time = np.arange(length) / 500.0
+        trace = np.zeros(length)
+        index = 0
+        while index + 0.5 < length / 500.0:
+            centre = index + 0.5
+            for offset, amplitude, width in (
+                (-0.20, 0.12, 0.020),
+                (0.0, 1.00, 0.008),
+                (0.22, 0.25, 0.040),
+            ):
+                trace += amplitude * np.exp(-((time - (centre + offset)) ** 2) / (2 * width**2))
+            index += 1
+        batch = np.stack([np.stack([trace] * leads) for _ in range(samples)])
+        path = temp_dir / "in.npy"
+        np.save(str(path), batch)
+        return path
+
+    def test_missing_weight_source(self):
+        """Neither a checkpoint nor pretrained weights is a usage error."""
+        with pytest.raises(SystemExit):
+            main(["explain", "-m", "kanres", "-i", "in.npy", "-o", "out"])
+
+    def test_missing_data_source(self):
+        """Neither a dataset nor an input file is a usage error."""
+        with pytest.raises(SystemExit):
+            main(["explain", "--checkpoint", "m.ckpt", "-m", "kanres", "-o", "out"])
+
+    def test_missing_output(self):
+        """The output directory is required."""
+        with pytest.raises(SystemExit):
+            main(["explain", "--checkpoint", "m.ckpt", "-m", "kanres", "-i", "in.npy"])
+
+    def test_checkpoint_and_weights_are_exclusive(self):
+        """Only one weight source may be given."""
+        with pytest.raises(SystemExit):
+            main(
+                [
+                    "explain",
+                    "--checkpoint",
+                    "m.ckpt",
+                    "-w",
+                    "kanres-af-30s",
+                    "-m",
+                    "kanres",
+                    "-i",
+                    "in.npy",
+                    "-o",
+                    "out",
+                ]
+            )
+
+    def test_dataset_and_input_are_exclusive(self):
+        """Only one data source may be given."""
+        with pytest.raises(SystemExit):
+            main(
+                [
+                    "explain",
+                    "--checkpoint",
+                    "m.ckpt",
+                    "-m",
+                    "kanres",
+                    "-d",
+                    "af-classification",
+                    "-i",
+                    "in.npy",
+                    "-o",
+                    "out",
+                ]
+            )
+
+    def test_an_unknown_method_is_rejected_by_argparse(self):
+        """The method list is enforced at parse time."""
+        with pytest.raises(SystemExit):
+            main(
+                [
+                    "explain",
+                    "--checkpoint",
+                    "m.ckpt",
+                    "-m",
+                    "kanres",
+                    "-i",
+                    "in.npy",
+                    "-o",
+                    "out",
+                    "--method",
+                    "gradcam",
+                ]
+            )
+
+    def test_checkpoint_not_found(self, capsys, temp_dir):
+        """A missing checkpoint exits non-zero with a clear message."""
+        exit_code = explain(
+            output_dir=str(temp_dir / "out"),
+            model_name="kanres",
+            checkpoint=str(temp_dir / "absent.ckpt"),
+            input_path=str(self._recording(temp_dir)),
+        )
+
+        assert exit_code == 1
+        assert "Checkpoint not found" in capsys.readouterr().err
+
+    def test_input_not_found(self, capsys, temp_dir):
+        """A missing input file exits non-zero with a clear message."""
+        exit_code = explain(
+            output_dir=str(temp_dir / "out"),
+            model_name="kanres",
+            checkpoint=str(self._checkpoint(temp_dir)),
+            input_path=str(temp_dir / "absent.npy"),
+        )
+
+        assert exit_code == 1
+        assert "Input file not found" in capsys.readouterr().err
+
+    def test_unknown_model_is_reported(self, capsys, temp_dir):
+        """An unregistered model name is refused before any work."""
+        exit_code = explain(
+            output_dir=str(temp_dir / "out"),
+            model_name="not-a-model",
+            checkpoint=str(self._checkpoint(temp_dir)),
+            input_path=str(self._recording(temp_dir)),
+        )
+
+        assert exit_code == 1
+        assert "Unknown model" in capsys.readouterr().err
+
+    def test_invalid_target_class_is_rejected(self, capsys, temp_dir):
+        """A target that is neither an integer nor 'all' is named."""
+        exit_code = explain(
+            output_dir=str(temp_dir / "out"),
+            model_name="kanres",
+            checkpoint=str(self._checkpoint(temp_dir)),
+            input_path=str(self._recording(temp_dir)),
+            target_class="middle",
+        )
+
+        assert exit_code == 1
+        assert "must be an integer or 'all'" in capsys.readouterr().err
+
+    def test_non_positive_max_samples_is_rejected(self, capsys, temp_dir):
+        """Explaining zero recordings is a usage error, not an empty result."""
+        exit_code = explain(
+            output_dir=str(temp_dir / "out"),
+            model_name="kanres",
+            checkpoint=str(self._checkpoint(temp_dir)),
+            input_path=str(self._recording(temp_dir)),
+            max_samples=0,
+        )
+
+        assert exit_code == 1
+        assert "--max-samples must be at least 1" in capsys.readouterr().err
+
+    def test_a_signal_too_short_for_the_model_is_explained(self, capsys, temp_dir):
+        """AFModel's floor is reported with the reason cropping cannot fix it."""
+        path = temp_dir / "af.ckpt"
+        model = build_model("afmodel", input_channels=1, output_size=4)
+        torch.save(
+            {
+                "model_state_dict": model.state_dict(),
+                "model_config": {"name": "afmodel", "input_channels": 1, "output_size": 4},
+                "train_config": {},
+            },
+            str(path),
+        )
+
+        exit_code = explain(
+            output_dir=str(temp_dir / "out"),
+            model_name="afmodel",
+            checkpoint=str(path),
+            input_path=str(self._recording(temp_dir)),
+            accelerator="cpu",
+        )
+
+        assert exit_code == 1
+        assert "needs at least 7971" in capsys.readouterr().err
+
+    def test_end_to_end_writes_every_artifact(self, temp_dir):
+        """A checkpoint and a .npy file produce arrays, a summary and three plots."""
+        output_dir = temp_dir / "out"
+
+        exit_code = main(
+            [
+                "--quiet",
+                "explain",
+                "--checkpoint",
+                str(self._checkpoint(temp_dir)),
+                "-m",
+                "kanres",
+                "-i",
+                str(self._recording(temp_dir)),
+                "-o",
+                str(output_dir),
+                "--accelerator",
+                "cpu",
+                "--sampling-rate",
+                "500",
+            ]
+        )
+
+        assert exit_code == 0
+        for name in (
+            "attribution.npz",
+            "summary.json",
+            "signal_attribution.png",
+            "lead_importance.png",
+            "beat_profile.png",
+        ):
+            assert (output_dir / name).stat().st_size > 0
+
+        loaded = np.load(str(output_dir / "attribution.npz"), allow_pickle=False)
+        assert loaded["values"].shape == (1, 1, 3000)
+        assert loaded["signal"].shape == (1, 1, 3000)
+        assert str(loaded["method"]) == "saliency"
+
+        summary = json.loads((output_dir / "summary.json").read_text())
+        assert summary["model_name"] == "kanres"
+        assert summary["target_class"] == "predicted"
+        assert sum(summary["lead_importance"].values()) == pytest.approx(1.0, abs=1e-5)
+        assert summary["beat_count"] > 0
+        assert set(summary["pqrst_fractions"]) == {"P", "QRS", "T", "baseline"}
+
+    def test_no_plots_writes_only_the_arrays_and_summary(self, temp_dir):
+        """The figures are skipped on request."""
+        output_dir = temp_dir / "out"
+
+        exit_code = main(
+            [
+                "--quiet",
+                "explain",
+                "--checkpoint",
+                str(self._checkpoint(temp_dir)),
+                "-m",
+                "kanres",
+                "-i",
+                str(self._recording(temp_dir)),
+                "-o",
+                str(output_dir),
+                "--accelerator",
+                "cpu",
+                "--no-plots",
+            ]
+        )
+
+        assert exit_code == 0
+        assert (output_dir / "attribution.npz").exists()
+        assert (output_dir / "summary.json").exists()
+        assert not (output_dir / "signal_attribution.png").exists()
+
+    def test_target_class_all_adds_a_class_axis(self, temp_dir):
+        """Every class is attributed and stored under its own axis."""
+        output_dir = temp_dir / "out"
+
+        exit_code = main(
+            [
+                "--quiet",
+                "explain",
+                "--checkpoint",
+                str(self._checkpoint(temp_dir)),
+                "-m",
+                "kanres",
+                "-i",
+                str(self._recording(temp_dir)),
+                "-o",
+                str(output_dir),
+                "--accelerator",
+                "cpu",
+                "--no-plots",
+                "--target-class",
+                "all",
+            ]
+        )
+
+        assert exit_code == 0
+        loaded = np.load(str(output_dir / "attribution.npz"), allow_pickle=False)
+        assert loaded["values_by_class"].shape == (4, 1, 1, 3000)
+        assert json.loads((output_dir / "summary.json").read_text())["target_class"] == "all"
+
+    def test_explain_defaults_are_forwarded(self):
+        """The parser hands the command the documented defaults."""
+        with patch("deepecgkit.cli.explain") as mock_explain:
+            mock_explain.return_value = 0
+            main(["explain", "--checkpoint", "m.ckpt", "-m", "kanres", "-i", "in.npy", "-o", "out"])
+
+        call_kwargs = mock_explain.call_args[1]
+        assert call_kwargs["method"] == "saliency"
+        assert call_kwargs["max_samples"] == 8
+        assert call_kwargs["ig_steps"] == 64
+        assert call_kwargs["sampling_rate"] == 500.0
+        assert call_kwargs["plots"] is True
+        assert call_kwargs["target_class"] is None

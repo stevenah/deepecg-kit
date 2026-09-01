@@ -45,6 +45,7 @@ nav:
       - Evaluation: user-guide/evaluation.md
       - Calibration: user-guide/calibration.md
       - Feature Extraction: user-guide/feature-extraction.md
+      - Explainability: user-guide/explainability.md
   - Examples:
       - Basic Training: examples/train-basic.md
       - Advanced Training: examples/train-advanced.md
@@ -56,6 +57,7 @@ nav:
       - training: api/training.md
       - evaluation: api/evaluation.md
       - features: api/features.md
+      - explainability: api/explainability.md
       - registry: api/registry.md
       - utils: api/utils.md
 
