@@ -39,6 +39,9 @@ metrics = calculate_classification_metrics(y_true, y_prob)
 
 Returns a dictionary with: `accuracy`, `precision`, `recall`, `f1`, `auc`, `mcc`.
 
+Calibration is measured separately with `calculate_calibration_metrics`; see
+[Calibration](calibration.md).
+
 ### Regression Metrics
 
 ```python
@@ -96,6 +99,8 @@ from deepecgkit.evaluation import plot_calibration_curve
 
 plot_calibration_curve(y_true, y_prob, save_dir="plots/")
 ```
+
+For numeric calibration measurement and temperature scaling, see [Calibration](calibration.md).
 
 ### ECG Signal Visualization
 

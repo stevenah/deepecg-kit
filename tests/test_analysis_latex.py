@@ -7,6 +7,7 @@ import pytest
 
 from deepecgkit.analysis.aggregation import aggregate_runs
 from deepecgkit.analysis.latex import (
+    LOWER_IS_BETTER,
     MISSING_CELL,
     display_dataset,
     display_model,
@@ -196,3 +197,71 @@ class TestTables:
         for path in written:
             assert path.endswith(".tex")
             assert "\\toprule" in (temp_dir / "out" / path.split("/")[-1]).read_text()
+
+
+class TestCalibrationTableOrdering:
+    """Test that lower-is-better metrics are not ranked upside down."""
+
+    def test_calibration_metrics_are_marked_lower_is_better(self):
+        """Ranking by ECE ascending is the difference between best and worst first."""
+        assert "ece" in LOWER_IS_BETTER
+        assert "brier" in LOWER_IS_BETTER
+        assert "f1" not in LOWER_IS_BETTER
+
+    def test_calibration_table_leads_with_the_best_calibrated_model(self):
+        """The first row of an ECE table must be the model with the lowest ECE."""
+        runs = pd.DataFrame(
+            [
+                {
+                    "run_dir": f"r{index}",
+                    "model": model,
+                    "dataset": "ptbxl",
+                    "seed": seed,
+                    "averaging": "macro",
+                    "multi_label": False,
+                    "n_train": 100,
+                    "n_val": 20,
+                    "n_test": 20,
+                    "n_test_groups": 20,
+                    "metric": "ece",
+                    "value": value,
+                }
+                for index, (model, seed, value) in enumerate(
+                    [("resnet", 1, 0.30), ("resnet", 2, 0.32), ("crnn", 1, 0.05), ("crnn", 2, 0.07)]
+                )
+            ]
+        )
+
+        table = results_table(aggregate_runs(runs), "ptbxl", metrics=("ece",))
+        body = table.split(r"\midrule")[1]
+
+        assert body.index("CRNN") < body.index("ResNet1D")
+
+    def test_discrimination_table_still_leads_with_the_highest_score(self):
+        """Flipping the sort for calibration must not flip it for F1."""
+        runs = pd.DataFrame(
+            [
+                {
+                    "run_dir": f"r{index}",
+                    "model": model,
+                    "dataset": "ptbxl",
+                    "seed": seed,
+                    "averaging": "macro",
+                    "multi_label": False,
+                    "n_train": 100,
+                    "n_val": 20,
+                    "n_test": 20,
+                    "n_test_groups": 20,
+                    "metric": "f1",
+                    "value": value,
+                }
+                for index, (model, seed, value) in enumerate(
+                    [("resnet", 1, 0.30), ("resnet", 2, 0.32), ("crnn", 1, 0.85), ("crnn", 2, 0.87)]
+                )
+            ]
+        )
+
+        table = results_table(aggregate_runs(runs), "ptbxl", metrics=("f1",))
+        body = table.split(r"\midrule")[1]
+
+        assert body.index("CRNN") < body.index("ResNet1D")

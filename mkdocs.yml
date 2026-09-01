@@ -43,6 +43,7 @@ nav:
       - Datasets: user-guide/datasets.md
       - Model Zoo: user-guide/model-zoo.md
       - Evaluation: user-guide/evaluation.md
+      - Calibration: user-guide/calibration.md
       - Feature Extraction: user-guide/feature-extraction.md
   - Examples:
       - Basic Training: examples/train-basic.md

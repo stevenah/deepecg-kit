@@ -242,6 +242,19 @@ def train(
             progress_bar=not logger.quiet,
         )
 
+        val_targets = None
+        val_logits = None
+        if data_module.val_dataset is not None and len(data_module.val_dataset) > 0:
+            try:
+                logger.info("Running validation pass to fit calibration temperature...")
+                trainer.validate(data_module)
+                _, val_targets, _ = trainer.get_test_results()
+                val_logits = trainer.get_test_logits()
+            except Exception as e:
+                logger.warning(f"Validation pass failed, so no temperature will be fitted: {e}")
+                val_targets = None
+                val_logits = None
+
         if data_module.test_dataset is not None and len(data_module.test_dataset) > 0:
             logger.info("Running test evaluation...")
             trainer.test(data_module)
@@ -267,6 +280,7 @@ def train(
             logger.warning(f"Training curve plotting failed: {e}")
 
         y_pred, y_true, y_prob = trainer.get_test_results()
+        test_logits = trainer.get_test_logits()
 
         if y_pred is not None:
             is_multi_label = y_true.ndim > 1
@@ -281,6 +295,9 @@ def train(
                     class_names,
                     output_path,
                     logger,
+                    val_targets=val_targets,
+                    val_logits=val_logits,
+                    test_logits=test_logits,
                 )
             else:
                 _save_single_label_evaluation(
@@ -292,6 +309,9 @@ def train(
                     class_names,
                     output_path,
                     logger,
+                    val_targets=val_targets,
+                    val_logits=val_logits,
+                    test_logits=test_logits,
                 )
         elif data_module.test_dataset is not None and len(data_module.test_dataset) > 0:
             raise RuntimeError(

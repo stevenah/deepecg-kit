@@ -10,12 +10,27 @@ import torch
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import KFold
 
+from deepecgkit.evaluation.calibration import calibration_report
 from deepecgkit.evaluation.metrics import (
+    DEFAULT_CALIBRATION_BINS,
     calculate_classification_metrics,
     calculate_regression_metrics,
 )
 
 MAX_CLASSIFICATION_CLASSES = 20
+
+CALIBRATION_ROW_ORDER = (
+    "ece",
+    "adaptive_ece",
+    "mce",
+    "brier",
+    "temperature",
+    "ece_temp",
+    "adaptive_ece_temp",
+    "mce_temp",
+    "brier_temp",
+    "calibration_bins",
+)
 
 
 class ECGEvaluator:
@@ -29,6 +44,9 @@ class ECGEvaluator:
         metrics: List of metrics to compute
         task_type: Type of task ("classification", "regression", "auto")
         device: Device for model evaluation
+        calibration_bins: Number of bins for the calibration metrics reported
+            by generate_report. ECE depends on this, so the value is emitted
+            alongside the metrics rather than left implicit.
 
     Examples:
         >>> evaluator = ECGEvaluator(metrics=["accuracy", "auc", "f1"])
@@ -40,9 +58,13 @@ class ECGEvaluator:
         metrics: Optional[List[str]] = None,
         task_type: str = "auto",
         device: str = "auto",
+        calibration_bins: int = DEFAULT_CALIBRATION_BINS,
     ):
         self.metrics = metrics or ["accuracy", "precision", "recall", "f1", "auc"]
         self.task_type = task_type
+        self.calibration_bins = calibration_bins
+        self.y_scores = None
+        self.y_true = None
 
         if device == "auto":
             self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -72,6 +94,7 @@ class ECGEvaluator:
         self.y_scores = y_scores
 
         predictions, targets = self._process_input_data(model, test_data)
+        self.y_true = targets
         metrics = self._calculate_metrics(predictions, targets)
 
         if return_predictions:
@@ -213,6 +236,54 @@ class ECGEvaluator:
             pred = pred.cpu().numpy()
         return pred, np.zeros(len(pred))
 
+    def _calibration_rows(
+        self, predictions: np.ndarray, calibration_fit: Optional[tuple]
+    ) -> List[Dict[str, Any]]:
+        """Build the calibration rows appended to the report.
+
+        Rows whose value is unavailable are omitted rather than emitted as NaN,
+        so a report produced without a fitting split simply carries no
+        temperature rows instead of carrying empty ones.
+
+        Args:
+            predictions: Model output for the evaluated split, used as the
+                probability matrix when no explicit y_scores were supplied
+            calibration_fit: Optional (targets, logits) pair from the
+                validation split, used to fit the temperature
+
+        Returns:
+            A list of {"Metric", "Value"} rows, possibly empty.
+        """
+        if self.y_true is None:
+            return []
+
+        scores = self.y_scores if self.y_scores is not None else predictions
+        if scores is None:
+            return []
+
+        fit_targets, fit_logits = calibration_fit or (None, None)
+        try:
+            report = calibration_report(
+                self.y_true,
+                scores,
+                n_bins=self.calibration_bins,
+                fit_targets=fit_targets,
+                fit_logits=fit_logits,
+            )
+        except Exception as error:
+            print(f"Warning: Could not compute calibration metrics: {error}")
+            return []
+
+        rows: List[Dict[str, Any]] = []
+        for name in CALIBRATION_ROW_ORDER:
+            value = report.get(name)
+            if value is None:
+                continue
+            if isinstance(value, float) and np.isnan(value):
+                continue
+            rows.append({"Metric": name, "Value": value})
+        return rows
+
     def _detect_task_type(self, targets: np.ndarray) -> str:
         """Detect whether task is classification or regression."""
         if targets is None:
@@ -338,15 +409,27 @@ class ECGEvaluator:
         test_data: Any,
         save_path: Optional[str] = None,
         y_scores: Optional[np.ndarray] = None,
+        calibration_fit: Optional[tuple] = None,
     ) -> pd.DataFrame:
         """
         Generate comprehensive evaluation report.
+
+        Calibration is always reported: expected calibration error, its
+        equal-mass variant, maximum calibration error and the Brier score. Pass
+        calibration_fit to additionally fit a temperature and report what
+        rescaling recovers, which adds a "temperature" row and the "_temp"
+        counterparts of each calibration metric.
 
         Args:
             model: Trained model
             test_data: Test dataset
             save_path: Path to save report (optional)
             y_scores: Scores/probabilities for AUC calculation (optional)
+            calibration_fit: Optional (targets, logits) pair from a held-out
+                validation split, used to fit the temperature. Never pass the
+                split being reported on. Callers holding probabilities rather
+                than logits can convert with
+                deepecgkit.evaluation.probabilities_to_logits.
 
         Returns:
             DataFrame with evaluation results
@@ -354,9 +437,9 @@ class ECGEvaluator:
 
         results = self.evaluate(model, test_data, return_predictions=True, y_scores=y_scores)
         if isinstance(results, tuple):
-            metrics_dict = results[0]
+            metrics_dict, predictions = results[0], results[1]
         else:
-            metrics_dict = results
+            metrics_dict, predictions = results, None
 
         try:
             bootstrap_results = self.bootstrap_evaluate(model, test_data)
@@ -382,6 +465,8 @@ class ECGEvaluator:
                     )
 
                 report_data.append(row)
+
+        report_data.extend(self._calibration_rows(predictions, calibration_fit))
 
         report_df = pd.DataFrame(report_data)
 

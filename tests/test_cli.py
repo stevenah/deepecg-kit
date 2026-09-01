@@ -32,6 +32,10 @@ from deepecgkit.cli import (
     show_info,
     train,
 )
+from deepecgkit.cli.commands.evaluate import (
+    _dataset_kwargs_for_checkpoint,
+    _read_train_config,
+)
 from deepecgkit.models.factory import build_model
 
 predict_module = sys.modules["deepecgkit.cli.commands.predict"]
@@ -534,6 +538,73 @@ class TestEvaluateFunction:
         assert result == 1
         captured = capsys.readouterr()
         assert "Unknown dataset" in captured.err
+
+
+class TestEvaluateCalibrationWiring:
+    """Test how the evaluate command reconstructs a checkpoint's task shape."""
+
+    def test_multi_label_checkpoint_rebuilds_ptbxl_multi_label(self):
+        """PTB-XL must be rebuilt multi-label or its targets come back the wrong rank."""
+        kwargs, multi_label = _dataset_kwargs_for_checkpoint(
+            "ptbxl", {"multi_label": True}, False, None
+        )
+
+        assert multi_label is True
+        assert kwargs["multi_label"] is True
+        assert kwargs["task"] == "superclass"
+
+    def test_binary_checkpoint_rebuilds_af_dataset_collapsed(self):
+        """A one-logit head was trained against collapsed AF labels."""
+        kwargs, multi_label = _dataset_kwargs_for_checkpoint(
+            "mitbih-afdb", {"binary_classification": True}, False, None
+        )
+
+        assert multi_label is False
+        assert kwargs["binary_classification"] is True
+
+    def test_multiclass_checkpoint_asks_for_no_special_labelling(self):
+        """The four-class case needs no flags, which is why it worked before."""
+        kwargs, multi_label = _dataset_kwargs_for_checkpoint("af-classification", {}, False, None)
+
+        assert multi_label is False
+        assert "multi_label" not in kwargs
+        assert "binary_classification" not in kwargs
+
+    def test_data_dir_and_force_download_are_forwarded(self):
+        """The flags that already worked must keep working."""
+        kwargs, _ = _dataset_kwargs_for_checkpoint("ptbxl", {}, True, "/data/ptbxl")
+
+        assert kwargs["force_download"] is True
+        assert kwargs["data_dir"] == "/data/ptbxl"
+
+    def test_train_config_is_recovered_from_a_checkpoint(self, temp_dir):
+        """The shape flags come from the checkpoint, so no new CLI flags are needed."""
+        path = temp_dir / "model.pt"
+        torch.save({"train_config": {"multi_label": True}, "model_state_dict": {}}, path)
+
+        assert _read_train_config(str(path)) == {"multi_label": True}
+
+    def test_checkpoint_without_train_config_reads_as_empty(self, temp_dir):
+        """A bare state dict must not crash the shape lookup."""
+        path = temp_dir / "bare.pt"
+        torch.save({"model_state_dict": {}}, path)
+
+        assert _read_train_config(str(path)) == {}
+
+    def test_invalid_split_is_rejected(self, temp_dir, capsys):
+        """An unusable split should fail before any dataset work happens."""
+        checkpoint_file = temp_dir / "model.ckpt"
+        checkpoint_file.touch()
+
+        result = evaluate(
+            checkpoint=str(checkpoint_file),
+            dataset_name="af-classification",
+            model_name="kanres",
+            split="train",
+        )
+
+        assert result == 1
+        assert "Invalid split" in capsys.readouterr().err
 
 
 class TestPredictFunction:

@@ -137,6 +137,59 @@ class TestECGTrainer:
             assert output_gpu.device.type == "cuda"
 
 
+class TestTrainerLogitCapture:
+    """Test that raw logits survive an evaluation pass."""
+
+    def _loader(self, signals, labels):
+        dataset = torch.utils.data.TensorDataset(signals, labels)
+        return torch.utils.data.DataLoader(dataset, batch_size=2)
+
+    def test_no_logits_before_any_evaluation(self):
+        """A trainer that has evaluated nothing has nothing to hand back."""
+        trainer = TestECGTrainer()._make_trainer()
+
+        assert trainer.get_test_logits() is None
+
+    def test_logits_are_captured_alongside_probabilities(self, sample_batch_ecg_10s, sample_labels):
+        """Temperature scaling needs the logits, not the probabilities they became."""
+        trainer = TestECGTrainer()._make_trainer()
+        loader = self._loader(sample_batch_ecg_10s, sample_labels)
+
+        trainer._evaluate_loader(loader)
+        logits = trainer.get_test_logits()
+        _, _, probabilities = trainer.get_test_results()
+
+        assert logits is not None
+        assert logits.shape == (len(sample_labels), 4)
+        assert logits.shape == probabilities.shape
+
+    def test_captured_logits_reproduce_the_stored_probabilities(
+        self, sample_batch_ecg_10s, sample_labels
+    ):
+        """The captured logits must be the ones the probabilities came from."""
+        trainer = TestECGTrainer()._make_trainer()
+        loader = self._loader(sample_batch_ecg_10s, sample_labels)
+
+        trainer._evaluate_loader(loader)
+        logits = torch.from_numpy(trainer.get_test_logits())
+        _, _, probabilities = trainer.get_test_results()
+
+        assert torch.allclose(
+            torch.softmax(logits, dim=1), torch.from_numpy(probabilities), atol=1e-6
+        )
+
+    def test_a_second_pass_replaces_the_first(self, sample_batch_ecg_10s, sample_labels):
+        """Buffers are reused, so results must be copied out between splits."""
+        trainer = TestECGTrainer()._make_trainer()
+        full = self._loader(sample_batch_ecg_10s, sample_labels)
+        partial = self._loader(sample_batch_ecg_10s[:2], sample_labels[:2])
+
+        trainer._evaluate_loader(full)
+        trainer._evaluate_loader(partial)
+
+        assert trainer.get_test_logits().shape[0] == 2
+
+
 class TestTrainingUtilities:
     """Test training utility functions."""
 
