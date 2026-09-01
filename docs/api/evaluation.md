@@ -47,6 +47,24 @@ scaling corrects them without changing which class is predicted.
 
 ::: deepecgkit.evaluation.calibration.calibration_report
 
+## Representation quality
+
+::: deepecgkit.evaluation.representation.linear_probe
+
+::: deepecgkit.evaluation.representation.probe_encoder
+
+::: deepecgkit.evaluation.representation.build_probe
+
+::: deepecgkit.evaluation.representation.cross_dataset_transfer
+
+::: deepecgkit.evaluation.representation.TransferMatrix
+
+::: deepecgkit.evaluation.representation.ProbeResult
+
+::: deepecgkit.evaluation.representation.protocol_data_module
+
+::: deepecgkit.evaluation.representation.embed_2d
+
 ## Visualization
 
 ::: deepecgkit.evaluation.visualization.plot_confusion_matrix
@@ -60,3 +78,7 @@ scaling corrects them without changing which class is predicted.
 ::: deepecgkit.evaluation.visualization.plot_predictions
 
 ::: deepecgkit.evaluation.visualization.plot_calibration_curve
+
+::: deepecgkit.evaluation.visualization.plot_transfer_matrix
+
+::: deepecgkit.evaluation.visualization.plot_embedding

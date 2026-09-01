@@ -165,6 +165,54 @@ unless `--no-plots` is given, `signal_attribution.png`, `lead_importance.png` an
 window per lead. `--target-class all` multiplies the whole run by the class count and stores the
 result under an extra leading axis in `values_by_class`.
 
+### `deepecg probe`
+
+Freeze encoders, fit linear probes and write the cross-dataset transfer matrix. See
+[Representation Quality](representation-quality.md) for what the numbers mean and why
+standardisation is part of the protocol rather than a preprocessing detail.
+
+```bash
+deepecg probe -m kanres -o probe/ \
+    --source-checkpoint af-classification=runs/af/best.pt \
+    --source-checkpoint ptbxl=runs/ptbxl/best.pt
+```
+
+`--source-checkpoint` is repeatable, once per encoder. One entry gives a single row plus the
+random-init floor; four give the full matrix. With no sources at all only the floor is probed,
+which is a cheap way to see how much of a target is linearly readable from an untrained network.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--model`, `-m` | *required* | Model architecture matching every checkpoint |
+| `--output`, `-o` | *required* | Directory for the matrix, plots and table |
+| `--source-checkpoint` | none | `DATASET=PATH`, repeatable once per encoder source |
+| `--target` | all four | Dataset to probe, repeatable |
+| `--data-dir` | None | Directory containing the datasets |
+| `--metric` | `auroc_macro` | `auroc_macro`, `accuracy`, `balanced_accuracy`, `f1_macro` |
+| `--input-channels` | 1 | Lead count the protocol runs at |
+| `--sampling-rate` | 300 | Sampling rate for every dataset, in Hz |
+| `--no-random-init` | false | Drop the untrained-encoder baseline row |
+| `--no-plots` | false | Skip the heatmap and the embedding plots |
+| `--no-latex` | false | Skip the LaTeX table |
+| `--embedding-plots` | `diagonal` | `none`, `diagonal`, or `all` |
+| `--perplexity` | 30 | t-SNE perplexity, clamped to what the split supports |
+| `--probe-c` | 1.0 | Inverse regularisation strength for the probe |
+| `--max-iter` | 1000 | Solver iteration ceiling for the probe |
+| `--val-split` | 0.2 | Validation split fraction |
+| `--test-split` | 0.1 | Held-out split the probe reports on |
+| `--seed` | 42 | Seed for the splits, the random encoder and the projection |
+| `--batch-size`, `-b` | 32 | Batch size |
+| `--num-workers` | 4 | Data loading workers |
+| `--accelerator` | auto | Device: `auto`, `cpu`, `gpu`, `mps` |
+| `--force-download` | false | Force re-download the datasets |
+
+The output directory receives `transfer_matrix.json` (every metric of every cell plus the resolved
+protocol), `transfer_matrix.csv` (the headline table), `transfer_matrix.png`, `transfer_matrix.tex`
+and one `embedding_<source>_<target>.png` per retained cell.
+
+Pass `--input-channels` explicitly for `deep-res-cnn`, `gru`, `lstm` and `transformer`, whose lead
+count cannot be read back from their weights.
+
 ### `deepecg resume`
 
 Resume training from a checkpoint.

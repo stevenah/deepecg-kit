@@ -9,6 +9,15 @@ from deepecgkit.cli.config import load_config
 from deepecgkit.cli.logger import CLILogger
 from deepecgkit.cli.registry import DATASET_NAMES, MODEL_NAMES
 from deepecgkit.evaluation.metrics import DEFAULT_CALIBRATION_BINS
+from deepecgkit.evaluation.representation import (
+    DEFAULT_PROBE_METRIC,
+    KEEP_DIAGONAL,
+    KEEP_EMBEDDINGS_MODES,
+    PROBE_DATASETS,
+    PROBE_INPUT_CHANNELS,
+    PROBE_METRICS,
+    PROBE_SAMPLING_RATE,
+)
 from deepecgkit.explainability import METHODS
 
 
@@ -25,6 +34,7 @@ Examples:
   deepecg evaluate --checkpoint model.ckpt -m kanres -d af-classification
   deepecg predict --checkpoint model.ckpt -m kanres --input ecg.npy
   deepecg explain --checkpoint model.ckpt -m kanres --input ecg.npy -o explanations/
+  deepecg probe -m kanres --source-checkpoint af-classification=af.pt -o probe/
   deepecg resume --checkpoint model.ckpt -m kanres --epochs 100
   deepecg list-models
   deepecg info -m kanres
@@ -567,6 +577,150 @@ Note: Datasets are automatically downloaded when first used.
         help="Force re-download the dataset",
     )
 
+    probe_parser = subparsers.add_parser(
+        "probe", help="Probe frozen encoders across datasets and build a transfer matrix"
+    )
+    probe_parser.add_argument(
+        "--model",
+        "-m",
+        type=str,
+        required=True,
+        choices=MODEL_NAMES,
+        help="Model architecture matching every checkpoint",
+    )
+    probe_parser.add_argument(
+        "--source-checkpoint",
+        action="append",
+        default=[],
+        metavar="DATASET=PATH",
+        help="Encoder trained on DATASET, repeatable once per source",
+    )
+    probe_parser.add_argument(
+        "--target",
+        action="append",
+        default=[],
+        choices=DATASET_NAMES,
+        help=f"Dataset to probe, repeatable (default: {', '.join(PROBE_DATASETS)})",
+    )
+    probe_parser.add_argument(
+        "--output",
+        "-o",
+        type=str,
+        required=True,
+        help="Directory for the matrix, plots and table",
+    )
+    probe_parser.add_argument(
+        "--data-dir",
+        type=str,
+        default=None,
+        help="Directory containing the datasets",
+    )
+    probe_parser.add_argument(
+        "--metric",
+        type=str,
+        default=DEFAULT_PROBE_METRIC,
+        choices=list(PROBE_METRICS),
+        help=f"Metric filling the matrix (default: {DEFAULT_PROBE_METRIC})",
+    )
+    probe_parser.add_argument(
+        "--input-channels",
+        type=int,
+        default=PROBE_INPUT_CHANNELS,
+        help=f"Lead count the protocol runs at (default: {PROBE_INPUT_CHANNELS})",
+    )
+    probe_parser.add_argument(
+        "--sampling-rate",
+        type=int,
+        default=PROBE_SAMPLING_RATE,
+        help=f"Sampling rate for every dataset in Hz (default: {PROBE_SAMPLING_RATE})",
+    )
+    probe_parser.add_argument(
+        "--no-random-init",
+        action="store_true",
+        help="Drop the untrained-encoder baseline row",
+    )
+    probe_parser.add_argument(
+        "--no-plots",
+        action="store_true",
+        help="Skip the heatmap and the embedding plots",
+    )
+    probe_parser.add_argument(
+        "--no-latex",
+        action="store_true",
+        help="Skip the LaTeX table",
+    )
+    probe_parser.add_argument(
+        "--embedding-plots",
+        type=str,
+        default=KEEP_DIAGONAL,
+        choices=list(KEEP_EMBEDDINGS_MODES),
+        help=(
+            f"Which cells get a t-SNE plot: none, all, or diagonal for the in-domain cells and "
+            f"the random-init row (default: {KEEP_DIAGONAL})"
+        ),
+    )
+    probe_parser.add_argument(
+        "--perplexity",
+        type=float,
+        default=30.0,
+        help="t-SNE perplexity, clamped to what the sample count supports (default: 30)",
+    )
+    probe_parser.add_argument(
+        "--probe-c",
+        type=float,
+        default=1.0,
+        help="Inverse regularisation strength for the probe (default: 1.0)",
+    )
+    probe_parser.add_argument(
+        "--max-iter",
+        type=int,
+        default=1000,
+        help="Solver iteration ceiling for the probe (default: 1000)",
+    )
+    probe_parser.add_argument(
+        "--val-split",
+        type=float,
+        default=0.2,
+        help="Validation split fraction (default: 0.2)",
+    )
+    probe_parser.add_argument(
+        "--test-split",
+        type=float,
+        default=0.1,
+        help="Held-out split the probe reports on (default: 0.1)",
+    )
+    probe_parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Seed for the splits, the random encoder and the projection (default: 42)",
+    )
+    probe_parser.add_argument(
+        "--batch-size",
+        "-b",
+        type=int,
+        default=32,
+        help="Batch size (default: 32)",
+    )
+    probe_parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=4,
+        help="Data loading workers (default: 4)",
+    )
+    probe_parser.add_argument(
+        "--accelerator",
+        type=str,
+        default="auto",
+        choices=["auto", "cpu", "gpu", "mps"],
+        help="Accelerator to use (default: auto)",
+    )
+    probe_parser.add_argument(
+        "--force-download",
+        action="store_true",
+        help="Force re-download the datasets",
+    )
+
     resume_parser = subparsers.add_parser("resume", help="Resume training from a checkpoint")
     resume_parser.add_argument(
         "--checkpoint",
@@ -749,6 +903,33 @@ Note: Datasets are automatically downloaded when first used.
             num_workers=args.num_workers,
             accelerator=args.accelerator,
             input_channels=args.input_channels,
+            force_download=args.force_download,
+            logger=logger,
+        )
+
+    elif args.command == "probe":
+        return _cli.probe(
+            output_dir=args.output,
+            model_name=args.model,
+            source_checkpoints=args.source_checkpoint,
+            targets=args.target,
+            data_dir=args.data_dir,
+            metric=args.metric,
+            input_channels=args.input_channels,
+            sampling_rate=args.sampling_rate,
+            random_init=not args.no_random_init,
+            plots=not args.no_plots,
+            latex=not args.no_latex,
+            embedding_plots=args.embedding_plots,
+            perplexity=args.perplexity,
+            probe_c=args.probe_c,
+            max_iter=args.max_iter,
+            val_split=args.val_split,
+            test_split=args.test_split,
+            seed=args.seed,
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+            accelerator=args.accelerator,
             force_download=args.force_download,
             logger=logger,
         )

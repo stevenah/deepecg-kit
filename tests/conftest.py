@@ -258,6 +258,55 @@ def overconfident_multilabel_predictions() -> Tuple[np.ndarray, np.ndarray, np.n
     return labels, _sigmoid(sharpened), sharpened
 
 
+PROBE_TRAIN_SAMPLES = 400
+PROBE_TEST_SAMPLES = 300
+PROBE_CLASSES = 4
+PROBE_LABELS = 5
+PROBE_WIDTH = 8
+PROBE_SEED = 31337
+PROBE_CLASS_MARGIN = 3.0
+PROBE_FEATURE_SCALES = (1.0, 1e6, 1e-3, 1.0, 1e4, 1.0, 1e-2, 1.0)
+
+
+def _scaled_separable(n_samples: int, rng) -> Tuple[np.ndarray, np.ndarray]:
+    """Draw features whose class is linearly readable but whose columns differ in scale."""
+    labels = rng.integers(0, PROBE_CLASSES, size=n_samples)
+    features = rng.normal(0.0, 1.0, size=(n_samples, PROBE_WIDTH))
+    features[np.arange(n_samples), labels] += PROBE_CLASS_MARGIN
+    return features * np.asarray(PROBE_FEATURE_SCALES), labels
+
+
+@pytest.fixture
+def probe_features() -> Tuple[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray]]:
+    """Train and test embeddings whose four classes are linearly separable.
+
+    The columns span six orders of magnitude, which is the regime that makes
+    the protocol's standardisation step load-bearing rather than cosmetic.
+    """
+    rng = np.random.default_rng(PROBE_SEED)
+    return _scaled_separable(PROBE_TRAIN_SAMPLES, rng), _scaled_separable(PROBE_TEST_SAMPLES, rng)
+
+
+@pytest.fixture
+def probe_features_multilabel() -> Tuple[
+    Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray]
+]:
+    """Train and test embeddings with five independent labels, as PTB-XL produces.
+
+    Both splits are generated through one shared basis, so a probe fitted on the
+    first genuinely predicts the second.
+    """
+    rng = np.random.default_rng(PROBE_SEED + 1)
+    basis = rng.normal(0.0, 1.0, size=(PROBE_LABELS, PROBE_WIDTH))
+
+    def draw(n_samples: int) -> Tuple[np.ndarray, np.ndarray]:
+        labels = (rng.random((n_samples, PROBE_LABELS)) < 0.4).astype(int)
+        features = labels @ basis * 2.0 + rng.normal(0.0, 0.5, size=(n_samples, PROBE_WIDTH))
+        return features, labels
+
+    return draw(PROBE_TRAIN_SAMPLES), draw(PROBE_TEST_SAMPLES)
+
+
 @pytest.fixture(autouse=True)
 def set_random_seed():
     """Set random seeds for reproducible tests."""

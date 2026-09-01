@@ -278,3 +278,131 @@ def plot_calibration_curve(
         plt.close()
     else:
         plt.show()
+
+
+def plot_transfer_matrix(
+    values: np.ndarray,
+    sources: List[str],
+    targets: List[str],
+    metric: str = "auroc_macro",
+    baseline_rows: int = 0,
+    title: str = "Cross-Dataset Transfer",
+    save_path: Optional[str] = None,
+):
+    """Plot probe performance for every encoder source against every probe target.
+
+    Args:
+        values: Probe scores of shape (len(sources), len(targets)). Cells that
+            could not be scored are NaN and render blank.
+        sources: Row labels, the datasets the frozen encoders were trained on.
+        targets: Column labels, the datasets the probes were fitted and scored on.
+        metric: Name of the plotted metric, shown on the colour bar.
+        baseline_rows: Number of leading rows holding a baseline rather than a
+            trained encoder, separated from the rest by a rule.
+        title: Title for the plot.
+        save_path: Path to save the figure to.
+    """
+    matrix = np.asarray(values, dtype=float)
+
+    _, ax = plt.subplots(figsize=(1.6 * len(targets) + 4, 0.9 * len(sources) + 3))
+
+    sns.heatmap(
+        matrix,
+        annot=True,
+        fmt=".3f",
+        cmap="viridis",
+        xticklabels=list(targets),
+        yticklabels=list(sources),
+        cbar_kws={"label": metric},
+        ax=ax,
+    )
+
+    if baseline_rows:
+        ax.axhline(baseline_rows, color="white", lw=3)
+
+    ax.set_title(title)
+    ax.set_xlabel("Probe target")
+    ax.set_ylabel("Encoder source")
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        plt.close()
+    else:
+        plt.show()
+
+
+def plot_embedding(
+    embedding: np.ndarray,
+    labels: Optional[np.ndarray] = None,
+    class_names: Optional[List[str]] = None,
+    title: str = "Embedding",
+    save_path: Optional[str] = None,
+):
+    """Scatter a two-dimensional embedding, coloured by class.
+
+    Args:
+        embedding: Coordinates of shape (n_samples, 2), as returned by
+            deepecgkit.evaluation.representation.embed_2d.
+        labels: Class indices of shape (n_samples,), or a multi-hot matrix of
+            shape (n_samples, n_classes) in which case each point is coloured by
+            its first positive label.
+        class_names: Names for the classes, defaulting to their indices.
+        title: Title for the plot.
+        save_path: Path to save the figure to.
+
+    Raises:
+        ValueError: If the coordinates are not two-dimensional, or the labels do
+            not align with them.
+    """
+    coords = np.asarray(embedding, dtype=float)
+    if coords.ndim != 2 or coords.shape[1] != 2:
+        raise ValueError(
+            f"Embedding must have shape (n_samples, 2); got {coords.shape}. Reduce it with "
+            f"embed_2d first."
+        )
+
+    plt.figure(figsize=(8, 6))
+
+    if labels is None:
+        plt.scatter(coords[:, 0], coords[:, 1], s=12, alpha=0.7, color="tab:blue")
+    else:
+        groups = np.asarray(labels)
+        if groups.ndim > 1 and groups.shape[-1] > 1:
+            groups = np.argmax(groups, axis=1)
+        groups = groups.reshape(-1).astype(int)
+        if groups.shape[0] != coords.shape[0]:
+            raise ValueError(
+                f"Labels hold {groups.shape[0]} rows but the embedding holds {coords.shape[0]}."
+            )
+
+        classes = np.unique(groups)
+        palette = plt.get_cmap("tab20" if len(classes) > 10 else "tab10")
+        for position, value in enumerate(classes):
+            mask = groups == value
+            name = (
+                class_names[value]
+                if class_names is not None and value < len(class_names)
+                else f"Class {value}"
+            )
+            plt.scatter(
+                coords[mask, 0],
+                coords[mask, 1],
+                s=12,
+                alpha=0.7,
+                color=palette(position % palette.N),
+                label=name,
+            )
+        plt.legend(fontsize="small", markerscale=2)
+
+    plt.xlabel("Component 1")
+    plt.ylabel("Component 2")
+    plt.title(title)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        plt.close()
+    else:
+        plt.show()

@@ -7,6 +7,7 @@ Usage:
     deepecg predict --checkpoint <path> --input <file> [options]
     deepecg extract-features --checkpoint <path> --model <model> --dataset <dataset> --output <file> [options]
     deepecg explain --checkpoint <path> --model <model> --input <file> --output <dir> [options]
+    deepecg probe --model <model> --source-checkpoint <dataset>=<path> --output <dir> [options]
     deepecg resume --checkpoint <path> [options]
     deepecg list-models
     deepecg list-datasets
@@ -23,6 +24,7 @@ from deepecgkit.cli.commands import (
     list_datasets,
     list_models,
     predict,
+    probe,
     resume,
     show_info,
     train,
@@ -61,6 +63,7 @@ __all__ = [
     "load_config",
     "main",
     "predict",
+    "probe",
     "resume",
     "show_info",
     "train",
