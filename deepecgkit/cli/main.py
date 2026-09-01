@@ -9,6 +9,7 @@ from deepecgkit.cli.config import load_config
 from deepecgkit.cli.logger import CLILogger
 from deepecgkit.cli.registry import DATASET_NAMES, MODEL_NAMES
 from deepecgkit.evaluation.metrics import DEFAULT_CALIBRATION_BINS
+from deepecgkit.explainability import METHODS
 
 
 def main(argv: Optional[list] = None) -> int:
@@ -23,6 +24,7 @@ Examples:
   deepecg train -m kanres -d af-classification --force-download
   deepecg evaluate --checkpoint model.ckpt -m kanres -d af-classification
   deepecg predict --checkpoint model.ckpt -m kanres --input ecg.npy
+  deepecg explain --checkpoint model.ckpt -m kanres --input ecg.npy -o explanations/
   deepecg resume --checkpoint model.ckpt -m kanres --epochs 100
   deepecg list-models
   deepecg info -m kanres
@@ -421,6 +423,150 @@ Note: Datasets are automatically downloaded when first used.
         help="Force re-download the dataset",
     )
 
+    explain_parser = subparsers.add_parser(
+        "explain", help="Attribute a model's prediction back to the ECG signal"
+    )
+    explain_weights = explain_parser.add_mutually_exclusive_group(required=True)
+    explain_weights.add_argument(
+        "--checkpoint",
+        type=str,
+        help="Path to a model checkpoint",
+    )
+    explain_weights.add_argument(
+        "--weights",
+        "-w",
+        type=str,
+        help="Pretrained weight name or path to a weights file",
+    )
+    explain_source = explain_parser.add_mutually_exclusive_group(required=True)
+    explain_source.add_argument(
+        "--dataset",
+        "-d",
+        type=str,
+        choices=DATASET_NAMES,
+        help="Dataset to explain predictions on",
+    )
+    explain_source.add_argument(
+        "--input",
+        "-i",
+        type=str,
+        help="Path to an input ECG file (.npy, .csv, or WFDB .dat/.hea)",
+    )
+    explain_parser.add_argument(
+        "--model",
+        "-m",
+        type=str,
+        required=True,
+        choices=MODEL_NAMES,
+        help="Model architecture to load",
+    )
+    explain_parser.add_argument(
+        "--output",
+        "-o",
+        type=str,
+        required=True,
+        help="Directory to write the arrays, summary and plots into",
+    )
+    explain_parser.add_argument(
+        "--method",
+        type=str,
+        default="saliency",
+        choices=list(METHODS),
+        help="Attribution method (default: saliency)",
+    )
+    explain_parser.add_argument(
+        "--target-class",
+        type=str,
+        default=None,
+        metavar="CLASS",
+        help="Class index to explain, or 'all' (default: the predicted class)",
+    )
+    explain_parser.add_argument(
+        "--sampling-rate",
+        type=float,
+        default=500.0,
+        help="Sampling rate in Hz, used to place the beat windows (default: 500)",
+    )
+    explain_parser.add_argument(
+        "--max-samples",
+        type=int,
+        default=8,
+        help="Maximum number of recordings to explain (default: 8)",
+    )
+    explain_parser.add_argument(
+        "--ig-steps",
+        type=int,
+        default=64,
+        help="Path steps for integrated gradients (default: 64)",
+    )
+    explain_parser.add_argument(
+        "--occlusion-window",
+        type=int,
+        default=100,
+        help="Occlusion window in samples (default: 100)",
+    )
+    explain_parser.add_argument(
+        "--occlusion-stride",
+        type=int,
+        default=50,
+        help="Occlusion stride in samples (default: 50)",
+    )
+    explain_parser.add_argument(
+        "--detect-lead",
+        type=int,
+        default=None,
+        help="Lead index R-peaks are detected on (default: the second lead)",
+    )
+    explain_parser.add_argument(
+        "--no-plots",
+        action="store_true",
+        help="Write the arrays and summary only, skipping the figures",
+    )
+    explain_parser.add_argument(
+        "--data-dir",
+        type=str,
+        default=None,
+        help="Directory containing the dataset",
+    )
+    explain_parser.add_argument(
+        "--split",
+        type=str,
+        default="test",
+        choices=["train", "val", "test", "all"],
+        help="Dataset split to explain (default: test)",
+    )
+    explain_parser.add_argument(
+        "--batch-size",
+        "-b",
+        type=int,
+        default=8,
+        help="Batch size (default: 8)",
+    )
+    explain_parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=4,
+        help="Data loading workers (default: 4)",
+    )
+    explain_parser.add_argument(
+        "--accelerator",
+        type=str,
+        default="auto",
+        choices=["auto", "cpu", "gpu", "mps"],
+        help="Accelerator to use (default: auto)",
+    )
+    explain_parser.add_argument(
+        "--input-channels",
+        type=int,
+        default=None,
+        help="Lead count, for architectures whose weights do not encode it",
+    )
+    explain_parser.add_argument(
+        "--force-download",
+        action="store_true",
+        help="Force re-download the dataset",
+    )
+
     resume_parser = subparsers.add_parser("resume", help="Resume training from a checkpoint")
     resume_parser.add_argument(
         "--checkpoint",
@@ -575,6 +721,33 @@ Note: Datasets are automatically downloaded when first used.
             num_workers=args.num_workers,
             accelerator=args.accelerator,
             dtype=args.dtype,
+            input_channels=args.input_channels,
+            force_download=args.force_download,
+            logger=logger,
+        )
+
+    elif args.command == "explain":
+        return _cli.explain(
+            output_dir=args.output,
+            model_name=args.model,
+            checkpoint=args.checkpoint,
+            weights=args.weights,
+            dataset_name=args.dataset,
+            input_path=args.input,
+            data_dir=args.data_dir,
+            split=args.split,
+            method=args.method,
+            target_class=args.target_class,
+            sampling_rate=args.sampling_rate,
+            max_samples=args.max_samples,
+            ig_steps=args.ig_steps,
+            occlusion_window=args.occlusion_window,
+            occlusion_stride=args.occlusion_stride,
+            detect_lead=args.detect_lead,
+            plots=not args.no_plots,
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+            accelerator=args.accelerator,
             input_channels=args.input_channels,
             force_download=args.force_download,
             logger=logger,
