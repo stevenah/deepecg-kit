@@ -4,7 +4,7 @@ Pytest configuration and fixtures for deepecgkit tests.
 
 import tempfile
 from pathlib import Path
-from typing import Generator
+from typing import Generator, Tuple
 
 import numpy as np
 import pytest
@@ -158,6 +158,104 @@ def mock_dataset_files(temp_dir: Path):
         hea_file_root.write_text(f"A0000{i} 1 500 3000\nA0000{i}.mat 16 200 11 0 0 0 0 ECG\n")
 
     return temp_dir
+
+
+CALIBRATION_SAMPLES = 8000
+CALIBRATION_SEED = 20240
+CALIBRATION_LOGIT_SCALE = 1.2
+OVERCONFIDENCE_FACTOR = 3.0
+
+
+def _softmax(logits: np.ndarray) -> np.ndarray:
+    """Row-wise softmax of a logit matrix."""
+    shifted = logits - logits.max(axis=1, keepdims=True)
+    exponentiated = np.exp(shifted)
+    return exponentiated / exponentiated.sum(axis=1, keepdims=True)
+
+
+def _sigmoid(logits: np.ndarray) -> np.ndarray:
+    """Elementwise logistic function."""
+    return 1.0 / (1.0 + np.exp(-logits))
+
+
+def _sample_from_rows(probabilities: np.ndarray, rng) -> np.ndarray:
+    """Draw one class index per row, distributed as that row."""
+    cumulative = probabilities.cumsum(axis=1)
+    draws = rng.random((probabilities.shape[0], 1))
+    return (draws > cumulative).sum(axis=1)
+
+
+@pytest.fixture
+def calibrated_multiclass_predictions() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Four-class predictions whose labels were drawn from the predictions themselves.
+
+    A model whose labels come from its own predicted distribution is calibrated
+    by construction, so its expected calibration error is sampling noise alone.
+    """
+    rng = np.random.default_rng(CALIBRATION_SEED)
+    logits = rng.normal(0.0, CALIBRATION_LOGIT_SCALE, size=(CALIBRATION_SAMPLES, 4))
+    probabilities = _softmax(logits)
+    labels = _sample_from_rows(probabilities, rng)
+    return labels, probabilities, logits
+
+
+@pytest.fixture
+def overconfident_multiclass_predictions() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The calibrated four-class predictions sharpened by a known factor.
+
+    The labels are unchanged and only the logits are multiplied, so the
+    temperature that undoes the damage is exactly OVERCONFIDENCE_FACTOR.
+    """
+    rng = np.random.default_rng(CALIBRATION_SEED)
+    logits = rng.normal(0.0, CALIBRATION_LOGIT_SCALE, size=(CALIBRATION_SAMPLES, 4))
+    labels = _sample_from_rows(_softmax(logits), rng)
+    sharpened = logits * OVERCONFIDENCE_FACTOR
+    return labels, _softmax(sharpened), sharpened
+
+
+@pytest.fixture
+def calibrated_binary_predictions() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Single-logit binary predictions stored as the two columns [1 - p, p].
+
+    This is the layout ECGTrainer produces for the binary_classification flag,
+    where the model head emits one logit rather than one per class.
+    """
+    rng = np.random.default_rng(CALIBRATION_SEED + 1)
+    logits = rng.normal(0.0, CALIBRATION_LOGIT_SCALE, size=CALIBRATION_SAMPLES)
+    positive = _sigmoid(logits)
+    labels = (rng.random(CALIBRATION_SAMPLES) < positive).astype(int)
+    return labels, np.column_stack([1.0 - positive, positive]), logits
+
+
+@pytest.fixture
+def overconfident_binary_predictions() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The calibrated binary predictions sharpened by a known factor."""
+    rng = np.random.default_rng(CALIBRATION_SEED + 1)
+    logits = rng.normal(0.0, CALIBRATION_LOGIT_SCALE, size=CALIBRATION_SAMPLES)
+    labels = (rng.random(CALIBRATION_SAMPLES) < _sigmoid(logits)).astype(int)
+    sharpened = logits * OVERCONFIDENCE_FACTOR
+    positive = _sigmoid(sharpened)
+    return labels, np.column_stack([1.0 - positive, positive]), sharpened
+
+
+@pytest.fixture
+def calibrated_multilabel_predictions() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Five independent sigmoid outputs with multi-hot targets, as PTB-XL produces."""
+    rng = np.random.default_rng(CALIBRATION_SEED + 2)
+    logits = rng.normal(0.0, CALIBRATION_LOGIT_SCALE, size=(CALIBRATION_SAMPLES, 5))
+    probabilities = _sigmoid(logits)
+    labels = (rng.random((CALIBRATION_SAMPLES, 5)) < probabilities).astype(int)
+    return labels, probabilities, logits
+
+
+@pytest.fixture
+def overconfident_multilabel_predictions() -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The calibrated multi-label predictions sharpened by a known factor."""
+    rng = np.random.default_rng(CALIBRATION_SEED + 2)
+    logits = rng.normal(0.0, CALIBRATION_LOGIT_SCALE, size=(CALIBRATION_SAMPLES, 5))
+    labels = (rng.random((CALIBRATION_SAMPLES, 5)) < _sigmoid(logits)).astype(int)
+    sharpened = logits * OVERCONFIDENCE_FACTOR
+    return labels, _sigmoid(sharpened), sharpened
 
 
 @pytest.fixture(autouse=True)

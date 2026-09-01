@@ -81,6 +81,7 @@ class ECGTrainer:
         self.test_predictions = []
         self.test_targets = []
         self.test_probabilities = []
+        self.test_logits = []
         self.log_dir = None
         self.best_checkpoint_path = None
         self.best_val_loss = float("inf")
@@ -340,6 +341,7 @@ class ECGTrainer:
         self.test_predictions = []
         self.test_targets = []
         self.test_probabilities = []
+        self.test_logits = []
 
         total_loss = 0.0
         total_acc = 0.0
@@ -352,6 +354,7 @@ class ECGTrainer:
                 y_hat = self.model(x)
                 loss = self._calculate_loss(y_hat, y)
                 total_loss += loss.item()
+                self.test_logits.append(y_hat.detach().cpu())
 
                 if self._is_classification:
                     if self.multi_label:
@@ -400,6 +403,23 @@ class ECGTrainer:
             torch.cat(self.test_targets).numpy(),
             torch.cat(self.test_probabilities).numpy(),
         )
+
+    def get_test_logits(self):
+        """Get the raw model outputs from the most recent evaluation pass.
+
+        Logits are kept alongside probabilities because temperature scaling
+        needs them and the softmax and sigmoid that produce the probabilities
+        are not losslessly invertible in float32: a probability saturates to
+        exactly 1.0 once its logit passes about 16.6, which is well inside the
+        range an overconfident model reaches.
+
+        Returns:
+            Raw outputs as a numpy array, shaped (n_samples, output_size), or
+            None when no evaluation has been run.
+        """
+        if not self.test_logits:
+            return None
+        return torch.cat(self.test_logits).numpy()
 
     def save_checkpoint(self, path, epoch=None):
         """Save a checkpoint.

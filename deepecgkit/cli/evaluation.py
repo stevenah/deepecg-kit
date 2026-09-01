@@ -1,7 +1,7 @@
 """Evaluation artifact saving helpers for the CLI."""
 
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -11,7 +11,9 @@ from sklearn.calibration import calibration_curve
 from sklearn.metrics import confusion_matrix, precision_recall_fscore_support, roc_auc_score
 
 from deepecgkit.cli.logger import CLILogger
+from deepecgkit.evaluation.calibration import calibration_report
 from deepecgkit.evaluation.metrics import (
+    DEFAULT_CALIBRATION_BINS,
     calculate_classification_metrics,
     confusion_matrix_analysis,
     resolve_average,
@@ -20,6 +22,70 @@ from deepecgkit.evaluation.visualization import (
     plot_calibration_curve,
     plot_confusion_matrix,
 )
+
+
+def _calibration_columns(
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+    logger: CLILogger,
+    val_targets: Optional[np.ndarray] = None,
+    val_logits: Optional[np.ndarray] = None,
+    test_logits: Optional[np.ndarray] = None,
+    n_bins: int = DEFAULT_CALIBRATION_BINS,
+) -> Dict[str, Any]:
+    """Compute calibration for the metrics row and report it to the console.
+
+    The temperature is fitted on the validation split and every number is
+    reported on the split passed as y_true, so the scaled figures are honest
+    held-out ones. Without a validation split the scaled columns come back as
+    NaN and the row is still well formed.
+
+    Args:
+        y_true: True labels for the reported split
+        y_prob: Predicted probabilities for that split
+        logger: CLI logger
+        val_targets: True labels for the validation split
+        val_logits: Raw model outputs for the validation split
+        test_logits: Raw model outputs for the reported split
+        n_bins: Number of bins for the binned metrics
+
+    Returns:
+        The calibration columns to merge into classification_metrics.csv.
+    """
+    report = calibration_report(
+        y_true,
+        y_prob,
+        n_bins=n_bins,
+        fit_targets=val_targets,
+        fit_logits=val_logits,
+        eval_logits=test_logits,
+    )
+
+    scaled = not np.isnan(report["temperature"])
+    logger.info("")
+    logger.info(f"  Calibration ({n_bins} bins):")
+    if scaled:
+        logger.info(f"  {'Metric':<16} {'Before':>10} {'After T':>10}")
+        logger.info(f"  {'-' * 38}")
+        for name, label in (
+            ("ece", "ECE"),
+            ("adaptive_ece", "Adaptive ECE"),
+            ("mce", "MCE"),
+            ("brier", "Brier"),
+        ):
+            logger.info(f"  {label:<16} {report[name]:>10.4f} {report[name + '_temp']:>10.4f}")
+        logger.info(f"  {'Temperature':<16} {report['temperature']:>21.4f}")
+    else:
+        for name, label in (
+            ("ece", "ECE"),
+            ("adaptive_ece", "Adaptive ECE"),
+            ("mce", "MCE"),
+            ("brier", "Brier"),
+        ):
+            logger.info(f"  {label:<16} {report[name]:>10.4f}")
+        logger.info("  No validation split was supplied, so no temperature was fitted.")
+
+    return report
 
 
 def _save_single_label_evaluation(
@@ -31,6 +97,9 @@ def _save_single_label_evaluation(
     class_names: Optional[list],
     output_path: Path,
     logger: CLILogger,
+    val_targets: Optional[np.ndarray] = None,
+    val_logits: Optional[np.ndarray] = None,
+    test_logits: Optional[np.ndarray] = None,
 ) -> None:
     """Save evaluation artifacts for single-label classification."""
     plot_confusion_matrix(
@@ -90,6 +159,9 @@ def _save_single_label_evaluation(
         )
     logger.info("=" * 60)
 
+    calibration = _calibration_columns(y_true, y_prob, logger, val_targets, val_logits, test_logits)
+    logger.info("=" * 60)
+
     cls_metrics = calculate_classification_metrics(y_true, y_prob)
     averaging = resolve_average(y_true)
     metrics_df = pd.DataFrame(
@@ -104,6 +176,7 @@ def _save_single_label_evaluation(
                 "auroc": cls_metrics.get("auc", np.nan),
                 "mcc": cls_metrics.get("mcc", np.nan),
                 "average": averaging,
+                **calibration,
             }
         ]
     )
@@ -121,6 +194,9 @@ def _save_multi_label_evaluation(
     class_names: Optional[list],
     output_path: Path,
     logger: CLILogger,
+    val_targets: Optional[np.ndarray] = None,
+    val_logits: Optional[np.ndarray] = None,
+    test_logits: Optional[np.ndarray] = None,
 ) -> None:
     """Save evaluation artifacts for multi-label classification."""
 
@@ -233,6 +309,8 @@ def _save_multi_label_evaluation(
 
     for i, name in enumerate(display_names):
         logger.info(f"  {name:<15} {precision[i]:>10.4f} {recall[i]:>10.4f} {f1[i]:>10.4f}")
+
+    calibration = _calibration_columns(y_true, y_prob, logger, val_targets, val_logits, test_logits)
     logger.info("=" * 60)
 
     metrics_df = pd.DataFrame(
@@ -246,6 +324,7 @@ def _save_multi_label_evaluation(
                 "recall": macro_r,
                 "f1": macro_f1,
                 "auroc": auroc,
+                **calibration,
             }
         ]
     )

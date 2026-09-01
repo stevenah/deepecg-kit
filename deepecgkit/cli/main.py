@@ -8,6 +8,7 @@ import deepecgkit.cli as _cli
 from deepecgkit.cli.config import load_config
 from deepecgkit.cli.logger import CLILogger
 from deepecgkit.cli.registry import DATASET_NAMES, MODEL_NAMES
+from deepecgkit.evaluation.metrics import DEFAULT_CALIBRATION_BINS
 
 
 def main(argv: Optional[list] = None) -> int:
@@ -249,6 +250,35 @@ Note: Datasets are automatically downloaded when first used.
         default="test",
         choices=["test", "val"],
         help="Dataset split to evaluate on (default: test)",
+    )
+    eval_parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Seed that produced the split during training (default: 42)",
+    )
+    eval_parser.add_argument(
+        "--val-split",
+        type=float,
+        default=0.2,
+        help="Validation fraction used during training (default: 0.2)",
+    )
+    eval_parser.add_argument(
+        "--test-split",
+        type=float,
+        default=0.1,
+        help="Test fraction used during training (default: 0.1)",
+    )
+    eval_parser.add_argument(
+        "--calibration-bins",
+        type=int,
+        default=DEFAULT_CALIBRATION_BINS,
+        help=f"Bins for the calibration metrics (default: {DEFAULT_CALIBRATION_BINS})",
+    )
+    eval_parser.add_argument(
+        "--no-calibration",
+        action="store_true",
+        help="Skip the validation pass that fits the temperature",
     )
 
     predict_parser = subparsers.add_parser("predict", help="Run inference on ECG data")
@@ -512,6 +542,11 @@ Note: Datasets are automatically downloaded when first used.
             devices=args.devices,
             force_download=args.force_download,
             split=args.split,
+            seed=args.seed,
+            val_split=args.val_split,
+            test_split=args.test_split,
+            calibration_bins=args.calibration_bins,
+            calibrate=not args.no_calibration,
             logger=logger,
         )
 

@@ -20,6 +20,8 @@ from deepecgkit.analysis.aggregation import (
 )
 
 SINGLE_LABEL_HEADER = "model,dataset,accuracy,precision,recall,f1,auroc,mcc,average"
+CALIBRATION_HEADER = SINGLE_LABEL_HEADER + ",ece,brier,temperature,ece_temp,calibration_bins"
+CALIBRATION_ROW = ",0.11,0.42,1.8,0.03,15"
 MULTI_LABEL_HEADER = "model,dataset,exact_match_accuracy,label_accuracy,precision,recall,f1,auroc"
 
 
@@ -88,6 +90,36 @@ class TestReadRunMetrics:
         assert record.seed == 42
         assert record.averaging == "macro"
         assert set(record.metrics) == {"accuracy", "precision", "recall", "f1", "auroc", "mcc"}
+
+    def test_calibration_columns_are_read_when_present(self, temp_dir):
+        """Runs carrying calibration contribute it to the aggregation."""
+        run_dir = temp_dir / "resnet-af-classification-seed42"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        row = "resnet,af-classification,0.77,0.69,0.64,0.7,0.91,0.57,macro" + CALIBRATION_ROW
+        (run_dir / "classification_metrics.csv").write_text(f"{CALIBRATION_HEADER}\n{row}\n")
+
+        record = read_run_metrics(run_dir)
+
+        assert record.metrics["ece"] == 0.11
+        assert record.metrics["brier"] == 0.42
+        assert record.metrics["temperature"] == 1.8
+        assert record.metrics["ece_temp"] == 0.03
+
+    def test_calibration_bins_is_not_treated_as_a_metric(self, temp_dir):
+        """Averaging a bin count across seeds would be meaningless."""
+        run_dir = temp_dir / "resnet-af-classification-seed42"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        row = "resnet,af-classification,0.77,0.69,0.64,0.7,0.91,0.57,macro" + CALIBRATION_ROW
+        (run_dir / "classification_metrics.csv").write_text(f"{CALIBRATION_HEADER}\n{row}\n")
+
+        assert "calibration_bins" not in read_run_metrics(run_dir).metrics
+
+    def test_runs_without_calibration_stay_readable(self, temp_dir):
+        """A run predating calibration must not become unreadable because of it."""
+        record = read_run_metrics(make_run(temp_dir, "resnet", "af-classification", 42))
+
+        assert record is not None
+        assert "ece" not in record.metrics
 
     def test_multi_label_schema_is_macro_over_labels(self, temp_dir):
         """PTB-XL rows carry a different metric set and their own averaging."""

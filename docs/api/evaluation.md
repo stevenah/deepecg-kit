@@ -14,6 +14,39 @@ Model evaluation, metrics computation, and visualization tools.
 
 ::: deepecgkit.evaluation.metrics.confusion_matrix_analysis
 
+::: deepecgkit.evaluation.metrics.resolve_average
+
+## Calibration
+
+Calibration measures whether predicted probabilities match observed frequencies, and temperature
+scaling corrects them without changing which class is predicted.
+
+::: deepecgkit.evaluation.metrics.calculate_calibration_metrics
+
+::: deepecgkit.evaluation.metrics.expected_calibration_error
+
+::: deepecgkit.evaluation.metrics.adaptive_calibration_error
+
+::: deepecgkit.evaluation.metrics.maximum_calibration_error
+
+::: deepecgkit.evaluation.metrics.brier_score
+
+::: deepecgkit.evaluation.metrics.resolve_task_shape
+
+## Recalibration
+
+::: deepecgkit.evaluation.calibration.TemperatureScaler
+
+::: deepecgkit.evaluation.calibration.fit_temperature
+
+::: deepecgkit.evaluation.calibration.apply_temperature
+
+::: deepecgkit.evaluation.calibration.temperature_nll
+
+::: deepecgkit.evaluation.calibration.probabilities_to_logits
+
+::: deepecgkit.evaluation.calibration.calibration_report
+
 ## Visualization
 
 ::: deepecgkit.evaluation.visualization.plot_confusion_matrix
