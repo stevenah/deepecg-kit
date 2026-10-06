@@ -7,9 +7,9 @@ This example trains any registered model on any registered dataset with sensible
 ## Usage
 
 ```bash
-python examples/train_basic.py
+python examples/train_basic.py --download        # first run: fetches the dataset
 python examples/train_basic.py --model resnet --dataset af-classification --epochs 30
-python examples/train_basic.py --model tcn --dataset af-classification --batch-size 64 --download
+python examples/train_basic.py --model tcn --dataset af-classification --batch-size 64
 ```
 
 ## Walkthrough
@@ -31,7 +31,6 @@ dataset_class = get_dataset("af-classification")
 data_module = ECGDataModule(
     dataset_class=dataset_class,
     batch_size=32,
-    num_workers=4,
     val_split=0.2,
     test_split=0.1,
     seed=42,
@@ -59,10 +58,11 @@ Swap `"kanres"` for any registered model name — the rest of the code stays the
 train_config = {
     "learning_rate": 1e-3,
     "scheduler": {"factor": 0.5, "patience": 5},
-    "binary_classification": num_classes == 2,
     "task_type": "classification",
 }
 ```
+
+Every key is optional; `ECGTrainer(model)` uses these same values.
 
 ### 4. Train and evaluate
 

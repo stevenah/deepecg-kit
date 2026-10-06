@@ -1,8 +1,9 @@
-"""Train and resume commands."""
+"""Train command."""
 
 import json
 import traceback
 from datetime import datetime
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
@@ -12,24 +13,30 @@ import torch
 from deepecgkit.cli import defaults
 from deepecgkit.cli._common import (
     build_data_module,
+    check_dataset_options,
+    check_input_length,
     dataset_kwargs_for,
-    infer_input_channels_from,
+    describe_data,
+    report_data_error,
+    report_shape_error,
     require_dataset,
     require_model,
 )
 from deepecgkit.cli.logger import CLILogger
-from deepecgkit.cli.registry import (
-    DATASET_NAMES,
-    DATASET_NUM_CLASSES,
-    MODEL_NAMES,
-    MODEL_WEIGHTS,
-    _get_model_registry,
-)
+from deepecgkit.cli.registry import MODEL_WEIGHTS, _get_model_registry
 from deepecgkit.cli.run_dir import write_run_metadata
 from deepecgkit.evaluation.report import save_evaluation
 from deepecgkit.evaluation.visualization import plot_training_curves
+from deepecgkit.registry import get_dataset_names, get_model_names
 from deepecgkit.training import ECGTrainer
 from deepecgkit.utils.weights import load_pretrained_weights
+
+
+def _package_version() -> str | None:
+    try:
+        return version("deepecgkit")
+    except PackageNotFoundError:
+        return None
 
 
 def _write_split_info(data_module: Any, output_path: Path, seed: int, logger: CLILogger) -> None:
@@ -76,27 +83,51 @@ def _write_split_info(data_module: Any, output_path: Path, seed: int, logger: CL
         logger.warning(f"Could not record split info: {e}")
 
 
+def _log_data_summary(data_config: dict[str, Any], logger: CLILogger) -> None:
+    """Say what the model is about to be trained on, in one line.
+
+    Args:
+        data_config: Description from describe_data
+        logger: CLI logger
+    """
+    preprocessing = data_config.get("preprocessing") or {}
+    parts = [f"{data_config.get('input_channels')} lead(s)"]
+    parts.append(f"{data_config.get('input_length')} samples")
+    rate, duration = (
+        preprocessing.get("sampling_rate"),
+        preprocessing.get("segment_duration_seconds"),
+    )
+    if rate and duration:
+        parts.append(f"{duration:g} s at {rate:g} Hz")
+    elif rate:
+        parts.append(f"{rate:g} Hz")
+    if preprocessing.get("normalization"):
+        parts.append(f"{preprocessing['normalization']} normalisation")
+    logger.info(f"Input: {', '.join(parts)}")
+
+
 def train(
     model_name: str,
     dataset_name: str,
     data_dir: str | None = None,
     output_dir: str | None = None,
     weights: str | None = None,
-    epochs: int = 50,
-    batch_size: int = 32,
-    learning_rate: float = 1e-3,
-    val_split: float = 0.2,
-    test_split: float = 0.1,
-    num_workers: int = 4,
+    epochs: int = defaults.EPOCHS,
+    batch_size: int = defaults.BATCH_SIZE,
+    learning_rate: float = defaults.LEARNING_RATE,
+    val_split: float = defaults.VAL_SPLIT,
+    test_split: float = defaults.TEST_SPLIT,
+    num_workers: int = defaults.NUM_WORKERS,
     accelerator: str = "auto",
     devices: int = 1,
     force_download: bool = False,
-    early_stopping_patience: int = 10,
-    seed: int = 42,
+    early_stopping_patience: int = defaults.EARLY_STOPPING_PATIENCE,
+    seed: int = defaults.SEED,
     multi_label: bool = False,
     sampling_rate: int | None = None,
     binary_classification: bool = False,
     normalization: str | None = None,
+    segment_duration: float | None = None,
     logger: CLILogger | None = None,
 ) -> int:
     """Train a model on a dataset."""
@@ -106,35 +137,28 @@ def train(
         if code is not None:
             return code
 
+    code = check_dataset_options(
+        dataset_name,
+        logger,
+        multi_label=multi_label,
+        binary_classification=binary_classification,
+        sampling_rate=sampling_rate,
+        normalization=normalization,
+        segment_duration=segment_duration,
+    )
+    if code is not None:
+        return code
+
+    if devices != 1:
+        logger.warning(
+            f"--devices {devices} has no effect: training runs on a single device. "
+            f"The flag is deprecated and will be removed."
+        )
+
     model_registry = _get_model_registry()
 
     ECGTrainer.seed_everything(seed)
     torch.set_float32_matmul_precision("medium")
-
-    if output_dir is None:
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        output_path = Path("runs") / f"{timestamp}-{model_name}-{dataset_name}-seed{seed}"
-    else:
-        output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-
-    write_run_metadata(
-        output_path,
-        {
-            "model": model_name,
-            "dataset": dataset_name,
-            "seed": seed,
-            "val_split": val_split,
-            "test_split": test_split,
-            "multi_label": multi_label,
-            "binary_classification": binary_classification,
-            "sampling_rate": sampling_rate,
-            "normalization": normalization,
-            "epochs": epochs,
-            "batch_size": batch_size,
-            "learning_rate": learning_rate,
-        },
-    )
 
     model_class = model_registry[model_name]
 
@@ -154,29 +178,68 @@ def train(
                 binary_classification=binary_classification,
                 sampling_rate=sampling_rate,
                 normalization=normalization,
+                segment_duration=segment_duration,
             ),
             stage="fit",
             logger=logger,
         )
-    except FileNotFoundError:
-        logger.error(f"Dataset '{dataset_name}' not found.")
-        if data_dir:
-            logger.info(f"Verify the data directory exists: {data_dir}")
-        return 1
     except Exception as e:
-        logger.error(f"Failed to create data module: {e}")
+        return report_data_error(e, dataset_name, logger, data_dir)
+
+    dataset = data_module.dataset
+    if dataset is None or len(dataset) == 0:
+        logger.error(
+            f"The '{dataset_name}' dataset loaded no samples, so there is nothing to train on."
+        )
         return 1
+
+    if (code := check_input_length(model_name, dataset_name, data_module, logger)) is not None:
+        return code
+
+    num_classes = int(getattr(dataset, "num_classes", 0) or 0)
+    if not num_classes:
+        logger.error(f"The '{dataset_name}' dataset does not report its number of classes.")
+        return 1
+    model_output_size = 1 if binary_classification else num_classes
+
+    data_config = describe_data(data_module, dataset_name)
+    preprocessing = data_config.get("preprocessing") or {}
+    input_channels = data_config["input_channels"]
+    _log_data_summary(data_config, logger)
+
+    # Nothing is written until the run can actually start, so a run that
+    # fails on its inputs leaves no directory behind.
+    if output_dir is None:
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        output_path = Path("runs") / f"{timestamp}-{model_name}-{dataset_name}-seed{seed}"
+    else:
+        output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    write_run_metadata(
+        output_path,
+        {
+            "model": model_name,
+            "dataset": dataset_name,
+            "seed": seed,
+            "val_split": val_split,
+            "test_split": test_split,
+            "multi_label": multi_label,
+            "binary_classification": binary_classification,
+            "sampling_rate": preprocessing.get("sampling_rate"),
+            "normalization": preprocessing.get("normalization"),
+            "segment_duration_seconds": preprocessing.get("segment_duration_seconds"),
+            "input_channels": input_channels,
+            "input_length": data_config.get("input_length"),
+            "class_names": data_config.get("class_names"),
+            "epochs": epochs,
+            "batch_size": batch_size,
+            "learning_rate": learning_rate,
+            "deepecgkit_version": _package_version(),
+        },
+    )
 
     _write_split_info(data_module, output_path, seed, logger)
-
-    input_channels = infer_input_channels_from(data_module)
-    num_classes = DATASET_NUM_CLASSES.get(dataset_name, 4)
-    if binary_classification and dataset_name in defaults.AF_DATASETS:
-        num_classes = 2
-
-    model_output_size = (
-        1 if (binary_classification and dataset_name in defaults.AF_DATASETS) else num_classes
-    )
 
     pos_weight = None
     if multi_label:
@@ -210,17 +273,17 @@ def train(
                 logger.error(f"Weights '{weights}' not found.")
                 logger.info(f"Available pretrained weights: {', '.join(all_weights)}")
                 logger.info("Or provide a valid file path to a checkpoint.")
-                return 1
+                return _fail(output_path, f"Weights '{weights}' not found.")
             model.load_state_dict(state_dict, strict=False)
             logger.info("Weights loaded successfully.")
         except Exception as e:
             logger.error(f"Failed to load weights: {e}")
-            return 1
+            return _fail(output_path, f"Failed to load weights: {e}")
 
     train_config = {
         "learning_rate": learning_rate,
         "scheduler": {"factor": 0.5, "patience": 5},
-        "binary_classification": num_classes == 2,
+        "binary_classification": binary_classification,
         "multi_label": multi_label,
         "task_type": "classification",
         "pos_weight": pos_weight,
@@ -232,6 +295,7 @@ def train(
         "input_channels": int(input_channels),
         "output_size": int(model_output_size),
     }
+    trainer.data_config = data_config
 
     checkpoint_dir = output_path / "checkpoints"
     log_dir = output_path / "training_logs"
@@ -268,9 +332,7 @@ def train(
 
         matplotlib.use("Agg")
 
-        class_names = None
-        if hasattr(data_module, "dataset") and hasattr(data_module.dataset, "class_names"):
-            class_names = data_module.dataset.class_names
+        class_names = data_config.get("class_names")
 
         try:
             metrics_file = log_dir / "metrics.csv"
@@ -307,15 +369,43 @@ def train(
                 "The run is incomplete and must not be treated as successful."
             )
 
-        write_run_metadata(output_path, {"returncode": 0})
+        write_run_metadata(
+            output_path,
+            {"returncode": 0, "best_checkpoint": trainer.best_checkpoint_path, "error": None},
+        )
+        if trainer.best_checkpoint_path:
+            logger.info(f"\nBest checkpoint: {trainer.best_checkpoint_path}")
+            logger.info(
+                f"Next: deepecg evaluate --checkpoint {output_path} -d {dataset_name} -o "
+                f"{output_path / 'evaluation'}"
+            )
         return 0
     except KeyboardInterrupt:
         logger.warning("Training interrupted by user.")
+        write_run_metadata(output_path, {"returncode": 130, "error": "interrupted"})
         return 130
+    except RuntimeError as e:
+        report_shape_error(e, model_name, "Training", logger)
+        return _fail(output_path, str(e))
     except Exception as e:
         logger.error(f"Training failed: {e}")
         logger.debug(traceback.format_exc())
-        return 1
+        return _fail(output_path, str(e))
+
+
+def _fail(output_path: Path, error: str) -> int:
+    """Record a failed run in its metadata and return the failure exit code.
+
+    Args:
+        output_path: Run directory
+        error: What went wrong, first line kept
+
+    Returns:
+        The exit code 1.
+    """
+    summary = error.splitlines()[0] if error else "unknown error"
+    write_run_metadata(output_path, {"returncode": 1, "error": summary})
+    return 1
 
 
 def add_parser(subparsers: Any) -> Any:
@@ -326,16 +416,18 @@ def add_parser(subparsers: Any) -> Any:
         "-m",
         type=str,
         required=True,
-        choices=MODEL_NAMES,
-        help="Model architecture to train",
+        choices=get_model_names(),
+        metavar="MODEL",
+        help="Model architecture to train (see: deepecg list-models)",
     )
     parser.add_argument(
         "--dataset",
         "-d",
         type=str,
         required=True,
-        choices=DATASET_NAMES,
-        help="Dataset to train on",
+        choices=get_dataset_names(),
+        metavar="DATASET",
+        help="Dataset to train on (see: deepecg list-datasets)",
     )
     parser.add_argument(
         "--data-dir",
@@ -407,7 +499,7 @@ def add_parser(subparsers: Any) -> Any:
         "--devices",
         type=int,
         default=defaults.DEVICES,
-        help=f"Number of devices to use (default: {defaults.DEVICES})",
+        help="Deprecated and ignored: training runs on a single device",
     )
     parser.add_argument(
         "--force-download",
@@ -430,26 +522,35 @@ def add_parser(subparsers: Any) -> Any:
         "--multi-label",
         action="store_true",
         default=False,
-        help="Use multi-label classification with BCE loss (default: single-label with CE loss)",
+        help="Multi-label classification with BCE loss, for datasets that support it (ptbxl)",
     )
     parser.add_argument(
         "--sampling-rate",
         type=int,
         default=None,
-        help="Target sampling rate in Hz for ECG signals (e.g., 100 or 500 for PTB-XL)",
+        help="Sampling rate in Hz the signals are resampled to (default: the dataset's own)",
+    )
+    parser.add_argument(
+        "--segment-duration",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="Length of each training segment in seconds, for datasets cut from longer "
+        "recordings (default: the dataset's own, 10)",
     )
     parser.add_argument(
         "--binary-classification",
         action="store_true",
         default=False,
-        help="Use binary classification (AF vs Non-AF) for AF datasets (default: 4-class)",
+        help="Collapse labels to AF vs Non-AF, for datasets that support it "
+        "(mitbih-afdb, ltafdb, unified-af)",
     )
     parser.add_argument(
         "--normalization",
         type=str,
         default=None,
         choices=["zscore", "minmax", "none"],
-        help="Normalization method for ECG signals (default: dataset-specific)",
+        help="Normalization method for ECG signals (default: the dataset's own, zscore)",
     )
     parser.set_defaults(handler="train", to_kwargs=_to_kwargs)
     return parser
@@ -477,4 +578,5 @@ def _to_kwargs(args: Any) -> dict[str, Any]:
         "sampling_rate": args.sampling_rate,
         "binary_classification": args.binary_classification,
         "normalization": args.normalization,
+        "segment_duration": args.segment_duration,
     }

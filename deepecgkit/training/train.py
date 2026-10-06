@@ -2,7 +2,9 @@ import csv
 import logging
 import os
 import random
+import sys
 import warnings
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +22,17 @@ try:
 except ImportError:
     tqdm = None
 
+#: Used for any key a train_config leaves out.
+DEFAULT_LEARNING_RATE = 1e-3
+DEFAULT_SCHEDULER = {"factor": 0.5, "patience": 5}
+
+
+def _package_version() -> str | None:
+    try:
+        return version("deepecgkit")
+    except PackageNotFoundError:
+        return None
+
 
 class ECGTrainer:
     """
@@ -30,35 +43,35 @@ class ECGTrainer:
 
     Args:
         model: The ECG model to train (any nn.Module)
-        train_config: Dictionary containing training configuration:
-            - learning_rate: Learning rate for optimizer
-            - scheduler: Dict with 'factor' and 'patience' for ReduceLROnPlateau
+        train_config: Optional dictionary of training settings; every key has
+            a default, so ``ECGTrainer(model)`` trains a multi-class classifier:
+            - learning_rate: Learning rate for optimizer (default 1e-3)
+            - scheduler: Dict with 'factor' and 'patience' for
+              ReduceLROnPlateau (default factor 0.5, patience 5)
             - binary_classification: Bool, if True uses BCE loss for binary tasks
             - multi_label: Bool, if True uses BCE loss for multi-label tasks
-            - task_type: 'classification' or 'regression'
+            - task_type: 'classification' (default) or 'regression'
             - pos_weight: Optional list of positive class weights for BCE loss
         device: Device to train on ('auto', 'cpu', 'cuda', 'mps')
         use_plateau_scheduler: If True, uses ReduceLROnPlateau, else StepLR
 
     Example:
         >>> model = KanResWideX(input_channels=1, output_size=4)
-        >>> config = {
-        ...     "learning_rate": 0.001,
-        ...     "scheduler": {"factor": 0.5, "patience": 10},
-        ...     "binary_classification": False,
-        ... }
-        >>> trainer = ECGTrainer(model=model, train_config=config)
+        >>> trainer = ECGTrainer(model)
         >>> trainer.fit(data_module, epochs=50)
     """
 
     def __init__(
         self,
         model: nn.Module,
-        train_config: dict[str, Any],
+        train_config: dict[str, Any] | None = None,
         device: str | torch.device = "auto",
         use_plateau_scheduler: bool = True,
     ) -> None:
         self.model = model
+        train_config = dict(train_config or {})
+        train_config.setdefault("learning_rate", DEFAULT_LEARNING_RATE)
+        train_config["scheduler"] = {**DEFAULT_SCHEDULER, **(train_config.get("scheduler") or {})}
         self.train_config = train_config
 
         self.learning_rate = train_config["learning_rate"]
@@ -91,7 +104,13 @@ class ECGTrainer:
         self.log_dir: str | None = None
         self.best_checkpoint_path: str | None = None
         self.best_val_loss = float("inf")
+        #: How to rebuild the model: registry name, lead count, output size.
         self.model_config: dict[str, Any] = {}
+        #: What the model was trained on: dataset, preprocessing, class names.
+        #: Both are written into every checkpoint and filled in by fit() when
+        #: left empty, so a checkpoint can be loaded and used on its own.
+        self.data_config: dict[str, Any] = {}
+        self._gradient_clip_val: float | None = None
 
     @property
     def _is_binary(self) -> bool:
@@ -166,6 +185,8 @@ class ECGTrainer:
                 if self._is_classification:
                     total_acc += self._compute_acc(y_hat, y)
                 n_batches += 1
+                if hasattr(dataloader, "set_postfix"):
+                    dataloader.set_postfix(loss=f"{total_loss / n_batches:.4f}", refresh=False)
 
         avg_loss = total_loss / max(n_batches, 1)
         avg_acc = total_acc / max(n_batches, 1) if self._is_classification else None
@@ -196,7 +217,9 @@ class ECGTrainer:
             early_stopping_patience: Stop after this many epochs without val_loss improvement
             checkpoint_dir: Directory to save checkpoints (None to disable)
             log_dir: Directory to save CSV metrics log (None to disable)
-            progress_bar: Whether to show a tqdm progress bar
+            progress_bar: Whether to show tqdm progress: one bar over the epochs and,
+                on an interactive terminal, a second one over the batches of the
+                current epoch
             gradient_clip_val: Max gradient norm for clipping (None to disable)
             save_top_k: Number of best checkpoints to keep
             restore_best: Reload the best-validation-loss checkpoint when training ends
@@ -209,6 +232,7 @@ class ECGTrainer:
 
         train_loader = data_module.train_dataloader()
         val_loader = data_module.val_dataloader()
+        self._describe_run(data_module)
 
         if checkpoint_dir is not None:
             checkpoint_dir = Path(checkpoint_dir)
@@ -233,10 +257,16 @@ class ECGTrainer:
 
         use_tqdm = progress_bar and tqdm is not None
         epoch_iter = tqdm(range(epochs), desc="Training") if use_tqdm else range(epochs)
+        # A bar per batch is only readable where it can redraw in place; in a
+        # log file it would add a line every refresh.
+        show_batches = use_tqdm and sys.stderr.isatty()
 
         try:
             for epoch in epoch_iter:
-                train_loss, train_acc = self._run_epoch(train_loader, train=True)
+                batches: Any = train_loader
+                if show_batches:
+                    batches = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{epochs}", leave=False)
+                train_loss, train_acc = self._run_epoch(batches, train=True)
                 val_loss, val_acc = self._run_epoch(val_loader, train=False)
 
                 if self.use_plateau_scheduler:
@@ -291,6 +321,42 @@ class ECGTrainer:
         if restore_best:
             self.restore_best_checkpoint()
 
+    def _describe_run(self, data_module: Any) -> None:
+        """Fill in whatever model_config and data_config leave unset.
+
+        Callers such as the CLI set both explicitly; this covers direct use of
+        the trainer, so its checkpoints still name their architecture and
+        record the preprocessing their inputs went through.
+
+        Args:
+            data_module: The data module being trained on
+        """
+        described: dict[str, Any] = {}
+        describe = getattr(data_module, "describe", None)
+        if callable(describe):
+            try:
+                described = describe() or {}
+            except Exception as error:  # a description must never stop a training run
+                logger.debug(f"Could not describe the data module: {error}")
+
+        if not self.data_config and described:
+            self.data_config = described
+
+        if not self.model_config.get("name"):
+            name = getattr(type(self.model), "_registry_name", None)
+            if name is not None:
+                self.model_config["name"] = name
+        if self.model_config.get("input_channels") is None and described.get("input_channels"):
+            self.model_config["input_channels"] = described["input_channels"]
+        if self.model_config.get("output_size") is None:
+            from deepecgkit.models.factory import infer_output_size
+
+            output_size = infer_output_size(
+                self.model.state_dict(), getattr(self.model, "HEAD_ATTR", None)
+            )
+            if output_size is not None:
+                self.model_config["output_size"] = output_size
+
     def restore_best_checkpoint(self) -> bool:
         """Reload the weights of the best-validation-loss checkpoint written during fit.
 
@@ -340,9 +406,9 @@ class ECGTrainer:
             data_module.setup(stage="validate")
 
         val_loader = data_module.val_dataloader()
-        return self._evaluate_loader(val_loader)
+        return self._evaluate_loader(val_loader, prefix="val")
 
-    def _evaluate_loader(self, dataloader: DataLoader) -> dict[str, float]:
+    def _evaluate_loader(self, dataloader: DataLoader, prefix: str = "test") -> dict[str, float]:
         self.model.eval()
         self.test_predictions = []
         self.test_targets = []
@@ -390,9 +456,9 @@ class ECGTrainer:
                 n_batches += 1
 
         avg_loss = total_loss / max(n_batches, 1)
-        results = {"test_loss": avg_loss}
+        results = {f"{prefix}_loss": avg_loss}
         if self._is_classification:
-            results["test_acc"] = total_acc / max(n_batches, 1)
+            results[f"{prefix}_acc"] = total_acc / max(n_batches, 1)
         return results
 
     def get_test_results(self) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
@@ -438,8 +504,10 @@ class ECGTrainer:
             "model_state_dict": self.model.state_dict(),
             "train_config": self.train_config,
             "model_config": self.model_config,
+            "data_config": self.data_config,
             "epoch": epoch,
             "best_val_loss": self.best_val_loss,
+            "deepecgkit_version": _package_version(),
         }
         if self.optimizer is not None:
             checkpoint["optimizer_state_dict"] = self.optimizer.state_dict()
@@ -456,23 +524,33 @@ class ECGTrainer:
 
         Args:
             path: Path to checkpoint file
-            model: Model instance to load weights into. Required.
+            model: Model instance to load weights into. When omitted, the
+                architecture recorded in the checkpoint is rebuilt.
             device: Device to load onto
 
         Returns:
             ECGTrainer instance with loaded weights
+
+        Raises:
+            ValueError: If no model is given and the checkpoint does not
+                record which architecture it holds.
         """
         checkpoint = torch.load(path, map_location="cpu", weights_only=False)
 
         if model is None:
-            raise ValueError("model argument is required for load_checkpoint")
+            from deepecgkit.models.factory import build_model_from_checkpoint
+
+            model, _ = build_model_from_checkpoint(path)
+        else:
+            model.load_state_dict(checkpoint["model_state_dict"])
 
         trainer = cls(
             model=model,
-            train_config=checkpoint["train_config"],
+            train_config=checkpoint.get("train_config"),
             device=device,
         )
-        trainer.model.load_state_dict(checkpoint["model_state_dict"])
+        trainer.model_config = dict(checkpoint.get("model_config") or {})
+        trainer.data_config = dict(checkpoint.get("data_config") or {})
         trainer.best_val_loss = checkpoint.get("best_val_loss", float("inf"))
         return trainer
 

@@ -3,9 +3,11 @@
 A run directory carries two JSON files next to its metrics:
 
 - ``run_metadata.json``: what produced the run (model, dataset, seed, split
-  fractions, labelling mode, hyperparameters). The analysis pipeline uses the
-  recorded seed to group runs; evaluate uses the split protocol to rebuild the
-  exact training partition.
+  fractions, labelling mode, preprocessing, hyperparameters). The analysis
+  pipeline uses the recorded seed to group runs; evaluate uses the split
+  protocol to rebuild the exact training partition. From schema version 2 the
+  preprocessing fields hold the values that were in effect; version 1 stored
+  the flags as typed, including ones the dataset ignored.
 - ``split_info.json``: the realised split sizes and test groups, used to
   verify a rebuilt partition matches the one trained on.
 
@@ -13,6 +15,7 @@ Filenames are shared with deepecgkit.analysis.aggregation, the consumer.
 """
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -20,15 +23,55 @@ from typing import Any
 from deepecgkit.analysis.aggregation import METADATA_FILENAME, SPLIT_INFO_FILENAME
 from deepecgkit.cli.logger import CLILogger
 
-RUN_METADATA_SCHEMA_VERSION = 1
+RUN_METADATA_SCHEMA_VERSION = 2
+
+CHECKPOINT_DIRNAME = "checkpoints"
+_VAL_LOSS_PATTERN = re.compile(r"val_loss=([0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)")
 
 __all__ = [
     "RunContext",
     "find_run_dir",
     "load_run_context",
+    "resolve_checkpoint",
     "verify_split",
     "write_run_metadata",
 ]
+
+
+def resolve_checkpoint(path: str | Path) -> Path:
+    """Turn a checkpoint argument into a checkpoint file.
+
+    A file is returned as it is. A directory stands for the best checkpoint
+    inside it: a run directory is searched in its ``checkpoints/`` folder,
+    and the checkpoint with the lowest validation loss in its file name wins
+    (ties and unnamed files fall back to the most recently written).
+
+    Args:
+        path: A checkpoint file, a run directory, or a checkpoints directory
+
+    Returns:
+        Path of the checkpoint file to load.
+
+    Raises:
+        FileNotFoundError: If the path is a directory holding no checkpoints.
+    """
+    target = Path(path)
+    if not target.is_dir():
+        return target
+
+    folder = target / CHECKPOINT_DIRNAME if (target / CHECKPOINT_DIRNAME).is_dir() else target
+    candidates = sorted(
+        candidate for pattern in ("*.pt", "*.ckpt") for candidate in folder.glob(pattern)
+    )
+    if not candidates:
+        raise FileNotFoundError(f"No checkpoint files (*.pt, *.ckpt) found in {folder}")
+
+    def rank(candidate: Path) -> tuple[float, float]:
+        match = _VAL_LOSS_PATTERN.search(candidate.name)
+        loss = float(match.group(1)) if match else float("inf")
+        return loss, -candidate.stat().st_mtime
+
+    return min(candidates, key=rank)
 
 
 def write_run_metadata(output_dir: str | Path, payload: dict[str, Any]) -> None:
@@ -52,6 +95,7 @@ def write_run_metadata(output_dir: str | Path, payload: dict[str, Any]) -> None:
             pass
     existing.update(payload)
     existing.setdefault("schema_version", RUN_METADATA_SCHEMA_VERSION)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(existing, indent=2) + "\n")
 
 
@@ -85,6 +129,8 @@ class RunContext:
         test_split: Recorded test fraction
         source: Where the values came from: "run_metadata", "split_info",
             or "none"
+        sampling_rate: Recorded --sampling-rate, when one was recorded
+        schema_version: Version of the metadata the values were read from
     """
 
     run_dir: Path | None
@@ -92,6 +138,8 @@ class RunContext:
     val_split: float | None = None
     test_split: float | None = None
     source: str = "none"
+    sampling_rate: int | None = None
+    schema_version: int | None = None
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -121,12 +169,16 @@ def load_run_context(checkpoint: str | Path) -> RunContext:
     metadata = _read_json(run_dir / METADATA_FILENAME)
     if metadata:
         seed = metadata.get("seed")
+        rate = metadata.get("sampling_rate")
+        schema = metadata.get("schema_version")
         return RunContext(
             run_dir=run_dir,
             seed=seed if isinstance(seed, int) and not isinstance(seed, bool) else None,
             val_split=metadata.get("val_split"),
             test_split=metadata.get("test_split"),
             source="run_metadata",
+            sampling_rate=rate if isinstance(rate, int) and not isinstance(rate, bool) else None,
+            schema_version=schema if isinstance(schema, int) else None,
         )
 
     split_info = _read_json(run_dir / SPLIT_INFO_FILENAME)

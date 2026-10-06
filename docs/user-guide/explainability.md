@@ -11,7 +11,7 @@ attribution from the P-wave region, against the 25% that region's width would ea
 ```python
 from deepecgkit.explainability import ECGExplainer
 
-explainer = ECGExplainer.from_checkpoint("runs/best.pt", "kanres", sampling_rate=500.0)
+explainer = ECGExplainer.from_checkpoint("runs/my-run/checkpoints/best-epoch.pt", sampling_rate=500.0)
 result = explainer.explain(signals)
 
 result.values            # (samples, leads, time) attribution, the input's own shape
@@ -25,9 +25,14 @@ result.crop_offset       # samples dropped from the front to fit the model
 ```
 
 ```bash
-deepecg explain --checkpoint runs/best.pt -m kanres -d ptbxl \
-    --method integrated-gradients --sampling-rate 500 -o explanations/
+deepecg explain --checkpoint runs/<run-directory> -d ptbxl \
+    --method integrated-gradients -o explanations/
 ```
+
+From the command line the data is prepared the way the checkpoint was trained, and the beat
+windows are placed at the sampling rate the model ends up seeing, so neither needs stating; see
+[`deepecg explain`](cli.md#deepecg-explain) for what `--sampling-rate` means with a recording
+file.
 
 ## Where the attribution comes from
 
@@ -117,9 +122,11 @@ the P-wave region at roughly 40% of chance.
         themselves.
 
     !!! warning "Set the sampling rate"
-        `sampling_rate` is what places the P, QRS and T windows around each detected R-peak. Nothing
-        in the pipeline can check it against the data, so passing 500 for a 100 Hz recording puts
-        the QRS window where the T wave is and every fraction it reports will be wrong.
+        `sampling_rate` is what places the P, QRS and T windows around each detected R-peak. In
+        Python nothing can check it against an array you pass, so giving 500 for a 100 Hz
+        recording puts the QRS window where the T wave is and every fraction it reports will be
+        wrong. The `deepecg explain` command takes the rate from the checkpoint and the dataset
+        instead.
 
 ## Visualisation
 

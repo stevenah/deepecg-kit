@@ -5,6 +5,7 @@ Data module for ECG datasets.
 import logging
 import warnings
 from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 import torch
@@ -27,7 +28,7 @@ class ECGDataModule:
         dataset: BaseECGDataset | Dataset | None = None,
         dataset_class: type[BaseECGDataset] | None = None,
         data_dir: str | None = None,
-        sampling_rate: int = 500,
+        sampling_rate: int | None = None,
         leads: list | None = None,
         transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
         target_transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
@@ -35,7 +36,7 @@ class ECGDataModule:
         batch_size: int = 32,
         val_split: float = 0.2,
         test_split: float = 0.1,
-        num_workers: int = 4,
+        num_workers: int = 0,
         seed: int = 42,
         stratify: bool = True,
         pin_memory: bool = False,
@@ -50,7 +51,9 @@ class ECGDataModule:
             dataset: PyTorch dataset instance (optional)
             dataset_class: Class of dataset to create (optional)
             data_dir: Directory containing ECG data files (optional, uses dataset's default if None)
-            sampling_rate: Sampling rate of the ECG signals (Hz)
+            sampling_rate: Rate the dataset resamples its signals to (Hz). None keeps the
+                dataset class's own default, which is its native or recommended rate;
+                after setup() the attribute holds the rate actually in effect
             leads: List of leads to use (e.g., ['I', 'II', 'III'] for standard leads)
             transform: Optional transform to be applied to the ECG signals
             target_transform: Optional transform to be applied to the labels
@@ -58,7 +61,10 @@ class ECGDataModule:
             batch_size: Batch size for data loaders
             val_split: Fraction of data to use for validation
             test_split: Fraction of data to use for testing
-            num_workers: Number of worker processes for data loading
+            num_workers: Number of worker processes for data loading. The built-in
+                datasets hold their signals in memory, so the default of 0 is the
+                fastest setting; with more, guard the calling script with
+                ``if __name__ == "__main__":`` on macOS and Windows
             seed: Random seed for reproducibility
             stratify: Whether to use stratified splitting based on labels
             dataset_kwargs: Additional keyword arguments to pass to the dataset class
@@ -102,11 +108,15 @@ class ECGDataModule:
 
             init_kwargs = {
                 "data_dir": self.data_dir,
-                "sampling_rate": self.sampling_rate,
                 "transform": self.transform,
                 "target_transform": self.target_transform,
                 "download": self.download,
             }
+
+            # Only an explicit rate overrides the dataset's own default: a
+            # blanket value here would silently resample every dataset.
+            if self.sampling_rate is not None:
+                init_kwargs["sampling_rate"] = self.sampling_rate
 
             if self.leads is not None:
                 init_kwargs["leads"] = self.leads
@@ -114,6 +124,10 @@ class ECGDataModule:
             init_kwargs.update(self.dataset_kwargs)
 
             self.dataset = self.dataset_class(**init_kwargs)
+
+        effective_rate = getattr(self.dataset, "sampling_rate", None)
+        if effective_rate is not None:
+            self.sampling_rate = effective_rate
 
         stratify_labels = None
         if (
@@ -234,6 +248,45 @@ class ECGDataModule:
             persistent_workers=self.persistent_workers and self.num_workers > 0,
             prefetch_factor=self.prefetch_factor if self.num_workers > 0 else None,
         )
+
+    def describe(self) -> dict[str, Any]:
+        """Describe the data a model is trained on, in the form checkpoints record.
+
+        ECGTrainer stores this as its data_config, which is what lets a
+        checkpoint be used on new recordings: it names the preprocessing the
+        inputs need and the classes the outputs stand for.
+
+        Returns:
+            Mapping with the registered dataset name, its preprocessing
+            (sampling rate, segment length, normalisation), the class names,
+            the sample shape, the labelling mode, and the split protocol.
+        """
+        if self.dataset is None:
+            raise RuntimeError("Call setup() before describing the data module")
+        dataset = self.dataset
+
+        input_channels = input_length = None
+        if len(dataset) > 0:
+            sample = dataset[0][0]
+            if getattr(sample, "ndim", 0) >= 2:
+                input_channels, input_length = int(sample.shape[0]), int(sample.shape[-1])
+
+        get_preprocessing = getattr(dataset, "get_preprocessing", None)
+        class_names = getattr(dataset, "class_names", None)
+        return {
+            "dataset": getattr(type(dataset), "_registry_name", None),
+            "preprocessing": get_preprocessing() if callable(get_preprocessing) else None,
+            "class_names": list(class_names) if class_names else None,
+            "input_channels": input_channels,
+            "input_length": input_length,
+            "multi_label": bool(getattr(dataset, "multi_label", False)),
+            "binary_classification": bool(getattr(dataset, "binary_classification", False)),
+            "split": {
+                "seed": self.seed,
+                "val_split": self.val_split,
+                "test_split": self.test_split,
+            },
+        }
 
     def get_metadata(self) -> dict:
         """Get metadata about the dataset.

@@ -20,6 +20,7 @@ __all__ = [
     "build_model_from_checkpoint",
     "infer_input_channels",
     "infer_output_size",
+    "recorded_model_name",
 ]
 
 
@@ -100,24 +101,42 @@ def infer_input_channels(state_dict: dict[str, torch.Tensor]) -> int | None:
     return None
 
 
+def recorded_model_name(checkpoint: Any) -> str | None:
+    """Return the registry name a checkpoint says it was trained as, if any.
+
+    Args:
+        checkpoint: The object returned by torch.load
+
+    Returns:
+        The recorded model name, or None for bare state dicts and checkpoints
+        that predate the record.
+    """
+    if not isinstance(checkpoint, dict):
+        return None
+    recorded = checkpoint.get("model_config")
+    name = recorded.get("name") if isinstance(recorded, dict) else None
+    return name if isinstance(name, str) and name else None
+
+
 def build_model_from_checkpoint(
     checkpoint_path: str | Path,
-    name: str,
+    name: str | None = None,
     input_channels: int | None = None,
     output_size: int | None = None,
     map_location: str = "cpu",
 ) -> tuple[nn.Module, dict[str, Any]]:
     """Build a model matching a checkpoint and load its weights.
 
-    Shapes are taken from explicit arguments when given, then from a model_config
-    block recorded at save time, then inferred from the weights themselves.
+    The architecture and its shapes are taken from explicit arguments when
+    given, then from the model_config block recorded at save time, then (for
+    shapes) inferred from the weights themselves.
 
     Checkpoints written by ECGTrainer, bare state dicts, and legacy PyTorch
     Lightning checkpoints are all accepted.
 
     Args:
         checkpoint_path: Path to a checkpoint written by ECGTrainer.save_checkpoint
-        name: Registered model name
+        name: Registered model name; optional when the checkpoint records one
         input_channels: Overrides the recorded or inferred lead count
         output_size: Overrides the recorded or inferred output size
         map_location: Device to map tensors onto while loading
@@ -126,14 +145,29 @@ def build_model_from_checkpoint(
         Tuple of the loaded model and the checkpoint dictionary.
 
     Raises:
-        ValueError: If the checkpoint holds no weights, or the lead count cannot
-            be determined and was not supplied.
+        ValueError: If the checkpoint holds no weights, names a different
+            architecture than the one requested, does not say which
+            architecture it holds, or the lead count cannot be determined.
     """
     checkpoint = torch.load(checkpoint_path, map_location=map_location, weights_only=False)
     try:
         state_dict, recorded = _split_checkpoint(checkpoint)
     except ValueError as error:
         raise ValueError(f"Checkpoint {checkpoint_path} contains no model_state_dict") from error
+
+    recorded_name = recorded_model_name(checkpoint)
+    if name is None:
+        if recorded_name is None:
+            raise ValueError(
+                f"Checkpoint {checkpoint_path} does not record which architecture it holds. "
+                f"Name it explicitly (CLI: --model)."
+            )
+        name = recorded_name
+    elif recorded_name is not None and recorded_name != name:
+        raise ValueError(
+            f"Checkpoint {checkpoint_path} was trained as '{recorded_name}', not '{name}'. "
+            f"Leave the model name out, or pass '{recorded_name}'."
+        )
 
     if output_size is None:
         head_attr = get_model_info(name).get("head_attr") if name in get_model_names() else None
@@ -153,5 +187,17 @@ def build_model_from_checkpoint(
         )
 
     model = build_model(name, input_channels=input_channels, output_size=output_size)
-    model.load_state_dict(state_dict)
+    try:
+        model.load_state_dict(state_dict)
+    except RuntimeError as error:
+        expected = set(model.state_dict())
+        missing = len(expected - set(state_dict))
+        unexpected = len(set(state_dict) - expected)
+        if not missing and not unexpected:
+            raise
+        raise ValueError(
+            f"The weights in {checkpoint_path} do not fit the '{name}' architecture "
+            f"({missing} of its tensors are missing and {unexpected} are not part of it). "
+            f"The checkpoint was most likely trained with a different model."
+        ) from error
     return model, checkpoint

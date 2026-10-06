@@ -1,8 +1,10 @@
+import os
 from pathlib import Path
 
 import torch
 
 from deepecgkit.utils.download import download_file
+from deepecgkit.utils.paths import DATA_HOME_ENV, get_data_home
 
 _PLACEHOLDER_URL_MARKERS = ("your-org",)
 
@@ -23,15 +25,48 @@ WEIGHTS_REGISTRY: dict[str, dict] = {
 
 
 def get_weights_dir() -> Path:
-    """Return (and create) the local cache directory for downloaded weights."""
-    cache_dir = Path.home() / ".cache" / "deepecgkit" / "weights"
+    """Return (and create) the local cache directory for downloaded weights.
+
+    Returns:
+        ``$DEEPECGKIT_HOME/weights`` when that variable is set, otherwise
+        ``~/.cache/deepecgkit/weights``.
+    """
+    if os.environ.get(DATA_HOME_ENV):
+        cache_dir = get_data_home() / "weights"
+    else:
+        cache_dir = Path.home() / ".cache" / "deepecgkit" / "weights"
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir
 
 
-def list_pretrained_weights() -> dict[str, str]:
-    """List all available pretrained weights with descriptions."""
-    return {name: info["description"] for name, info in WEIGHTS_REGISTRY.items()}
+def is_published(weight_name: str) -> bool:
+    """Report whether registered weights can actually be downloaded.
+
+    Args:
+        weight_name: Key into the pretrained weight registry
+
+    Returns:
+        False for unknown names and for entries whose URL is still a
+        placeholder awaiting a published release.
+    """
+    info = WEIGHTS_REGISTRY.get(weight_name)
+    if info is None:
+        return False
+    return not any(marker in info["url"] for marker in _PLACEHOLDER_URL_MARKERS)
+
+
+def list_pretrained_weights(include_unpublished: bool = False) -> dict[str, str]:
+    """List the pretrained weights that can be downloaded, with descriptions.
+
+    Args:
+        include_unpublished: Also list registry entries that are reserved for
+            a future release and have nothing to download yet
+    """
+    return {
+        name: info["description"]
+        for name, info in WEIGHTS_REGISTRY.items()
+        if include_unpublished or is_published(name)
+    }
 
 
 def get_weight_info(weight_name: str) -> dict:

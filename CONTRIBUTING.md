@@ -41,9 +41,14 @@ used regardless of what is on your PATH.
 dependencies (what `uv sync` and CI install). The `[project.optional-dependencies]`
 extras mirror it for pip users — keep the two in sync when editing either.
 
+`[tool.uv] constraint-dependencies` holds constraints that apply to the
+development lock only. It currently keeps scipy 1.15.x off macOS, whose
+wheels fail to load on macOS 27; published metadata is unaffected.
+
 ## Tests
 
 - The suite is offline and uses synthetic fixtures — no dataset downloads.
+  Download behaviour is tested against a local HTTP server.
 - `tests/test_state_dict_compat.py` snapshots every registered model's
   state_dict keys. If it fails, your change renamed a module attribute and
   would break loading of existing checkpoints; only regenerate the fixture

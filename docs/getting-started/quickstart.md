@@ -19,7 +19,6 @@ dataset_class = get_dataset("af-classification")
 data_module = ECGDataModule(
     dataset_class=dataset_class,
     batch_size=32,
-    num_workers=4,
     val_split=0.2,
     test_split=0.1,
     seed=42,
@@ -29,7 +28,15 @@ data_module = ECGDataModule(
 data_module.setup(stage="fit")
 ```
 
-The dataset is automatically downloaded on first use. `ECGDataModule` handles train/val/test splitting and DataLoader construction.
+The dataset (about 100 MB) is downloaded on first use into `~/.deepecgkit/datasets`; an
+interrupted download resumes on the next run. `ECGDataModule` handles train/val/test splitting
+and DataLoader construction, and leaves the signals at the dataset's own sampling rate
+(300 Hz here) unless you pass `sampling_rate`.
+
+!!! note "Loader workers"
+    The built-in datasets hold their signals in memory, so the default `num_workers=0` is the
+    fastest setting. If you raise it in a script on macOS or Windows, put the code under
+    `if __name__ == "__main__":` — worker processes re-import the script.
 
 ### 2. Create a model
 
@@ -48,23 +55,19 @@ All models follow the same interface: `ModelClass(input_channels, output_size, *
 ### 3. Train
 
 ```python
-train_config = {
-    "learning_rate": 1e-3,
-    "scheduler": {"factor": 0.5, "patience": 5},
-    "binary_classification": False,
-    "task_type": "classification",
-}
-
-trainer = ECGTrainer(model=model, train_config=train_config)
+trainer = ECGTrainer(model, train_config={"learning_rate": 1e-3})
 trainer.fit(
     data_module,
     epochs=50,
     early_stopping_patience=10,
     checkpoint_dir="runs/kanres-af/checkpoints",
 )
+print(trainer.best_checkpoint_path)
 ```
 
-Training includes early stopping, automatic checkpointing (keeps top 3 by validation loss), and an optional tqdm progress bar.
+`train_config` is optional; every key has a default (see [Training](../user-guide/training.md)).
+Training includes early stopping, automatic checkpointing (keeps top 3 by validation loss), and
+tqdm progress bars.
 
 ### 4. Evaluate
 
@@ -74,14 +77,47 @@ print(f"Test loss: {results['test_loss']:.4f}")
 print(f"Test accuracy: {results['test_acc']:.4f}")
 ```
 
+### 5. Predict on a new recording
+
+The checkpoint records the preprocessing its inputs went through, so a raw recording can be
+prepared the same way:
+
+```python
+import numpy as np
+import torch
+
+from deepecgkit.datasets import prepare_recording
+from deepecgkit.models import build_model_from_checkpoint
+
+model, checkpoint = build_model_from_checkpoint(trainer.best_checkpoint_path)
+data_config = checkpoint["data_config"]
+
+recording = np.load("ecg.npy")  # one lead, any length, sampled at 250 Hz
+prepared = prepare_recording(
+    recording, data_config["preprocessing"], source_sampling_rate=250
+)
+
+model.eval()
+with torch.no_grad():
+    probabilities = torch.softmax(model(torch.from_numpy(prepared.segments)), dim=1).mean(dim=0)
+print(data_config["class_names"][int(probabilities.argmax())])
+```
+
 ## CLI Workflow
 
 The same workflow via the `deepecg` command:
 
 ```bash
 deepecg train -m kanres -d af-classification --epochs 50 --batch-size 32
+```
 
-deepecg evaluate --checkpoint runs/*/checkpoints/*.pt -m kanres -d af-classification
+Training ends by printing the run directory and its best checkpoint. Pass that run directory
+wherever a checkpoint is expected:
+
+```bash
+deepecg evaluate --checkpoint runs/<run-directory> -d af-classification
+
+deepecg predict --checkpoint runs/<run-directory> --input ecg.npy --sampling-rate 250
 
 deepecg list-models
 

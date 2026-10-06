@@ -36,8 +36,14 @@ Dataset classes, data modules, and preprocessing utilities for ECG analysis.
 
 ::: deepecgkit.datasets.unified_af.UnifiedAFDataset
 
-## File Reading
+## File Reading and Inference Preprocessing
 
 ::: deepecgkit.datasets.io.read_ecg_recording
 
+::: deepecgkit.datasets.io.read_ecg_recording_with_rate
+
 ::: deepecgkit.datasets.io.as_model_input
+
+::: deepecgkit.datasets.io.prepare_recording
+
+::: deepecgkit.datasets.io.PreparedRecording

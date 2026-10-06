@@ -41,6 +41,25 @@ make docs-serve
 
 This starts a local server at `http://127.0.0.1:8000` with live-reloading.
 
+## Where Data Is Stored
+
+Datasets are downloaded on first use into `~/.deepecgkit/datasets`, one folder per dataset.
+`deepecg list-datasets` shows each dataset's download size and whether a local copy exists.
+
+To keep them elsewhere — a scratch disk, a shared project folder on a cluster — set
+`DEEPECGKIT_HOME`:
+
+```bash
+export DEEPECGKIT_HOME=/scratch/$USER/deepecgkit
+```
+
+Datasets then live in `$DEEPECGKIT_HOME/datasets` and cached weights in
+`$DEEPECGKIT_HOME/weights`. A single dataset can also be pointed at a specific folder with
+`--data-dir` (CLI) or `data_dir=` (Python).
+
+Downloads are fetched from PhysioNet's open-data mirror, fall back to physionet.org when the
+mirror cannot be reached, and resume from where they stopped if interrupted.
+
 ## Hardware
 
 DeepECG-Kit automatically detects available hardware:

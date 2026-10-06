@@ -171,7 +171,7 @@ class FeatureExtractor(TransformerMixin, BaseEstimator):
     def from_checkpoint(
         cls,
         checkpoint: str | Path,
-        model_name: str,
+        model_name: str | None = None,
         input_channels: int | None = None,
         output_size: int | None = None,
         **kwargs: Any,
@@ -181,7 +181,8 @@ class FeatureExtractor(TransformerMixin, BaseEstimator):
         Args:
             checkpoint: Path to an ECGTrainer checkpoint, a bare state dict, or
                 a legacy PyTorch Lightning checkpoint
-            model_name: Registered model name matching the weights
+            model_name: Registered model name matching the weights; optional
+                when the checkpoint records it
             input_channels: Lead count, required for architectures whose weights
                 do not encode it
             output_size: Classifier width, normally recovered from the weights
@@ -196,7 +197,8 @@ class FeatureExtractor(TransformerMixin, BaseEstimator):
             input_channels=input_channels,
             output_size=output_size,
         )
-        return cls(model, model_name=model_name, **kwargs)
+        resolved = model_name or getattr(type(model), "_registry_name", None)
+        return cls(model, model_name=resolved, **kwargs)
 
     @classmethod
     def from_pretrained(
@@ -264,6 +266,12 @@ class FeatureExtractor(TransformerMixin, BaseEstimator):
         if self.dtype not in _DTYPES:
             raise ValueError(
                 f"Unknown dtype: {self.dtype}. Choose one of {', '.join(sorted(_DTYPES))}."
+            )
+        if not callable(getattr(self.model, "extract_features", None)):
+            raise TypeError(
+                f"{type(self.model).__name__} has no extract_features() method, so its "
+                f"embeddings cannot be read out. Subclass deepecgkit.models.ECGModelBase, "
+                f"or add extract_features(x) returning a (batch, feature_dim) tensor."
             )
 
         out_dtype = _DTYPES[self.dtype]
@@ -387,9 +395,10 @@ def extract_features(
     Args:
         data: An array, tensor, file path, Dataset, DataLoader, or ECGDataModule
         model: An already-built model
-        checkpoint: Path to a checkpoint, requiring model_name
+        checkpoint: Path to a checkpoint
         weights: Registered pretrained weight name, or a path to a weights file
-        model_name: Registered model name
+        model_name: Registered model name; optional for a checkpoint that
+            records its own
         input_channels: Lead count, when it cannot be recovered from the weights
         output_size: Classifier width, when it cannot be recovered
         split: Which split to use when data is an ECGDataModule
@@ -400,7 +409,7 @@ def extract_features(
 
     Raises:
         ValueError: If not exactly one weight source is given, or a checkpoint
-            is given without a model name.
+            neither records its architecture nor is given a model name.
 
     Example:
         >>> result = extract_features(signals, checkpoint="best.ckpt", model_name="kanres")
@@ -417,8 +426,6 @@ def extract_features(
     if model is not None:
         extractor = FeatureExtractor(model, model_name=model_name, **kwargs)
     elif checkpoint is not None:
-        if model_name is None:
-            raise ValueError("model_name is required when loading from a checkpoint.")
         extractor = FeatureExtractor.from_checkpoint(
             checkpoint,
             model_name,

@@ -14,6 +14,9 @@ print(f"Test accuracy: {results['test_acc']:.4f}")
 y_pred, y_true, y_prob = trainer.get_test_results()
 ```
 
+`trainer.validate(data_module)` does the same on the validation split and reports `val_loss`
+and `val_acc`.
+
 ## ECGEvaluator
 
 For more comprehensive evaluation:
@@ -107,7 +110,7 @@ For numeric calibration measurement and temperature scaling, see [Calibration](c
 ```python
 from deepecgkit.evaluation import plot_ecg_signals
 
-plot_ecg_signals(signals, labels=labels, save_path="ecg.png")
+plot_ecg_signals(signal, sampling_rate=300, leads=["ECG"], save_path="ecg.png")
 ```
 
 ### Prediction Visualization
@@ -121,7 +124,9 @@ plot_predictions(y_true, y_pred, save_path="predictions.png")
 ## CLI Evaluation
 
 ```bash
-deepecg evaluate --checkpoint model.pt -m kanres -d af-classification --split test
+deepecg evaluate --checkpoint runs/<run-directory> -d af-classification --split test
 ```
 
-See the [CLI reference](cli.md#deepecg-evaluate) for all options.
+The dataset is rebuilt with the split and the preprocessing recorded for the checkpoint, and the
+full metric set is printed; add `-o DIR` to save it with the predictions and plots. See the
+[CLI reference](cli.md#deepecg-evaluate) for all options.

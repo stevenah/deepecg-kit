@@ -3,9 +3,9 @@
 Train any registered model on any registered dataset with sensible defaults.
 
 Usage:
-    python examples/train_basic.py
+    python examples/train_basic.py --download        # first run: fetches the dataset
     python examples/train_basic.py --model resnet --dataset af-classification --epochs 30
-    python examples/train_basic.py --model tcn --dataset af-classification --batch-size 64 --download
+    python examples/train_basic.py --model tcn --dataset af-classification --batch-size 64
 """
 
 import argparse
@@ -62,7 +62,6 @@ def main():
     train_config = {
         "learning_rate": args.lr,
         "scheduler": {"factor": 0.5, "patience": 5},
-        "binary_classification": num_classes == 2,
         "task_type": "classification",
     }
 

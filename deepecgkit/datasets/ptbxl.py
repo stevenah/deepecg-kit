@@ -12,7 +12,7 @@ from tqdm import tqdm
 
 from deepecgkit.registry import register_dataset
 
-from ..utils.download import download_and_extract_zip
+from ..utils.download import download_file, has_unfinished_download
 from .base import BaseECGDataset
 from .preprocessing import ECGStandardizer, convert_to_tensor
 
@@ -211,23 +211,72 @@ class PTBXLDataset(BaseECGDataset):
         "https://physionet.org/static/published-projects/ptb-xl/"
         "ptb-xl-a-large-publicly-available-electrocardiography-dataset-1.0.3.zip"
     )
+    DOWNLOAD_MIRROR: ClassVar[str] = "https://physionet-open.s3.amazonaws.com/ptb-xl/1.0.3/"
+    DOWNLOAD_SIZE: ClassVar[str | None] = "about 3.2 GB"
+    #: The mirror holds one small file per record and resolution, so many
+    #: are fetched at a time.
+    DOWNLOAD_WORKERS: ClassVar[int] = 32
+    METADATA_FILES: ClassVar[tuple[str, ...]] = ("ptbxl_database.csv", "scp_statements.csv")
+    #: Recordings are 10 seconds long; inference cuts longer ones to match.
+    RECORDING_DURATION_SECONDS: ClassVar[float] = 10.0
+
+    @classmethod
+    def is_downloaded(cls, data_dir: str | Path | None = None) -> bool:
+        """Report whether the extracted metadata table is present.
+
+        A directory still holding the archive or a partial download does not
+        count: the archive is deleted once extraction finishes.
+        """
+        target = Path(data_dir) if data_dir is not None else cls.get_default_data_dir()
+        if has_unfinished_download(target):
+            return False
+        return (target / "ptbxl_database.csv").exists()
+
+    def get_preprocessing(self) -> dict:
+        """Describe the preprocessing, adding the fixed recording duration."""
+        preprocessing = super().get_preprocessing()
+        preprocessing["segment_duration_seconds"] = self.RECORDING_DURATION_SECONDS
+        return preprocessing
 
     @classmethod
     def _download(cls, data_dir: Path, verbose: bool = True) -> None:
-        """Download the PTB-XL dataset from PhysioNet as a single ZIP."""
+        """Download PTB-XL: record by record from the mirror, or as one archive."""
         if verbose:
             logger.info(f"Downloading PTB-XL dataset to {data_dir}")
-            logger.info("Note: This is a large dataset (~2.5GB). Download may take a while.")
-        download_and_extract_zip(
-            cls.DOWNLOAD_URL,
+            logger.info(f"Note: this fetches {cls.DOWNLOAD_SIZE}; an interrupted download resumes.")
+        cls._download_records(
             data_dir,
-            zip_name="ptb-xl-1.0.3.zip",
+            lambda: cls._mirrored_files(data_dir),
+            mirror=cls.DOWNLOAD_MIRROR,
             desc="Downloading PTB-XL",
-            nested_dirs=("ptb-xl-a-large-publicly-available-electrocardiography-dataset-1.0.3",),
+            archive_url=cls.DOWNLOAD_URL,
+            archive_name="ptb-xl-1.0.3.zip",
+            workers=cls.DOWNLOAD_WORKERS,
             verbose=verbose,
+            nested_dirs=("ptb-xl-a-large-publicly-available-electrocardiography-dataset-1.0.3",),
         )
         if verbose:
             logger.info("Download complete!")
+
+    @classmethod
+    def _mirrored_files(cls, data_dir: Path) -> list[str]:
+        """List the metadata tables and record files to fetch.
+
+        The record paths are read from ptbxl_database.csv, the table the
+        loader itself follows, rather than from the project's RECORDS index,
+        which runs two paths together on one line.
+
+        Raises:
+            RuntimeError: If the metadata tables cannot be fetched.
+        """
+        for name in cls.METADATA_FILES:
+            download_file(cls.DOWNLOAD_MIRROR + name, data_dir / name, progress=False)
+        table = pd.read_csv(data_dir / "ptbxl_database.csv", usecols=["filename_lr", "filename_hr"])
+        records = [*table["filename_lr"], *table["filename_hr"]]
+        return [
+            *cls.METADATA_FILES,
+            *(f"{record}{suffix}" for record in records for suffix in (".hea", ".dat")),
+        ]
 
     def _load_data(self) -> None:
         """Load the PTB-XL dataset into memory."""
@@ -237,9 +286,7 @@ class PTBXLDataset(BaseECGDataset):
         metadata_path = self.data_dir / "ptbxl_database.csv"
         if not metadata_path.exists():
             raise FileNotFoundError(
-                f"Metadata file not found at {metadata_path}. "
-                "Use download=True or manually download from: "
-                "https://physionet.org/content/ptb-xl/1.0.3/"
+                self._not_found_message(self.data_dir, "ptbxl_database.csv and the record folders")
             )
 
         self.metadata_df = pd.read_csv(metadata_path, index_col="ecg_id")

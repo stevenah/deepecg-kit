@@ -225,9 +225,28 @@ class TestBackwardsCompatibility:
         assert {run["seed"] for run in runs} == {42}
 
     def test_shipped_config_is_loadable(self):
-        """The repository config still parses and expands."""
+        """The repository config parses, and names only things that exist."""
+        from deepecgkit.registry import get_dataset_names, get_model_names
+
         experiments = load_experiments(SHIPPED_CONFIG)
-        assert len(experiments) == 18
+        assert experiments
+        assert {experiment["model"] for experiment in experiments} <= set(get_model_names())
+        assert {experiment["dataset"] for experiment in experiments} <= set(get_dataset_names())
+
+    def test_segment_duration_and_sampling_rate_reach_the_command(self, temp_dir):
+        """Preprocessing set in the config is passed on, for every dataset."""
+        config = write_config(
+            temp_dir,
+            "experiments:\n"
+            "  - model: afmodel\n"
+            "    dataset: af-classification\n"
+            "    segment_duration: 30\n"
+            "    sampling_rate: 300\n",
+        )
+        command = build_command(expand_runs(load_experiments(config))[0])
+
+        assert command[command.index("--segment-duration") + 1] == "30"
+        assert command[command.index("--sampling-rate") + 1] == "300"
 
     def test_command_matches_the_previous_form_plus_output_dir(self, temp_dir):
         """Only the output directory is new on the training command."""

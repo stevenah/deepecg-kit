@@ -106,6 +106,15 @@ class UnifiedAFDataset(BaseECGDataset):
         "mitbih_afdb": MITBIHAFDBDataset,
         "ltafdb": LTAFDBDataset,
     }
+    DOWNLOAD_SIZE: ClassVar[str | None] = "about 4.4 GB across its three sources"
+
+    @classmethod
+    def is_downloaded(cls, data_dir: str | Path | None = None) -> bool:
+        """Report whether every source dataset is present in its own directory."""
+        return all(
+            dataset_class.is_downloaded(dataset_class.get_default_data_dir())
+            for dataset_class in cls.AVAILABLE_DATASETS.values()
+        )
 
     def _resolve_dataset_dir(self, dataset_name: str) -> Path:
         dataset_class = self.AVAILABLE_DATASETS[dataset_name]
@@ -128,6 +137,7 @@ class UnifiedAFDataset(BaseECGDataset):
     ):
         self.segment_duration_seconds = segment_duration_seconds
         self.binary_classification = binary_classification
+        self.normalization = normalization
         self.verbose = verbose
         self.dataset_kwargs = dataset_kwargs or {}
 
@@ -162,7 +172,7 @@ class UnifiedAFDataset(BaseECGDataset):
             dataset_class = self.AVAILABLE_DATASETS[dataset_name]
             dataset_dir = self._resolve_dataset_dir(dataset_name)
 
-            if dataset_dir.exists() and any(dataset_dir.iterdir()):
+            if dataset_class.is_downloaded(dataset_dir):
                 if self.verbose:
                     logger.info(f"\n{'=' * 60}")
                     logger.info(f"Skipping {dataset_name}: already exists at {dataset_dir}")
@@ -181,6 +191,7 @@ class UnifiedAFDataset(BaseECGDataset):
             "sampling_rate": self.sampling_rate,
             "transform": self.transform,
             "segment_duration_seconds": self.segment_duration_seconds,
+            "normalization": self.normalization,
             "download": False,
         }
 
@@ -313,6 +324,12 @@ class UnifiedAFDataset(BaseECGDataset):
 
     def __len__(self) -> int:
         return len(self.concat_dataset)
+
+    def get_preprocessing(self) -> dict:
+        """Describe the preprocessing shared by every source dataset."""
+        preprocessing = super().get_preprocessing()
+        preprocessing["normalization"] = self.normalization
+        return preprocessing
 
     def get_dataset_info(self) -> dict:
         return {

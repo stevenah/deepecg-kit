@@ -3,9 +3,12 @@
 Loads a checkpoint, runs evaluation on the test set, computes classification metrics
 with bootstrap confidence intervals, and generates diagnostic plots.
 
+The dataset is rebuilt with the preprocessing the checkpoint records, so the
+model is evaluated on inputs shaped like the ones it was trained on.
+
 Usage:
-    python examples/evaluate_model.py --checkpoint runs/kanres-af/checkpoints/best.pt --model kanres --dataset af-classification
-    python examples/evaluate_model.py --checkpoint model.pt --model afmodel --dataset af-classification --output-dir results/
+    python examples/evaluate_model.py --checkpoint runs/kanres-af/checkpoints/epoch=07-val_loss=0.4123.pt
+    python examples/evaluate_model.py --checkpoint model.pt --dataset af-classification --output-dir results/
 """
 
 import argparse
@@ -19,17 +22,23 @@ from deepecgkit.evaluation.visualization import (
     plot_confusion_matrix,
     plot_roc_curve,
 )
-from deepecgkit.registry import get_dataset, get_dataset_info, get_model
+from deepecgkit.models import build_model_from_checkpoint
+from deepecgkit.registry import get_dataset, get_dataset_info
 from deepecgkit.training import ECGTrainer
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate a trained ECG model")
     parser.add_argument("--checkpoint", type=str, required=True)
-    parser.add_argument("--model", type=str, required=True)
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="Model name, only needed for checkpoints that do not record it",
+    )
     parser.add_argument("--dataset", type=str, default="af-classification")
     parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--output-dir", type=str, default="evaluation_results")
     parser.add_argument("--download", action="store_true")
@@ -44,20 +53,22 @@ def main():
 
     dataset_info = get_dataset_info(args.dataset)
     dataset_class = get_dataset(args.dataset)
-    input_channels = dataset_info["input_channels"]
-    num_classes = dataset_info["num_classes"]
-
-    model_class = get_model(args.model)
-    model = model_class(input_channels=input_channels, output_size=num_classes)
 
     print(f"Loading checkpoint: {args.checkpoint}")
+    model, _ = build_model_from_checkpoint(args.checkpoint, name=args.model)
     trainer = ECGTrainer.load_checkpoint(args.checkpoint, model=model, device=args.device)
 
+    # Rebuild the data the way the checkpoint was trained: same sampling rate
+    # and the same split, so "test" means the samples the model never saw.
+    preprocessing = trainer.data_config.get("preprocessing") or {}
+    split = trainer.data_config.get("split") or {}
     data_module = ECGDataModule(
         dataset_class=dataset_class,
+        sampling_rate=preprocessing.get("sampling_rate"),
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         download=args.download,
+        **split,
     )
     data_module.setup(stage="test")
 

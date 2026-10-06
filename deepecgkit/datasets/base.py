@@ -4,13 +4,21 @@ import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import numpy as np
 import torch
 from torch.utils.data import Dataset
 
 from deepecgkit.datasets.preprocessing import convert_to_tensor
+from deepecgkit.utils.download import (
+    download_and_extract_zip,
+    download_files,
+    download_lock,
+    marking_download,
+    partial_path,
+)
+from deepecgkit.utils.paths import DATA_HOME_ENV, get_data_home
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +49,8 @@ class BaseECGDataset(Dataset, ABC):
     #: lowercased class name; pin it before renaming a class so existing
     #: downloads keep being found.
     DIR_NAME: ClassVar[str | None] = None
+    #: Approximate size of what download() fetches, for `deepecg list-datasets`.
+    DOWNLOAD_SIZE: ClassVar[str | None] = None
 
     binary_classification: bool = False
     #: Re-raise per-record load errors instead of skipping the record.
@@ -60,9 +70,114 @@ class BaseECGDataset(Dataset, ABC):
         """Get the default data directory for this dataset.
 
         Returns:
-            Path to the default data directory
+            ``<data home>/datasets/<name>``, where the data home is
+            ``~/.deepecgkit`` unless the DEEPECGKIT_HOME environment variable
+            points elsewhere.
         """
-        return Path.home() / ".deepecgkit" / "datasets" / (cls.DIR_NAME or cls.__name__.lower())
+        return get_data_home() / "datasets" / (cls.DIR_NAME or cls.__name__.lower())
+
+    @classmethod
+    def is_downloaded(cls, data_dir: str | Path | None = None) -> bool:
+        """Report whether a usable copy of the dataset is present.
+
+        The default treats any non-empty directory as the dataset. Datasets
+        that download archives override this to look for the files their
+        loader needs, so an interrupted download is detected and repeated
+        rather than mistaken for the dataset.
+
+        Args:
+            data_dir: Directory to inspect; the default data directory when None
+
+        Returns:
+            True when the dataset can be loaded from data_dir as it stands.
+        """
+        target = Path(data_dir) if data_dir is not None else cls.get_default_data_dir()
+        return target.is_dir() and any(target.iterdir())
+
+    @classmethod
+    def _download_records(
+        cls,
+        data_dir: Path,
+        names: list[str] | Callable[[], list[str]],
+        *,
+        mirror: str,
+        desc: str,
+        archive_url: str,
+        archive_name: str,
+        workers: int = 1,
+        keep_alive: bool = True,
+        verbose: bool = True,
+        **archive_kwargs: Any,
+    ) -> None:
+        """Fetch a dataset's files from a mirror, or its archive when that fails.
+
+        PhysioNet's own servers hand out whole-project archives slowly; the
+        open-data mirror serves the same files individually and much faster,
+        so it is tried first. The archive stays as the fallback because it
+        needs nothing but physionet.org to be reachable.
+
+        Args:
+            data_dir: Directory to download into
+            names: File paths relative to the mirror's base URL, or a function
+                returning them once it has fetched whatever index lists them
+            mirror: Base URL of the mirrored project directory
+            desc: Description for the progress bars
+            archive_url: URL of the whole-project zip archive
+            archive_name: File name to save the archive under
+            workers: Files fetched at a time from the mirror
+            keep_alive: Reuse connections across files; right for many small
+                files, wrong for large ones that should resume individually
+            verbose: Print progress messages
+            **archive_kwargs: Forwarded to download_and_extract_zip
+        """
+        archive = data_dir / archive_name
+        with marking_download(data_dir):
+            try:
+                resolved = names() if callable(names) else names
+                download_files(
+                    [mirror],
+                    resolved,
+                    data_dir,
+                    desc=desc,
+                    workers=workers,
+                    keep_alive=keep_alive,
+                )
+                # An archive download abandoned on an earlier run would
+                # otherwise keep the directory looking unfinished.
+                for leftover in (archive, partial_path(archive)):
+                    leftover.unlink(missing_ok=True)
+                return
+            except (RuntimeError, OSError, ValueError, KeyError) as error:
+                logger.warning(
+                    f"The mirror at {mirror} could not be used ({error}). "
+                    f"Falling back to the archive on physionet.org, which is slower."
+                )
+            download_and_extract_zip(
+                archive_url,
+                data_dir,
+                zip_name=archive_name,
+                desc=desc,
+                verbose=verbose,
+                **archive_kwargs,
+            )
+
+    @classmethod
+    def _not_found_message(cls, data_dir: Path, expected: str) -> str:
+        """Build the error text for a dataset that is absent or incomplete.
+
+        Args:
+            data_dir: Directory that was searched
+            expected: What the loader looked for there
+
+        Returns:
+            A message naming the directory and the ways to fix it.
+        """
+        return (
+            f"{cls.__name__} data was not found in {data_dir} (expected {expected}). "
+            f"Pass download=True to fetch it, or force_download=True to replace an "
+            f"incomplete copy (CLI: --force-download). To keep datasets elsewhere, pass "
+            f"data_dir or set the {DATA_HOME_ENV} environment variable."
+        )
 
     def __init__(
         self,
@@ -93,10 +208,14 @@ class BaseECGDataset(Dataset, ABC):
         self.target_transform = target_transform
 
         if force_download:
-            self._clear_dataset()
-            self.download()
-        elif download and self._data_dir_is_empty():
-            self.download()
+            with download_lock(self.data_dir):
+                self._clear_dataset()
+                self.download()
+        elif download and not self.is_downloaded(self.data_dir):
+            with download_lock(self.data_dir):
+                # Another process may have fetched it while this one waited.
+                if not self.is_downloaded(self.data_dir):
+                    self.download()
 
         self._load_data()
 
@@ -114,7 +233,10 @@ class BaseECGDataset(Dataset, ABC):
     @classmethod
     def _download(cls, data_dir: Path, verbose: bool = True) -> None:
         """Fetch the dataset archive into data_dir. Implemented per dataset."""
-        raise NotImplementedError
+        raise NotImplementedError(
+            f"{cls.__name__} does not implement _download(), so it cannot be fetched "
+            f"automatically. Place the data in {data_dir} and pass download=False."
+        )
 
     @classmethod
     def download_to(cls, data_dir: str | Path | None = None, verbose: bool = True) -> Path:
@@ -128,7 +250,8 @@ class BaseECGDataset(Dataset, ABC):
             The directory the dataset was downloaded into.
         """
         target = Path(data_dir) if data_dir is not None else cls.get_default_data_dir()
-        cls._download(target, verbose=verbose)
+        with download_lock(target):
+            cls._download(target, verbose=verbose)
         return target
 
     def download(self) -> None:
@@ -260,6 +383,26 @@ class BaseECGDataset(Dataset, ABC):
         logger.info("\nClass distribution:")
         for class_name, count in distribution.items():
             logger.info(f"  {class_name}: {count}")
+
+    def get_preprocessing(self) -> dict[str, Any]:
+        """Describe how a raw recording becomes one of this dataset's samples.
+
+        Checkpoints record this (see ECGTrainer.data_config) so that a new
+        recording can be put through the same steps before it reaches the
+        model: resample to sampling_rate, cut into segments of
+        segment_duration_seconds, then normalise each segment.
+
+        Returns:
+            Mapping with sampling_rate, segment_duration_seconds (None when
+            recordings are not segmented), normalization, and leads.
+        """
+        standardizer = getattr(self, "standardizer", None)
+        return {
+            "sampling_rate": self.sampling_rate,
+            "segment_duration_seconds": getattr(self, "segment_duration_seconds", None),
+            "normalization": getattr(standardizer, "normalization", None),
+            "leads": list(self.leads) if self.leads else None,
+        }
 
     def get_metadata(self) -> dict:
         """Get metadata about the dataset.

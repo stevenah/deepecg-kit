@@ -4,8 +4,9 @@ Demonstrates loading pretrained weights, freezing the backbone for transfer lear
 CSV logging, and generating evaluation plots after training.
 
 Usage:
-    python examples/train_advanced.py --weights kanres-af-30s --freeze-backbone --epochs 20
     python examples/train_advanced.py --model kanres --dataset af-classification --download
+    python examples/train_advanced.py --weights runs/my-run/checkpoints/my-checkpoint.pt \
+        --freeze-backbone --epochs 20
 """
 
 import argparse
@@ -13,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
+import torch
 
 from deepecgkit.datasets import ECGDataModule
 from deepecgkit.evaluation.metrics import (
@@ -73,7 +75,12 @@ def main():
 
     if args.weights:
         print(f"\nLoading pretrained weights: {args.weights}")
-        state_dict = load_pretrained_weights(args.weights, map_location="cpu")
+        if Path(args.weights).exists():
+            # A weights file, or a checkpoint written by an earlier training run.
+            loaded = torch.load(args.weights, map_location="cpu", weights_only=True)
+            state_dict = loaded.get("model_state_dict", loaded)
+        else:
+            state_dict = load_pretrained_weights(args.weights, map_location="cpu")
         model.load_state_dict(state_dict, strict=False)
 
     if args.freeze_backbone:
@@ -89,7 +96,6 @@ def main():
     train_config = {
         "learning_rate": args.lr,
         "scheduler": {"factor": 0.5, "patience": 5},
-        "binary_classification": num_classes == 2,
         "task_type": "classification",
     }
 

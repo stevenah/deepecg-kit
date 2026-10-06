@@ -9,9 +9,9 @@ import numpy as np
 
 from deepecgkit.analysis.latex import transfer_matrix_table
 from deepecgkit.cli import defaults
-from deepecgkit.cli._common import require_model
+from deepecgkit.cli._common import LEGACY_SAMPLING_RATE, read_checkpoint, require_model
 from deepecgkit.cli.logger import CLILogger
-from deepecgkit.cli.registry import DATASET_NAMES, MODEL_NAMES
+from deepecgkit.cli.run_dir import resolve_checkpoint
 from deepecgkit.evaluation.representation import (
     DEFAULT_PROBE_METRIC,
     KEEP_DIAGONAL,
@@ -28,6 +28,7 @@ from deepecgkit.evaluation.representation import (
     embed_2d,
 )
 from deepecgkit.evaluation.visualization import plot_embedding, plot_transfer_matrix
+from deepecgkit.registry import get_dataset_names, get_model_names
 
 MATRIX_JSON = "transfer_matrix.json"
 MATRIX_CSV = "transfer_matrix.csv"
@@ -98,19 +99,20 @@ def _validate(
     if (code := require_model(model_name, logger)) is not None:
         return code
 
+    dataset_names = get_dataset_names()
     for name, path in sources.items():
-        if name not in DATASET_NAMES:
+        if name not in dataset_names:
             logger.error(f"Unknown source dataset: {name}")
-            logger.info(f"Available datasets: {', '.join(DATASET_NAMES)}")
+            logger.info(f"Available datasets: {', '.join(dataset_names)}")
             return 1
         if not Path(path).exists():
             logger.error(f"Checkpoint not found for source '{name}': {path}")
             return 1
 
     for name in targets:
-        if name not in DATASET_NAMES:
+        if name not in dataset_names:
             logger.error(f"Unknown target dataset: {name}")
-            logger.info(f"Available datasets: {', '.join(DATASET_NAMES)}")
+            logger.info(f"Available datasets: {', '.join(dataset_names)}")
             return 1
 
     if metric not in PROBE_METRICS:
@@ -124,6 +126,59 @@ def _validate(
         return 1
 
     return None
+
+
+def _resolve_sources(sources: dict[str, str], logger: CLILogger) -> dict[str, str] | None:
+    """Turn each source path into a checkpoint file.
+
+    Args:
+        sources: Source dataset mapped to a checkpoint file or run directory
+        logger: Where to report a directory holding no checkpoints
+
+    Returns:
+        The sources with directories replaced by their best checkpoint, or
+        None when one of them could not be resolved.
+    """
+    resolved: dict[str, str] = {}
+    for name, path in sources.items():
+        try:
+            resolved[name] = str(resolve_checkpoint(path))
+        except FileNotFoundError as error:
+            logger.error(f"Source '{name}': {error}")
+            return None
+    return resolved
+
+
+def _warn_on_rate_mismatch(sources: dict[str, str], sampling_rate: int, logger: CLILogger) -> None:
+    """Say so when an encoder was trained at a different rate than the probe runs at.
+
+    A frozen encoder probed on signals resampled to another rate is measured
+    on inputs it never saw; the matrix would report that as poor transfer.
+
+    Args:
+        sources: Source dataset mapped to checkpoint path
+        sampling_rate: Rate the protocol resamples every dataset to
+        logger: Where to report the mismatch
+    """
+    for name, path in sources.items():
+        try:
+            stored = read_checkpoint(path)
+        except Exception:
+            continue
+        preprocessing = (stored.get("data_config") or {}).get("preprocessing") or {}
+        trained_at = preprocessing.get("sampling_rate")
+        if trained_at is None:
+            logger.warning(
+                f"Source '{name}' does not record the sampling rate it was trained at "
+                f"(earlier releases trained at {LEGACY_SAMPLING_RATE} Hz); it is probed at "
+                f"{sampling_rate} Hz. Pass --sampling-rate to match its training rate."
+            )
+        elif trained_at != sampling_rate:
+            logger.warning(
+                f"Source '{name}' was trained at {trained_at:g} Hz but is probed at "
+                f"{sampling_rate} Hz. Pass --sampling-rate {trained_at:g} to probe it on "
+                f"inputs like the ones it was trained on."
+            )
 
 
 def _write_embedding_plots(
@@ -214,7 +269,7 @@ def probe(
     test_split: float = 0.1,
     seed: int = 42,
     batch_size: int = 32,
-    num_workers: int = 4,
+    num_workers: int = defaults.NUM_WORKERS,
     accelerator: str = "auto",
     force_download: bool = False,
     logger: CLILogger | None = None,
@@ -261,6 +316,12 @@ def probe(
     failure = _validate(model_name, sources, resolved_targets, metric, embedding_plots, logger)
     if failure is not None:
         return failure
+
+    resolved_sources = _resolve_sources(sources, logger)
+    if resolved_sources is None:
+        return 1
+    sources = resolved_sources
+    _warn_on_rate_mismatch(sources, sampling_rate, logger)
 
     if not sources and not random_init:
         logger.error(
@@ -368,21 +429,24 @@ def add_parser(subparsers: Any) -> Any:
         "-m",
         type=str,
         required=True,
-        choices=MODEL_NAMES,
-        help="Model architecture matching every checkpoint",
+        choices=get_model_names(),
+        metavar="MODEL",
+        help="Model architecture matching every checkpoint (see: deepecg list-models)",
     )
     parser.add_argument(
         "--source-checkpoint",
         action="append",
         default=[],
         metavar="DATASET=PATH",
-        help="Encoder trained on DATASET, repeatable once per source",
+        help="Encoder trained on DATASET, repeatable once per source; PATH is a checkpoint "
+        "file or a run directory",
     )
     parser.add_argument(
         "--target",
         action="append",
         default=[],
-        choices=DATASET_NAMES,
+        choices=get_dataset_names(),
+        metavar="DATASET",
         help=f"Dataset to probe, repeatable (default: {', '.join(PROBE_DATASETS)})",
     )
     parser.add_argument(
