@@ -1,4 +1,5 @@
 import hashlib
+import json
 import logging
 import shutil
 from collections.abc import Callable
@@ -10,7 +11,7 @@ import torch
 
 from deepecgkit.registry import register_dataset
 
-from ..utils.download import download_and_extract_zip
+from ..utils.download import download_file, has_unfinished_download
 from .base import BaseECGDataset
 from .preprocessing import (
     ECGSegmenter,
@@ -24,9 +25,9 @@ logger = logging.getLogger(__name__)
 
 @register_dataset(
     name="ltafdb",
-    input_channels=2,
+    input_channels=1,
     num_classes=4,
-    description="Long-Term AF Database (2-lead, binary or 4-class)",
+    description="Long-Term AF Database (first lead by default, binary or 4-class)",
 )
 class LTAFDBDataset(BaseECGDataset):
     """Long-Term AF Database (LTAFDB) Dataset.
@@ -49,6 +50,18 @@ class LTAFDBDataset(BaseECGDataset):
     SAMPLING_RATE: ClassVar[int] = 128
 
     DOWNLOAD_URL: ClassVar[str] = "https://physionet.org/content/ltafdb/get-zip/1.0.0/"
+    DOWNLOAD_MIRROR: ClassVar[str] = "https://physionet-open.s3.amazonaws.com/ltafdb/1.0.0/"
+    DOWNLOAD_SIZE: ClassVar[str | None] = "about 3.7 GB"
+    RECORD_SUFFIXES: ClassVar[tuple[str, ...]] = (".hea", ".atr", ".dat")
+    #: Part of the cache key; raised whenever cached segments or labels would
+    #: differ for the same parameters, so stale caches are never read back.
+    #: 2: rhythm labels are carried across the per-beat annotations (version 1
+    #: caches label almost every segment Normal).
+    CACHE_VERSION: ClassVar[int] = 2
+    #: Written into every cache; a cache folder without it predates version 2.
+    CACHE_INFO_FILE: ClassVar[str] = "cache_info.json"
+    #: The records are tens of megabytes each, so a few are fetched at a time.
+    DOWNLOAD_WORKERS: ClassVar[int] = 4
 
     def __init__(
         self,
@@ -116,8 +129,9 @@ class LTAFDBDataset(BaseECGDataset):
         if self.max_segments_per_record is not None:
             # The seed shapes which segments survive subsampling, so it is part
             # of the cache identity. Unsubsampled caches are seed-independent
-            # and keep their historical key.
+            # and share one key.
             params += f"_seed{self.subsample_seed}"
+        params += f"_v{self.CACHE_VERSION}"
         return hashlib.md5(params.encode()).hexdigest()[:12]
 
     def _cache_dir(self) -> Path:
@@ -155,19 +169,55 @@ class LTAFDBDataset(BaseECGDataset):
         return np.lib.format.open_memmap(str(path), mode="r+")
 
     @classmethod
+    def is_downloaded(cls, data_dir: str | Path | None = None) -> bool:
+        """Report whether record files, or a finished segment cache, are present.
+
+        A directory still holding the archive or a partial download does not
+        count: the archive is deleted once extraction finishes.
+        """
+        target = Path(data_dir) if data_dir is not None else cls.get_default_data_dir()
+        if has_unfinished_download(target):
+            return False
+        if any(target.glob("cache_*/signals.npy")):
+            return True
+        return any(
+            any(folder.glob("*.hea")) and any(folder.glob("*.atr"))
+            for folder in (target, target / "files")
+        )
+
+    @classmethod
     def _download(cls, data_dir: Path, verbose: bool = True) -> None:
         if verbose:
             logger.info(f"Downloading Long-Term AF Database to {data_dir}")
-            logger.info("Note: This is a large dataset (~1.7GB). Download may take a while.")
-        download_and_extract_zip(
-            cls.DOWNLOAD_URL,
+            logger.info(f"Note: this fetches {cls.DOWNLOAD_SIZE}; an interrupted download resumes.")
+        cls._download_records(
             data_dir,
-            zip_name="ltafdb-1.0.0.zip",
+            lambda: cls._mirrored_files(data_dir),
+            mirror=cls.DOWNLOAD_MIRROR,
             desc="Downloading LTAFDB",
+            archive_url=cls.DOWNLOAD_URL,
+            archive_name="ltafdb-1.0.0.zip",
+            workers=cls.DOWNLOAD_WORKERS,
+            keep_alive=False,
             verbose=verbose,
         )
         if verbose:
             logger.info("Download complete!")
+
+    @classmethod
+    def _mirrored_files(cls, data_dir: Path) -> list[str]:
+        """List the record files to fetch, from the project's own index.
+
+        Raises:
+            RuntimeError: If the index cannot be fetched.
+            ValueError: If the index names no records.
+        """
+        index = data_dir / "RECORDS"
+        download_file(cls.DOWNLOAD_MIRROR + "RECORDS", index, progress=False)
+        records = [line.strip() for line in index.read_text().splitlines() if line.strip()]
+        if not records or not all(record.isalnum() for record in records):
+            raise ValueError(f"unexpected content in the record index {index}")
+        return [f"{record}{suffix}" for record in records for suffix in cls.RECORD_SUFFIXES]
 
     def _resolve_record_dir(self) -> Path:
         """Find the directory containing .hea/.atr record files."""
@@ -184,6 +234,35 @@ class LTAFDBDataset(BaseECGDataset):
         atr_stems = {p.stem for p in record_dir.glob("*.atr")}
         return sorted(hea_stems & atr_stems, key=lambda x: (len(x), x))
 
+    def _warn_about_stale_caches(self, current: Path) -> None:
+        """Point out cache folders that are no longer read and only take up space.
+
+        Caches written before CACHE_VERSION 2 carry labels in which almost
+        every segment is Normal. Their keys differ from today's, so they are
+        never loaded, but each holds several gigabytes.
+
+        Args:
+            current: The cache folder this instance uses
+        """
+        if not self.data_dir.is_dir():
+            return
+        stale = [
+            folder
+            for folder in sorted(self.data_dir.glob("cache_*"))
+            if folder.is_dir()
+            and folder != current
+            and (folder / "signals.npy").exists()
+            and not (folder / self.CACHE_INFO_FILE).exists()
+        ]
+        if not stale:
+            return
+        size = sum(f.stat().st_size for folder in stale for f in folder.iterdir() if f.is_file())
+        logger.warning(
+            f"{len(stale)} LTAFDB cache folder(s) in {self.data_dir} were written by an earlier "
+            f"release that labelled almost every segment Normal. They are no longer read and "
+            f"can be deleted to free {size / 1e9:.1f} GB: {', '.join(f.name for f in stale)}"
+        )
+
     def _load_data(self) -> None:
         if self.verbose:
             logger.info("Loading Long-Term AF Database...")
@@ -192,6 +271,7 @@ class LTAFDBDataset(BaseECGDataset):
         signals_path = cache_dir / "signals.npy"
         labels_path = cache_dir / "labels.npy"
         record_names_path = cache_dir / "record_names.npy"
+        self._warn_about_stale_caches(cache_dir)
 
         if signals_path.exists() and labels_path.exists():
             if self.verbose:
@@ -211,8 +291,7 @@ class LTAFDBDataset(BaseECGDataset):
         record_names = self._discover_records(record_dir)
         if not record_names:
             raise FileNotFoundError(
-                f"No valid records found in {self.data_dir}. "
-                "Expected .hea and .atr files from LTAFDB."
+                self._not_found_message(self.data_dir, ".hea and .atr record files from LTAFDB")
             )
 
         if self.verbose:
@@ -315,6 +394,9 @@ class LTAFDBDataset(BaseECGDataset):
         all_labels = np.concatenate(label_chunks)
         np.save(labels_path, all_labels)
         np.save(record_names_path, np.array(all_record_names))
+        (cache_dir / self.CACHE_INFO_FILE).write_text(
+            json.dumps({"cache_version": self.CACHE_VERSION, "segments": int(write_offset)}) + "\n"
+        )
 
         self.signals = np.load(signals_path, mmap_mode="r")
         self.labels = np.load(labels_path, mmap_mode="r")

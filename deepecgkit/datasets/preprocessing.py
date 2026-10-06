@@ -194,6 +194,8 @@ class RhythmAnnotationExtractor:
         "(J": 3,
         "(N": 0,
     }
+    #: What the aux_note of a rhythm-change annotation starts with.
+    RHYTHM_PREFIX: ClassVar[str] = "("
 
     def __init__(
         self,
@@ -210,6 +212,13 @@ class RhythmAnnotationExtractor:
         original_sampling_rate: int | None = None,
     ) -> np.ndarray:
         """Expand a wfdb annotation into one label per signal sample.
+
+        Only rhythm-change annotations, whose aux_note opens a rhythm such as
+        ``(AFIB`` or ``(N``, move the label: each one sets the rhythm from its
+        own position until the next rhythm change. Some annotation files
+        (LTAFDB's among them) also hold an annotation for every beat, with an
+        empty aux_note. Those say nothing about the rhythm and are skipped;
+        treating them as changes would end every episode at its first beat.
 
         Args:
             annotation: wfdb annotation with sample and aux_note attributes
@@ -229,22 +238,24 @@ class RhythmAnnotationExtractor:
         if original_sampling_rate is not None and original_sampling_rate != self.sampling_rate:
             scale = self.sampling_rate / original_sampling_rate
 
-        for i, (sample_idx, aux_note) in enumerate(
-            zip(annotation.sample, annotation.aux_note, strict=False)
-        ):
+        changes: list[tuple[int, int]] = []
+        for sample_idx, aux_note in zip(annotation.sample, annotation.aux_note, strict=False):
+            rhythm = aux_note.strip("\x00 \t\r\n")
+            if not rhythm.startswith(self.RHYTHM_PREFIX):
+                continue
+
             scaled_idx = int(sample_idx * scale)
             if scaled_idx >= signal_length:
                 break
 
-            rhythm_code = self.RHYTHM_MAP.get(aux_note.strip(), 0)
-
+            rhythm_code = self.RHYTHM_MAP.get(rhythm, 0)
             if self.binary_classification:
                 rhythm_code = 1 if rhythm_code == 1 else 0
+            changes.append((scaled_idx, rhythm_code))
 
-            raw_next = annotation.sample[i + 1] if i + 1 < len(annotation.sample) else signal_length
-            next_sample = min(int(raw_next * scale), signal_length)
-
-            labels[scaled_idx:next_sample] = rhythm_code
+        for position, (start, rhythm_code) in enumerate(changes):
+            end = changes[position + 1][0] if position + 1 < len(changes) else signal_length
+            labels[start:end] = rhythm_code
 
         return labels
 

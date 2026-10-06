@@ -102,10 +102,15 @@ class TestDatasetRegistry:
             assert info["num_classes"] > 0
 
     def test_dataset_input_channels(self):
+        """The registered count is what the default configuration yields.
+
+        MIT-BIH AFDB and LTAFDB hold two leads but load only the first unless
+        use_both_leads is set, so a model sized from the registry must get 1.
+        """
         expected = {
             "af-classification": 1,
-            "ltafdb": 2,
-            "mitbih-afdb": 2,
+            "ltafdb": 1,
+            "mitbih-afdb": 1,
             "ptbxl": 12,
             "unified-af": 1,
         }

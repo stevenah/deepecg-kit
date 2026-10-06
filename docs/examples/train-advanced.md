@@ -1,31 +1,35 @@
 # Advanced Training
 
-This example demonstrates pretrained weights, backbone freezing for transfer learning, CSV logging, and post-training evaluation with plots.
+This example demonstrates starting from existing weights, backbone freezing for transfer learning, CSV logging, and post-training evaluation with plots.
 
 **Source:** [`examples/train_advanced.py`](https://github.com/stevenah/deepecg-kit/blob/main/examples/train_advanced.py)
 
 ## Usage
 
 ```bash
-python examples/train_advanced.py --weights kanres-af-30s --freeze-backbone --epochs 20
 python examples/train_advanced.py --model kanres --dataset af-classification --download
+python examples/train_advanced.py --weights runs/my-run/checkpoints/my-checkpoint.pt \
+    --freeze-backbone --epochs 20
 ```
 
 ## Walkthrough
 
-### Loading Pretrained Weights
+### Loading Existing Weights
 
 ```python
-from deepecgkit.utils.weights import load_pretrained_weights
+import torch
 
 model_class = get_model("kanres")
 model = model_class(input_channels=input_channels, output_size=num_classes)
 
-state_dict = load_pretrained_weights("kanres-af-30s", map_location="cpu")
-model.load_state_dict(state_dict, strict=False)
+loaded = torch.load("runs/my-run/checkpoints/my-checkpoint.pt", map_location="cpu", weights_only=True)
+model.load_state_dict(loaded.get("model_state_dict", loaded), strict=False)
 ```
 
-`strict=False` allows loading weights even when the classifier head dimensions differ (e.g., different number of output classes).
+`--weights` takes a weights file or a checkpoint from an earlier run. `strict=False` allows
+loading weights even when the classifier head dimensions differ (e.g., different number of
+output classes). A registered weight name works too, once weights have been published or
+registered with `register_weights()`; none ship with the package yet.
 
 ### Freezing the Backbone
 

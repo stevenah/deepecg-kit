@@ -22,6 +22,17 @@ deepecg probe -m kanres -o probe/ \
     --source-checkpoint ptbxl=runs/ptbxl/best.pt
 ```
 
+Each source may be a checkpoint file or a run directory.
+
+!!! warning "Probe encoders at the rate they were trained at"
+    The protocol resamples every dataset to one rate, 300 Hz by default. An encoder trained at
+    another rate is then measured on inputs it never saw, and the matrix reports that as poor
+    transfer. `deepecg train` uses 300 Hz for the AF datasets and 500 Hz for PTB-XL unless told
+    otherwise, so train the PTB-XL encoder with `--sampling-rate 300` (single-lead) for this
+    protocol, or pass `--sampling-rate` to the probe to match your checkpoints. The command warns
+    when a source checkpoint records a different rate, and when it records none, which is the
+    case for checkpoints from earlier releases; those were trained at 500 Hz.
+
 ## Standardisation is part of the protocol
 
 Probe features are standardised inside the estimator pipeline, not before it:

@@ -8,7 +8,7 @@ for.
 ```python
 from deepecgkit import FeatureExtractor
 
-extractor = FeatureExtractor.from_checkpoint("runs/best.pt", model_name="kanres")
+extractor = FeatureExtractor.from_checkpoint("runs/my-run/checkpoints/best-epoch.pt")
 result = extractor.extract(signals)
 
 result.features        # (num_samples, 64) numpy array
@@ -17,9 +17,16 @@ result.feature_dim     # 64
 ```
 
 ```bash
-deepecg extract-features --checkpoint runs/best.pt -m kanres \
+deepecg extract-features --checkpoint runs/<run-directory> \
     --dataset af-classification --split test --output features.npz
 ```
+
+The checkpoint records its architecture, so no model name is needed. From the command line the
+data is also prepared the way the checkpoint was trained: a dataset is rebuilt at the recorded
+sampling rate, segment length and normalisation, and a recording file given with `--input` is
+resampled, segmented and normalised to match, yielding one embedding per recording. In Python,
+arrays and tensors are used as given; put a raw recording through
+[`prepare_recording`](datasets.md#preparing-a-recording-for-a-trained-model) first.
 
 ## Where the embedding comes from
 
@@ -64,13 +71,16 @@ Datasets, loaders and data modules yield `(signal, label)` pairs, so labels come
 ## Loading weights
 
 ```python
-FeatureExtractor.from_checkpoint("runs/best.pt", model_name="kanres")
+FeatureExtractor.from_checkpoint("runs/my-run/checkpoints/best-epoch.pt")
+FeatureExtractor.from_checkpoint("legacy.ckpt", model_name="kanres")
 FeatureExtractor.from_pretrained("weights.pt", model_name="kanres")
 FeatureExtractor(model, model_name="kanres")
 ```
 
 `from_checkpoint` accepts checkpoints written by `ECGTrainer.save_checkpoint`, bare state dicts, and
-legacy PyTorch Lightning checkpoints keyed on `state_dict`.
+legacy PyTorch Lightning checkpoints keyed on `state_dict`. `model_name` is needed only for the
+last two, which do not record their architecture; when it contradicts a checkpoint that does,
+the mismatch is reported.
 
 !!! warning "No pretrained weights are published yet"
     The entries in `WEIGHTS_REGISTRY` are placeholders and their URLs do not resolve. Requesting
@@ -87,7 +97,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 
 probe = Pipeline([
-    ("ecg", FeatureExtractor.from_checkpoint("runs/best.pt", model_name="kanres")),
+    ("ecg", FeatureExtractor.from_checkpoint("runs/my-run/checkpoints/best-epoch.pt")),
     ("clf", LogisticRegression(max_iter=1000)),
 ])
 probe.fit(train_signals, train_labels)

@@ -5,6 +5,7 @@ This module contains various neural network architectures optimized for ECG sign
 """
 
 from deepecgkit.models.af_classifier import AFModel
+from deepecgkit.models.base import ECGModelBase
 from deepecgkit.models.convnext_v2_1d import ConvNeXtV21D
 from deepecgkit.models.crnn import CRNN
 from deepecgkit.models.deep_res_cnn import DeepResCNN
@@ -42,6 +43,7 @@ __all__ = [
     "ConvNeXtV21D",
     "DeepResCNN",
     "ECGDualNet",
+    "ECGModelBase",
     "FCNWang",
     "InceptionTime1D",
     "KanResDeepX",

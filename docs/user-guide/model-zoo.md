@@ -37,7 +37,7 @@ model = ModelClass(input_channels=1, output_size=4)
 **Fast inference / small datasets:**
 
 - `simple-cnn` — Minimal parameters, fast training
-- `kanres` — Good accuracy/speed trade-off, pretrained weights available
+- `kanres` — Good accuracy/speed trade-off
 
 **Long sequences:**
 
@@ -54,24 +54,43 @@ model = ModelClass(input_channels=1, output_size=4)
 - `medformer` — Multi-granularity Transformer (NeurIPS 2024)
 - `dualnet` — Dual-path architecture combining CNN-LSTM and Transformer
 
+## Input Length
+
+Most architectures pool over time and accept any signal length. A few do not, and
+`deepecg list-models` shows the limits:
+
+- `afmodel` is built for 30-second recordings and needs at least 7971 samples per lead. The
+  datasets cut 10-second segments by default, so train it with `--segment-duration 30`
+  (`segment_duration_seconds=30` in Python).
+- `transformer` and `dualnet` attend over every sample, with positional encodings up to 5000
+  samples, and `medformer` accepts up to 5009. Their memory use grows with the square of the
+  signal length; if a run stops with an out-of-memory error, lower `--batch-size` first, then
+  the sampling rate or segment length.
+
+`deepecg train` checks the model against the dataset's signal length before training starts.
+
 ## Pretrained Weights
 
-| Weight Name | Model | Task |
-|-------------|-------|------|
-| `kanres-af-30s` | KanResWideX | AF classification, 30s segments |
-| `afmodel-30s` | AFModel | AF classification, 30s segments |
-
-```python
-from deepecgkit.utils.weights import load_pretrained_weights
-
-state_dict = load_pretrained_weights("kanres-af-30s")
-model.load_state_dict(state_dict, strict=False)
-```
-
-Or via the CLI:
+No pretrained weights are published with the package yet. Train a model, or start from a
+checkpoint of your own:
 
 ```bash
-deepecg train -m kanres -d af-classification --weights kanres-af-30s
+deepecg train -m kanres -d af-classification --weights runs/<run-directory>/checkpoints/<file>.pt
+```
+
+To distribute weights, register them with a URL you host; the name then works wherever a
+weight name is accepted:
+
+```python
+from deepecgkit.utils import register_weights
+
+register_weights(
+    "kanres-my-task",
+    url="https://example.org/kanres-my-task.pt",
+    model_class="KanResWideX",
+    model_kwargs={"input_channels": 1, "output_size": 4},
+    description="KanResWideX trained on my task",
+)
 ```
 
 ## Using the Registry
@@ -87,6 +106,39 @@ print(info["description"])
 model_class = get_model("kanres")
 model = model_class(input_channels=1, output_size=4)
 ```
+
+## Adding Your Own Model
+
+Subclass `ECGModelBase`, which supplies the forward pass, and register the class:
+
+```python
+import torch
+from torch import nn
+
+from deepecgkit.models import ECGModelBase
+from deepecgkit.registry import register_model
+
+
+@register_model("my-model", description="A small custom CNN", min_input_length=7)
+class MyModel(ECGModelBase):
+    def __init__(self, input_channels: int, output_size: int):
+        super().__init__()
+        self.backbone = nn.Conv1d(input_channels, 32, kernel_size=7, padding=3)
+        self._feature_dim = 32
+        self.classifier = nn.Linear(32, output_size)
+
+    def extract_features(self, x: torch.Tensor) -> torch.Tensor:
+        return self.backbone(x).mean(dim=-1)   # (batch, feature_dim)
+```
+
+The constructor takes `input_channels` and `output_size`; `extract_features` returns a flat
+`(batch, feature_dim)` tensor and the base class applies dropout and the head. Name the head
+attribute `classifier`, or set `HEAD_ATTR` to the name you use.
+
+Any `nn.Module` with that constructor can be trained, but feature extraction, probing and
+explanation need `extract_features` and `feature_dim`, which is what the base class is for.
+Registered models work with `build_model("my-model", ...)` in Python and, through
+[`--import`](cli.md#using-your-own-models-and-datasets), with every CLI command.
 
 ## Model Comparison
 

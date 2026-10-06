@@ -15,17 +15,25 @@ from deepecgkit.cli._common import (
     LENGTH_MARKERS,
     build_data_module,
     check_pretrained_weights,
+    checkpoint_dataset_kwargs,
     dataset_kwargs_for,
     infer_input_channels_from,
     prepare_output_dir,
+    read_checkpoint,
+    require_checkpoint,
     require_dataset,
     require_file,
     require_model,
+    resolve_model_name,
 )
+from deepecgkit.cli.commands.extract import UNPREPROCESSED_WARNING, prepare_input_file
 from deepecgkit.cli.logger import CLILogger
-from deepecgkit.cli.registry import DATASET_NAMES, MODEL_NAMES
-from deepecgkit.datasets.io import as_model_input, read_ecg_recording
 from deepecgkit.explainability import METHODS, ECGExplainer
+from deepecgkit.models.pretrained import model_name_for_weights
+from deepecgkit.registry import get_dataset_names, get_model_names
+
+#: Rate assumed for beat alignment when nothing says what the signal's rate is.
+FALLBACK_SAMPLING_RATE = 500.0
 
 ARRAY_FILE = "attribution.npz"
 SUMMARY_FILE = "summary.json"
@@ -36,7 +44,7 @@ BEAT_PLOT = "beat_profile.png"
 
 def explain(
     output_dir: str,
-    model_name: str,
+    model_name: str | None = None,
     checkpoint: str | None = None,
     weights: str | None = None,
     dataset_name: str | None = None,
@@ -48,7 +56,7 @@ def explain(
     seed: int = defaults.SEED,
     method: str = "saliency",
     target_class: str | None = None,
-    sampling_rate: float = 500.0,
+    sampling_rate: float | None = None,
     max_samples: int = 8,
     ig_steps: int = 64,
     occlusion_window: int = 100,
@@ -56,18 +64,33 @@ def explain(
     detect_lead: int | None = None,
     plots: bool = True,
     batch_size: int = 8,
-    num_workers: int = 4,
+    num_workers: int = defaults.NUM_WORKERS,
     accelerator: str = "auto",
     input_channels: int | None = None,
     force_download: bool = False,
+    preprocess: bool = True,
     logger: CLILogger | None = None,
 ) -> int:
-    """Attribute a model's predictions back to the ECG and write them to disk."""
+    """Attribute a model's predictions back to the ECG and write them to disk.
+
+    Data is prepared the way the checkpoint was trained, so the attribution
+    describes inputs the model would actually see. sampling_rate names the
+    rate of the signals being explained: for a file it is the recording's own
+    rate (resampled to the training rate when the checkpoint records one), for
+    a dataset it overrides the rate the dataset is resampled to. The beat
+    windows are then placed at whatever rate the model ends up seeing.
+    """
     logger = logger or CLILogger()
 
+    if checkpoint is None and weights is None:
+        logger.error("Pass --checkpoint or --weights to say which model to load.")
+        return 1
+    if checkpoint is not None:
+        checkpoint = require_checkpoint(checkpoint, logger)
+        if checkpoint is None:
+            return 1
     for code in (
-        require_model(model_name, logger),
-        require_file(checkpoint, "Checkpoint", logger),
+        require_model(model_name, logger) if model_name is not None else None,
         require_file(input_path, "Input file", logger),
         require_dataset(dataset_name, logger),
         check_pretrained_weights(weights, model_name, logger),
@@ -93,10 +116,33 @@ def explain(
             logger.error(f"--target-class must be an integer or 'all', got '{target_class}'.")
             return 1
 
+    stored: dict[str, Any] = {}
+    if checkpoint is not None:
+        try:
+            stored = read_checkpoint(checkpoint)
+        except Exception as error:
+            logger.error(f"Attribution failed: could not read {checkpoint}: {error}")
+            return 1
+        model_name = resolve_model_name(stored, model_name, logger)
+    elif model_name is None:
+        model_name = model_name_for_weights(str(weights))
+        if model_name is None:
+            logger.error(f"Could not tell which model '{weights}' belongs to; pass --model.")
+    if model_name is None:
+        return 1
+
+    data_config = stored.get("data_config") or {}
+    preprocessing = data_config.get("preprocessing") if preprocess else None
+    if input_channels is None:
+        input_channels = (stored.get("model_config") or {}).get("input_channels")
+
     try:
         output_path = prepare_output_dir(output_dir)
 
-        data, input_channels = _load_data(
+        if input_path is not None and checkpoint is not None and preprocess and not preprocessing:
+            logger.warning(UNPREPROCESSED_WARNING)
+
+        data, input_channels, signal_rate = _load_data(
             dataset_name=dataset_name,
             input_path=input_path,
             data_dir=data_dir,
@@ -110,13 +156,23 @@ def explain(
             val_split=val_split,
             test_split=test_split,
             seed=seed,
+            stored=stored if checkpoint is not None else None,
+            preprocessing=preprocessing,
+            sampling_rate=sampling_rate,
         )
+        if signal_rate is None:
+            signal_rate = sampling_rate if sampling_rate is not None else FALLBACK_SAMPLING_RATE
+            if sampling_rate is None:
+                logger.warning(
+                    f"The sampling rate of the input is unknown, so {signal_rate:g} Hz is "
+                    f"assumed for placing the beat windows. Pass --sampling-rate to set it."
+                )
 
         explainer_kwargs: dict[str, Any] = {
             "method": method,
             "batch_size": batch_size,
             "device": accelerator,
-            "sampling_rate": sampling_rate,
+            "sampling_rate": float(signal_rate),
             "max_samples": max_samples,
             "ig_steps": ig_steps,
             "occlusion_window": occlusion_window,
@@ -134,7 +190,7 @@ def explain(
         else:
             logger.info(f"Loading pretrained weights '{weights}'...")
             explainer = ECGExplainer.from_pretrained(
-                weights, model_name=model_name, **explainer_kwargs
+                str(weights), model_name=model_name, **explainer_kwargs
             )
 
         logger.info(f"Attributing with {method}...")
@@ -163,6 +219,9 @@ def explain(
 
         _report(result, model_name, method, output_path, logger)
         return 0
+    except FileNotFoundError as error:
+        logger.error(f"Attribution failed: {error}")
+        return 1
     except (RuntimeError, ValueError) as error:
         message = str(error)
         if any(marker in message for marker in LENGTH_MARKERS):
@@ -201,7 +260,10 @@ def _load_data(
     val_split: float = defaults.VAL_SPLIT,
     test_split: float = defaults.TEST_SPLIT,
     seed: int = defaults.SEED,
-) -> tuple[Any, int | None]:
+    stored: dict[str, Any] | None = None,
+    preprocessing: dict[str, Any] | None = None,
+    sampling_rate: float | None = None,
+) -> tuple[Any, int | None, float | None]:
     """Resolve the data source to something the explainer accepts.
 
     Args:
@@ -215,16 +277,50 @@ def _load_data(
         input_channels: Lead count, inferred from the dataset when omitted
         force_download: Re-download the dataset
         logger: Where progress is reported
+        val_split: Validation fraction used during training
+        test_split: Test fraction used during training
+        seed: Seed that produced the split during training
+        stored: The loaded checkpoint, when one is being explained
+        preprocessing: The checkpoint's recorded preprocessing, applied to a
+            recording file
+        sampling_rate: Rate of the recording file, or the rate to resample
+            the dataset to
 
     Returns:
-        Tuple of the data and the resolved lead count.
+        Tuple of the data, the resolved lead count, and the sampling rate of
+        the signals the model will see (None when it cannot be determined).
 
     Raises:
         RuntimeError: If the requested split holds no dataset.
     """
     if dataset_name is None:
-        array = as_model_input(read_ecg_recording(input_path), input_channels)
-        return array[:max_samples], input_channels
+        segments, _, rate = prepare_input_file(
+            str(input_path),
+            input_channels,
+            preprocessing,
+            sampling_rate,
+            logger,
+            max_recordings=max_samples,
+        )
+        return segments[:max_samples], input_channels, rate
+
+    dataset_rate = int(sampling_rate) if sampling_rate is not None else None
+    if stored is not None:
+        dataset_kwargs, _ = checkpoint_dataset_kwargs(
+            dataset_name,
+            stored,
+            logger,
+            force_download=force_download,
+            data_dir=data_dir,
+            sampling_rate=dataset_rate,
+        )
+    else:
+        dataset_kwargs = dataset_kwargs_for(
+            dataset_name,
+            force_download=force_download,
+            data_dir=data_dir,
+            sampling_rate=dataset_rate,
+        )
 
     data_module = build_data_module(
         dataset_name,
@@ -233,9 +329,7 @@ def _load_data(
         val_split=val_split,
         test_split=test_split,
         seed=seed,
-        dataset_kwargs=dataset_kwargs_for(
-            dataset_name, force_download=force_download, data_dir=data_dir
-        ),
+        dataset_kwargs=dataset_kwargs,
         logger=logger,
     )
 
@@ -246,7 +340,12 @@ def _load_data(
     if subset is None:
         raise RuntimeError(f"Data module has no '{split}' split available.")
 
-    return Subset(subset, range(min(max_samples, len(subset)))), input_channels
+    rate = getattr(data_module.dataset, "sampling_rate", None)
+    return (
+        Subset(subset, range(min(max_samples, len(subset)))),
+        input_channels,
+        float(rate) if rate else None,
+    )
 
 
 def _output_size(explainer: ECGExplainer, result: Any) -> int:
@@ -383,7 +482,7 @@ def add_parser(subparsers: Any) -> Any:
     weights_group.add_argument(
         "--checkpoint",
         type=str,
-        help="Path to a model checkpoint",
+        help="Checkpoint file, or a run directory whose best checkpoint is used",
     )
     weights_group.add_argument(
         "--weights",
@@ -396,8 +495,9 @@ def add_parser(subparsers: Any) -> Any:
         "--dataset",
         "-d",
         type=str,
-        choices=DATASET_NAMES,
-        help="Dataset to explain predictions on",
+        choices=get_dataset_names(),
+        metavar="DATASET",
+        help="Dataset to explain predictions on (see: deepecg list-datasets)",
     )
     source_group.add_argument(
         "--input",
@@ -409,9 +509,10 @@ def add_parser(subparsers: Any) -> Any:
         "--model",
         "-m",
         type=str,
-        required=True,
-        choices=MODEL_NAMES,
-        help="Model architecture to load",
+        default=None,
+        choices=get_model_names(),
+        metavar="MODEL",
+        help="Model architecture (default: the one recorded in the checkpoint)",
     )
     parser.add_argument(
         "--output",
@@ -437,8 +538,16 @@ def add_parser(subparsers: Any) -> Any:
     parser.add_argument(
         "--sampling-rate",
         type=float,
-        default=500.0,
-        help="Sampling rate in Hz, used to place the beat windows (default: 500)",
+        default=None,
+        metavar="HZ",
+        help="With --input: sampling rate of the recording, so it can be resampled to the "
+        "model's training rate. With --dataset: rate to resample the dataset to (default: "
+        "the rate recorded in the checkpoint). Beat windows follow the resulting rate",
+    )
+    parser.add_argument(
+        "--no-preprocess",
+        action="store_true",
+        help="With --input: pass the recording to the model unchanged",
     )
     parser.add_argument(
         "--max-samples",
@@ -568,4 +677,5 @@ def _to_kwargs(args: Any) -> dict[str, Any]:
         "accelerator": args.accelerator,
         "input_channels": args.input_channels,
         "force_download": args.force_download,
+        "preprocess": not args.no_preprocess,
     }

@@ -1,87 +1,314 @@
 # Training defaults come from deepecgkit/cli/defaults.py; override any of
 # them here (epochs, batch_size, learning_rate, val_split, test_split,
 # num_workers, accelerator, devices, early_stopping_patience, seed).
+#
+# THE FULL GRID: every registered architecture on every registered dataset.
+# 20 models x 5 datasets = 100 pairings x 5 seeds = 500 runs.
+#
+# Why the whole grid and not just the gaps: the currently published snapshot
+# (deepecg-kit-bench, 2026-cbms-preliminary) was built with include_legacy and
+# replicate_ids [-1] -- one seedless run per pair. Those runs are no longer on
+# disk, and a snapshot is aggregated from run directories, so re-running the
+# 24 already-covered pairings is what turns the next snapshot from
+# "preliminary, one run per pair" into a seeded one that can be declared
+# current. `--resume` makes stopping and restarting cheap.
+#
+# afmodel is ABSENT DELIBERATELY. AFModel(recording_length=30) requires at
+# least 7971 samples per lead, and every dataset here emits 3000 (300 Hz) or
+# 5000 (PTB-XL, 500 Hz), so all five pairings raise ValueError at build time.
+# It is not a missing entry; it is structurally incompatible with a 10-second
+# segmentation. Verified by building all 21 x 5 combinations -- see
+# scripts/preflight_experiments.py. Give it 30-second segments, or a smaller
+# recording_length, before adding it back.
+#
+# Ordered task-major so `--limit` and a Ctrl-C leave you with whole tasks
+# finished rather than a thin slice of each.
+
 defaults:
   seeds: [42, 43, 44, 45, 46]
 
 experiments:
-  # ──────────────────────────────────────────────
-  # PTB-XL: 12-lead, 5 diagnostic superclasses
-  # Task: multi-label classification
-  # ──────────────────────────────────────────────
-  - model: resnet
+  # --------------------------------------------------------------------------
+  # PTB-XL: 12-lead, 5 diagnostic superclasses (NORM, MI, STTC, CD, HYP).
+  # Multi-label. 500 Hz x 10 s = 5000 samples per lead.
+  # --------------------------------------------------------------------------
+  - model: convnext-v2
     dataset: ptbxl
     multi_label: true
-
-  - model: se-resnet
+  - model: crnn
     dataset: ptbxl
     multi_label: true
-
+  - model: deep-res-cnn
+    dataset: ptbxl
+    multi_label: true
+  - model: dualnet
+    dataset: ptbxl
+    multi_label: true
+  - model: fcn-wang
+    dataset: ptbxl
+    multi_label: true
+  - model: gru
+    dataset: ptbxl
+    multi_label: true
   - model: inception-time
     dataset: ptbxl
     multi_label: true
-
-  - model: convnext-v2
+  - model: kanres
+    dataset: ptbxl
+    multi_label: true
+  - model: kanres-deep
+    dataset: ptbxl
+    multi_label: true
+  - model: lstm
+    dataset: ptbxl
+    multi_label: true
+  - model: mamba
+    dataset: ptbxl
+    multi_label: true
+  - model: medformer
+    dataset: ptbxl
+    multi_label: true
+  - model: resnet
+    dataset: ptbxl
+    multi_label: true
+  - model: resnet-wang
+    dataset: ptbxl
+    multi_label: true
+  - model: se-resnet
+    dataset: ptbxl
+    multi_label: true
+  - model: simple-cnn
+    dataset: ptbxl
+    multi_label: true
+  - model: tcn
+    dataset: ptbxl
+    multi_label: true
+  - model: transformer
+    dataset: ptbxl
+    multi_label: true
+  - model: xresnet
+    dataset: ptbxl
+    multi_label: true
+  - model: xresnet1d-benchmark
     dataset: ptbxl
     multi_label: true
 
+  # --------------------------------------------------------------------------
+  # PhysioNet/CinC 2017: single-lead, 4 classes (normal, AF, other, noisy).
+  # Single-label. 300 Hz x 10 s = 3000 samples.
+  # --------------------------------------------------------------------------
+  - model: convnext-v2
+    dataset: af-classification
   - model: crnn
-    dataset: ptbxl
-    multi_label: true
-
-  # ──────────────────────────────────────────────
-  # PhysioNet 2017: 1-lead, 4 classes
-  # Task: single-label multi-class classification
-  # ──────────────────────────────────────────────
-  - model: resnet
     dataset: af-classification
-
-  - model: se-resnet
+  - model: deep-res-cnn
     dataset: af-classification
-
+  - model: dualnet
+    dataset: af-classification
+  - model: fcn-wang
+    dataset: af-classification
+  - model: gru
+    dataset: af-classification
   - model: inception-time
     dataset: af-classification
-
-  - model: convnext-v2
+  - model: kanres
     dataset: af-classification
-
-  - model: crnn
+  - model: kanres-deep
     dataset: af-classification
-
-  # ──────────────────────────────────────────────
-  # MIT-BIH AFDB: 2-lead, binary AF detection
-  # Task: binary classification (AF vs Non-AF)
-  # ──────────────────────────────────────────────
+  - model: lstm
+    dataset: af-classification
+  - model: mamba
+    dataset: af-classification
+  - model: medformer
+    dataset: af-classification
   - model: resnet
-    dataset: mitbih-afdb
-    binary_classification: true
-
+    dataset: af-classification
+  - model: resnet-wang
+    dataset: af-classification
   - model: se-resnet
+    dataset: af-classification
+  - model: simple-cnn
+    dataset: af-classification
+  - model: tcn
+    dataset: af-classification
+  - model: transformer
+    dataset: af-classification
+  - model: xresnet
+    dataset: af-classification
+  - model: xresnet1d-benchmark
+    dataset: af-classification
+
+  # --------------------------------------------------------------------------
+  # MIT-BIH AFDB: 2-lead, AF vs non-AF.
+  # Binary. 300 Hz x 10 s = 3000 samples per lead.
+  # --------------------------------------------------------------------------
+  - model: convnext-v2
     dataset: mitbih-afdb
     binary_classification: true
-
+  - model: crnn
+    dataset: mitbih-afdb
+    binary_classification: true
+  - model: deep-res-cnn
+    dataset: mitbih-afdb
+    binary_classification: true
+  - model: dualnet
+    dataset: mitbih-afdb
+    binary_classification: true
+  - model: fcn-wang
+    dataset: mitbih-afdb
+    binary_classification: true
+  - model: gru
+    dataset: mitbih-afdb
+    binary_classification: true
   - model: inception-time
     dataset: mitbih-afdb
     binary_classification: true
+  - model: kanres
+    dataset: mitbih-afdb
+    binary_classification: true
+  - model: kanres-deep
+    dataset: mitbih-afdb
+    binary_classification: true
+  - model: lstm
+    dataset: mitbih-afdb
+    binary_classification: true
+  - model: mamba
+    dataset: mitbih-afdb
+    binary_classification: true
+  - model: medformer
+    dataset: mitbih-afdb
+    binary_classification: true
+  - model: resnet
+    dataset: mitbih-afdb
+    binary_classification: true
+  - model: resnet-wang
+    dataset: mitbih-afdb
+    binary_classification: true
+  - model: se-resnet
+    dataset: mitbih-afdb
+    binary_classification: true
+  - model: simple-cnn
+    dataset: mitbih-afdb
+    binary_classification: true
+  - model: tcn
+    dataset: mitbih-afdb
+    binary_classification: true
+  - model: transformer
+    dataset: mitbih-afdb
+    binary_classification: true
+  - model: xresnet
+    dataset: mitbih-afdb
+    binary_classification: true
+  - model: xresnet1d-benchmark
+    dataset: mitbih-afdb
+    binary_classification: true
 
+  # --------------------------------------------------------------------------
+  # LTAFDB: 2-lead, AF vs non-AF.
+  # Binary. 300 Hz x 10 s = 3000 samples per lead.
+  # --------------------------------------------------------------------------
   - model: convnext-v2
-    dataset: mitbih-afdb
+    dataset: ltafdb
     binary_classification: true
-
   - model: crnn
-    dataset: mitbih-afdb
+    dataset: ltafdb
+    binary_classification: true
+  - model: deep-res-cnn
+    dataset: ltafdb
+    binary_classification: true
+  - model: dualnet
+    dataset: ltafdb
+    binary_classification: true
+  - model: fcn-wang
+    dataset: ltafdb
+    binary_classification: true
+  - model: gru
+    dataset: ltafdb
+    binary_classification: true
+  - model: inception-time
+    dataset: ltafdb
+    binary_classification: true
+  - model: kanres
+    dataset: ltafdb
+    binary_classification: true
+  - model: kanres-deep
+    dataset: ltafdb
+    binary_classification: true
+  - model: lstm
+    dataset: ltafdb
+    binary_classification: true
+  - model: mamba
+    dataset: ltafdb
+    binary_classification: true
+  - model: medformer
+    dataset: ltafdb
+    binary_classification: true
+  - model: resnet
+    dataset: ltafdb
+    binary_classification: true
+  - model: resnet-wang
+    dataset: ltafdb
+    binary_classification: true
+  - model: se-resnet
+    dataset: ltafdb
+    binary_classification: true
+  - model: simple-cnn
+    dataset: ltafdb
+    binary_classification: true
+  - model: tcn
+    dataset: ltafdb
+    binary_classification: true
+  - model: transformer
+    dataset: ltafdb
+    binary_classification: true
+  - model: xresnet
+    dataset: ltafdb
+    binary_classification: true
+  - model: xresnet1d-benchmark
+    dataset: ltafdb
     binary_classification: true
 
-  # ──────────────────────────────────────────────
-  # Unified AF: cross-dataset, 4 classes
-  # Task: single-label multi-class (combined sources)
-  # ──────────────────────────────────────────────
+  # --------------------------------------------------------------------------
+  # Unified AF: combined corpus over PhysioNet 2017, MIT-BIH AFDB and LTAFDB.
+  # Single-label, 4 classes. 300 Hz x 10 s = 3000 samples.
+  # --------------------------------------------------------------------------
+  - model: convnext-v2
+    dataset: unified-af
+  - model: crnn
+    dataset: unified-af
+  - model: deep-res-cnn
+    dataset: unified-af
+  - model: dualnet
+    dataset: unified-af
+  - model: fcn-wang
+    dataset: unified-af
+  - model: gru
+    dataset: unified-af
+  - model: inception-time
+    dataset: unified-af
+  - model: kanres
+    dataset: unified-af
+  - model: kanres-deep
+    dataset: unified-af
+  - model: lstm
+    dataset: unified-af
+  - model: mamba
+    dataset: unified-af
+  - model: medformer
+    dataset: unified-af
   - model: resnet
     dataset: unified-af
-
-  - model: convnext-v2
+  - model: resnet-wang
     dataset: unified-af
-
-  - model: crnn
+  - model: se-resnet
     dataset: unified-af
-
+  - model: simple-cnn
+    dataset: unified-af
+  - model: tcn
+    dataset: unified-af
+  - model: transformer
+    dataset: unified-af
+  - model: xresnet
+    dataset: unified-af
+  - model: xresnet1d-benchmark
+    dataset: unified-af

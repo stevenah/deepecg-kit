@@ -4,26 +4,28 @@ import traceback
 from typing import Any
 
 import numpy as np
-import torch
 
 from deepecgkit.cli import defaults
 from deepecgkit.cli._common import (
     build_data_module,
-    dataset_kwargs_for,
+    checkpoint_dataset_kwargs,
     infer_input_channels_from,
     prepare_output_dir,
+    read_checkpoint,
+    report_data_error,
+    report_shape_error,
+    require_checkpoint,
     require_dataset,
-    require_file,
     require_model,
+    resolve_model_name,
 )
 from deepecgkit.cli.logger import CLILogger
-from deepecgkit.cli.registry import DATASET_NAMES, MODEL_NAMES
 from deepecgkit.cli.run_dir import load_run_context, verify_split
 from deepecgkit.datasets import ECGDataModule
-from deepecgkit.evaluation.calibration import calibration_report
 from deepecgkit.evaluation.metrics import DEFAULT_CALIBRATION_BINS
 from deepecgkit.evaluation.report import save_evaluation
 from deepecgkit.models.factory import build_model_from_checkpoint
+from deepecgkit.registry import get_dataset_names, get_model_names
 from deepecgkit.training import ECGTrainer
 
 
@@ -36,10 +38,7 @@ def _read_train_config(checkpoint: str) -> dict[str, Any]:
     Returns:
         The stored train_config, or an empty mapping when it is absent.
     """
-    stored = torch.load(checkpoint, map_location="cpu", weights_only=False)
-    if not isinstance(stored, dict):
-        return {}
-    config = stored.get("train_config")
+    config = read_checkpoint(checkpoint).get("train_config")
     return config if isinstance(config, dict) else {}
 
 
@@ -66,17 +65,13 @@ def _dataset_kwargs_for_checkpoint(
     Returns:
         Tuple of (dataset keyword arguments, whether targets are multi-label).
     """
-    multi_label = bool(train_config.get("multi_label", False))
-    binary_classification = bool(train_config.get("binary_classification", False))
-
-    kwargs = dataset_kwargs_for(
+    return checkpoint_dataset_kwargs(
         dataset_name,
+        {"train_config": train_config},
+        CLILogger(quiet=True),
         force_download=force_download,
         data_dir=data_dir,
-        multi_label=multi_label,
-        binary_classification=binary_classification,
     )
-    return kwargs, multi_label
 
 
 def _check_target_shape(data_module: ECGDataModule, multi_label: bool) -> str | None:
@@ -120,48 +115,13 @@ def _collect_split(trainer: ECGTrainer, data_module: ECGDataModule, split: str) 
     return results, predictions, targets, probabilities, trainer.get_test_logits()
 
 
-def _log_calibration(report: dict[str, Any], n_bins: int, logger: CLILogger) -> None:
-    """Print the calibration block, before and after temperature scaling.
-
-    Args:
-        report: Mapping from calibration_report
-        n_bins: Bin count that produced the binned metrics
-        logger: CLI logger
-    """
-    logger.info(f"\nCalibration ({n_bins} bins):")
-    logger.info("-" * 40)
-    scaled = not np.isnan(report["temperature"])
-
-    if not scaled:
-        for name, label in (
-            ("ece", "ECE"),
-            ("adaptive_ece", "Adaptive ECE"),
-            ("mce", "MCE"),
-            ("brier", "Brier"),
-        ):
-            logger.info(f"  {label:<16} {report[name]:>10.4f}")
-        logger.info("  No temperature was fitted, so no rescaled figures are shown.")
-        return
-
-    logger.info(f"  {'Metric':<16} {'Before':>10} {'After T':>10}")
-    for name, label in (
-        ("ece", "ECE"),
-        ("adaptive_ece", "Adaptive ECE"),
-        ("mce", "MCE"),
-        ("brier", "Brier"),
-    ):
-        logger.info(f"  {label:<16} {report[name]:>10.4f} {report[name + '_temp']:>10.4f}")
-    logger.info(f"  {'Temperature':<16} {report['temperature']:>21.4f}")
-    logger.info("  Temperature fitted on the validation split, reported on the evaluated split.")
-
-
 def evaluate(
     checkpoint: str,
     dataset_name: str,
-    model_name: str,
+    model_name: str | None = None,
     data_dir: str | None = None,
-    batch_size: int = 32,
-    num_workers: int = 4,
+    batch_size: int = defaults.BATCH_SIZE,
+    num_workers: int = defaults.NUM_WORKERS,
     accelerator: str = "auto",
     devices: int = 1,
     force_download: bool = False,
@@ -172,9 +132,15 @@ def evaluate(
     calibration_bins: int = DEFAULT_CALIBRATION_BINS,
     calibrate: bool = True,
     output_dir: str | None = None,
+    sampling_rate: int | None = None,
     logger: CLILogger | None = None,
 ) -> int:
     """Evaluate a trained model on a dataset.
+
+    The dataset is rebuilt the way the checkpoint was trained: its labelling
+    mode and its preprocessing (sampling rate, segment length, normalisation)
+    are read back from the checkpoint, so the model sees inputs shaped like
+    the ones it learned from.
 
     The split is redrawn here rather than read back from the run, so seed,
     val_split and test_split must match the values the checkpoint was trained
@@ -184,9 +150,11 @@ def evaluate(
     has already seen.
 
     Args:
-        checkpoint: Path to the checkpoint to evaluate
+        checkpoint: Checkpoint file, or a run directory whose best checkpoint
+            is used
         dataset_name: Registered dataset name
-        model_name: Registered model name
+        model_name: Registered model name; optional when the checkpoint
+            records it
         data_dir: Optional dataset directory
         batch_size: Evaluation batch size
         num_workers: Data loading workers
@@ -202,6 +170,8 @@ def evaluate(
             temperature
         output_dir: When given, write the full artifact set (metrics CSV,
             predictions, plots) into this directory
+        sampling_rate: Override for the sampling rate the dataset is
+            resampled to, for checkpoints that do not record theirs
         logger: CLI logger
 
     Returns:
@@ -209,10 +179,13 @@ def evaluate(
     """
     logger = logger or CLILogger()
 
+    resolved = require_checkpoint(checkpoint, logger)
+    if resolved is None:
+        return 1
+    checkpoint = resolved
     for code in (
-        require_file(checkpoint, "Checkpoint", logger),
         require_dataset(dataset_name, logger),
-        require_model(model_name, logger),
+        require_model(model_name, logger) if model_name is not None else None,
     ):
         if code is not None:
             return code
@@ -246,17 +219,35 @@ def evaluate(
                 )
 
     try:
-        train_config = _read_train_config(checkpoint)
-        dataset_kwargs, multi_label = _dataset_kwargs_for_checkpoint(
-            dataset_name, train_config, force_download, data_dir
-        )
-        if not train_config:
-            logger.warning(
-                "Checkpoint records no train_config, so the dataset is built in its default "
-                "labelling mode. Results will be wrong if the model was trained multi-label "
-                "or as a collapsed binary problem."
-            )
+        stored = read_checkpoint(checkpoint)
+    except Exception as e:
+        logger.error(f"Evaluation failed: could not read checkpoint {checkpoint}: {e}")
+        return 1
 
+    model_name = resolve_model_name(stored, model_name, logger)
+    if model_name is None:
+        return 1
+
+    # Runs recorded before schema version 2 stored --sampling-rate as typed,
+    # and only PTB-XL honoured it.
+    legacy_rate = context.sampling_rate if dataset_name == "ptbxl" else None
+    dataset_kwargs, multi_label = checkpoint_dataset_kwargs(
+        dataset_name,
+        stored,
+        logger,
+        force_download=force_download,
+        data_dir=data_dir,
+        sampling_rate=sampling_rate,
+        legacy_sampling_rate=legacy_rate,
+    )
+    if not stored.get("train_config"):
+        logger.warning(
+            "Checkpoint records no train_config, so the dataset is built in its default "
+            "labelling mode. Results will be wrong if the model was trained multi-label "
+            "or as a collapsed binary problem."
+        )
+
+    try:
         data_module = build_data_module(
             dataset_name,
             batch_size=batch_size,
@@ -267,7 +258,10 @@ def evaluate(
             dataset_kwargs=dataset_kwargs,
             logger=logger,
         )
+    except Exception as e:
+        return report_data_error(e, dataset_name, logger, data_dir)
 
+    try:
         if context.run_dir is not None:
             verify_split(data_module, context.run_dir, logger)
 
@@ -311,8 +305,8 @@ def evaluate(
             for key, value in results.items():
                 logger.info(f"  {key}: {value:.4f}")
 
-        if output_dir is not None and targets is not None and predictions is not None:
-            output_path = prepare_output_dir(output_dir)
+        if targets is not None and predictions is not None and probabilities is not None:
+            output_path = prepare_output_dir(output_dir) if output_dir is not None else None
             class_names = getattr(data_module.dataset, "class_names", None)
             save_evaluation(
                 targets,
@@ -326,19 +320,14 @@ def evaluate(
                 val_targets=fit_targets,
                 val_logits=fit_logits,
                 test_logits=logits,
-            )
-        elif targets is not None and probabilities is not None:
-            report = calibration_report(
-                targets,
-                probabilities,
                 n_bins=calibration_bins,
-                fit_targets=fit_targets,
-                fit_logits=fit_logits,
-                eval_logits=logits,
             )
-            _log_calibration(report, calibration_bins, logger)
+            if output_path is None:
+                logger.info("Pass -o DIR to save these metrics, the predictions and the plots.")
 
         return 0
+    except RuntimeError as e:
+        return report_shape_error(e, model_name, "Evaluation", logger)
     except Exception as e:
         logger.error(f"Evaluation failed: {e}")
         logger.debug(traceback.format_exc())
@@ -352,23 +341,25 @@ def add_parser(subparsers: Any) -> Any:
         "--checkpoint",
         type=str,
         required=True,
-        help="Path to model checkpoint",
+        help="Checkpoint file, or a run directory whose best checkpoint is used",
     )
     parser.add_argument(
         "--model",
         "-m",
         type=str,
-        required=True,
-        choices=MODEL_NAMES,
-        help="Model architecture to load",
+        default=None,
+        choices=get_model_names(),
+        metavar="MODEL",
+        help="Model architecture (default: the one recorded in the checkpoint)",
     )
     parser.add_argument(
         "--dataset",
         "-d",
         type=str,
         required=True,
-        choices=DATASET_NAMES,
-        help="Dataset to evaluate on",
+        choices=get_dataset_names(),
+        metavar="DATASET",
+        help="Dataset to evaluate on (see: deepecg list-datasets)",
     )
     parser.add_argument(
         "--data-dir",
@@ -400,7 +391,14 @@ def add_parser(subparsers: Any) -> Any:
         "--devices",
         type=int,
         default=defaults.DEVICES,
-        help=f"Number of devices to use (default: {defaults.DEVICES})",
+        help="Deprecated and ignored: evaluation runs on a single device",
+    )
+    parser.add_argument(
+        "--sampling-rate",
+        type=int,
+        default=None,
+        help="Sampling rate in Hz to resample the dataset to (default: the rate recorded "
+        "in the checkpoint)",
     )
     parser.add_argument(
         "--force-download",
@@ -472,4 +470,5 @@ def _to_kwargs(args: Any) -> dict[str, Any]:
         "calibration_bins": args.calibration_bins,
         "calibrate": not args.no_calibration,
         "output_dir": args.output,
+        "sampling_rate": args.sampling_rate,
     }

@@ -142,7 +142,7 @@ the raw and rescaled figures into `classification_metrics.csv`.
 `deepecg evaluate` does the same for an existing checkpoint and prints the comparison:
 
 ```bash
-deepecg evaluate --checkpoint model.pt -m resnet -d af-classification --split test
+deepecg evaluate --checkpoint runs/<run-directory> -d af-classification --split test
 ```
 
 The split is redrawn at evaluation time, and getting it right matters more here than usual: a

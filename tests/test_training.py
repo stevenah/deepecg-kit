@@ -7,7 +7,7 @@ import torch
 
 import deepecgkit.training as training_module
 from deepecgkit.datasets import AFClassificationDataset, ECGDataModule
-from deepecgkit.models import AFModel, KanResWideX
+from deepecgkit.models import AFModel, KanResWideX, SimpleCNN
 from deepecgkit.training import ECGTrainer
 
 
@@ -378,3 +378,125 @@ class TestTrainingEdgeCases:
         assert output_train.shape == output_eval.shape
         assert not torch.isnan(output_train).any()
         assert not torch.isnan(output_eval).any()
+
+
+class TestTrainerDefaults:
+    """The trainer works without a hand-built configuration dictionary."""
+
+    def test_no_config_is_needed(self):
+        trainer = ECGTrainer(SimpleCNN(input_channels=1, output_size=4), device="cpu")
+
+        assert trainer.learning_rate == 1e-3
+        assert trainer.scheduler_factor == 0.5
+        assert trainer.scheduler_patience == 5
+        assert isinstance(trainer.criterion, torch.nn.CrossEntropyLoss)
+
+    def test_a_partial_config_is_completed(self):
+        trainer = ECGTrainer(
+            SimpleCNN(input_channels=1, output_size=4),
+            {"learning_rate": 0.01, "scheduler": {"patience": 2}},
+            device="cpu",
+        )
+
+        assert trainer.learning_rate == 0.01
+        assert trainer.train_config["scheduler"] == {"factor": 0.5, "patience": 2}
+
+    def test_the_callers_config_is_not_modified(self):
+        config = {"learning_rate": 0.01}
+        ECGTrainer(SimpleCNN(input_channels=1, output_size=4), config, device="cpu")
+        assert config == {"learning_rate": 0.01}
+
+
+class TestSelfDescribingCheckpoints:
+    """A checkpoint says what it is and what its inputs went through."""
+
+    @pytest.fixture
+    def fitted(self, af_dataset_dir, temp_dir):
+        data_module = ECGDataModule(
+            dataset_class=AFClassificationDataset,
+            data_dir=str(af_dataset_dir),
+            batch_size=16,
+            verbose=False,
+            dataset_kwargs={"verbose": False},
+        )
+        trainer = ECGTrainer(SimpleCNN(input_channels=1, output_size=4), device="cpu")
+        trainer.fit(
+            data_module, epochs=1, checkpoint_dir=temp_dir / "checkpoints", progress_bar=False
+        )
+        return trainer, data_module
+
+    def test_validate_and_test_report_their_own_keys(self, fitted):
+        trainer, data_module = fitted
+
+        assert set(trainer.validate(data_module)) == {"val_loss", "val_acc"}
+        assert set(trainer.test(data_module)) == {"test_loss", "test_acc"}
+
+    def test_checkpoint_records_the_architecture(self, fitted):
+        trainer, _ = fitted
+        checkpoint = torch.load(trainer.best_checkpoint_path, weights_only=False)
+
+        assert checkpoint["model_config"] == {
+            "name": "simple-cnn",
+            "input_channels": 1,
+            "output_size": 4,
+        }
+
+    def test_checkpoint_records_the_preprocessing_and_classes(self, fitted):
+        trainer, _ = fitted
+        data_config = torch.load(trainer.best_checkpoint_path, weights_only=False)["data_config"]
+
+        assert data_config["dataset"] == "af-classification"
+        assert data_config["preprocessing"]["sampling_rate"] == 300
+        assert data_config["preprocessing"]["segment_duration_seconds"] == 10.0
+        assert data_config["preprocessing"]["normalization"] == "zscore"
+        assert data_config["class_names"] == ["Normal", "AF", "Other", "Noisy"]
+        assert data_config["input_length"] == 3000
+
+    def test_explicit_configs_are_left_alone(self, af_dataset_dir):
+        data_module = ECGDataModule(
+            dataset_class=AFClassificationDataset,
+            data_dir=str(af_dataset_dir),
+            verbose=False,
+            dataset_kwargs={"verbose": False},
+        )
+        trainer = ECGTrainer(SimpleCNN(input_channels=1, output_size=4), device="cpu")
+        trainer.model_config = {"name": "custom", "input_channels": 1, "output_size": 4}
+        trainer.data_config = {"dataset": "mine"}
+
+        trainer.fit(data_module, epochs=1, progress_bar=False)
+
+        assert trainer.model_config["name"] == "custom"
+        assert trainer.data_config == {"dataset": "mine"}
+
+    def test_load_checkpoint_rebuilds_the_recorded_model(self, fitted):
+        trainer, _ = fitted
+
+        restored = ECGTrainer.load_checkpoint(trainer.best_checkpoint_path, device="cpu")
+
+        assert isinstance(restored.model, SimpleCNN)
+        assert restored.data_config["preprocessing"]["sampling_rate"] == 300
+        for key, value in trainer.model.state_dict().items():
+            assert torch.equal(value.cpu(), restored.model.state_dict()[key].cpu())
+
+    def test_load_checkpoint_without_a_recorded_model_asks_for_one(self, temp_dir):
+        path = temp_dir / "bare.pt"
+        torch.save(
+            {"model_state_dict": SimpleCNN(1, 4).state_dict(), "train_config": {}}, str(path)
+        )
+        with pytest.raises(ValueError, match="does not record which architecture"):
+            ECGTrainer.load_checkpoint(path, device="cpu")
+
+
+class TestCheckpointArchitectureErrors:
+    """Loading weights into the wrong architecture fails in one readable line."""
+
+    def test_unrecorded_checkpoint_with_the_wrong_name(self, temp_dir):
+        from deepecgkit.models.factory import build_model_from_checkpoint
+
+        path = temp_dir / "bare.pt"
+        torch.save({"model_state_dict": SimpleCNN(1, 4).state_dict()}, str(path))
+
+        with pytest.raises(ValueError, match="do not fit the 'kanres' architecture") as excinfo:
+            build_model_from_checkpoint(path, name="kanres", input_channels=1)
+
+        assert "\n" not in str(excinfo.value)

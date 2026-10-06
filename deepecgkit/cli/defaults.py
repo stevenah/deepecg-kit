@@ -12,7 +12,10 @@ BATCH_SIZE = 32
 LEARNING_RATE = 1e-3
 VAL_SPLIT = 0.2
 TEST_SPLIT = 0.1
-NUM_WORKERS = 4
+#: The built-in datasets hold their signals in memory, so loader workers only
+#: add start-up cost (each one receives a copy of the dataset under the spawn
+#: start method macOS and Windows use).
+NUM_WORKERS = 0
 ACCELERATOR = "auto"
 DEVICES = 1
 EARLY_STOPPING_PATIENCE = 10

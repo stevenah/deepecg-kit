@@ -72,6 +72,12 @@ docs = [
     "mkdocs-autorefs>=1.0.0",
 ]
 
+[tool.uv]
+# scipy 1.15.x macOS wheels fail to load on macOS 27 (dlopen error in
+# scipy.sparse.linalg._propack), and 1.15 is the last series supporting
+# Python 3.10. Development-lock constraint only; not published metadata.
+constraint-dependencies = ["scipy!=1.15.*; sys_platform == 'darwin'"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

@@ -593,7 +593,7 @@ class ECGExplainer:
     def from_checkpoint(
         cls,
         checkpoint: str | Path,
-        model_name: str,
+        model_name: str | None = None,
         input_channels: int | None = None,
         output_size: int | None = None,
         **kwargs: Any,
@@ -602,7 +602,8 @@ class ECGExplainer:
 
         Args:
             checkpoint: Path to an ECGTrainer checkpoint or a bare state dict
-            model_name: Registered model name matching the weights
+            model_name: Registered model name matching the weights; optional
+                when the checkpoint records it
             input_channels: Lead count, required for architectures whose weights
                 do not encode it
             output_size: Classifier width, normally recovered from the weights
@@ -863,9 +864,10 @@ def explain(
     Args:
         data: An array, tensor, file path, Dataset, DataLoader, or ECGDataModule
         model: An already-built model
-        checkpoint: Path to a checkpoint, requiring model_name
+        checkpoint: Path to a checkpoint
         weights: Registered pretrained weight name, or a path to a weights file
-        model_name: Registered model name
+        model_name: Registered model name; optional for a checkpoint that
+            records its own
         input_channels: Lead count, when it cannot be recovered from the weights
         output_size: Classifier width, when it cannot be recovered
         target: None for each sample's own predicted class, an integer, or one
@@ -878,7 +880,7 @@ def explain(
 
     Raises:
         ValueError: If not exactly one weight source is given, or a checkpoint
-            is given without a model name.
+            neither records its architecture nor is given a model name.
 
     Example:
         >>> result = explain(signals, checkpoint="best.ckpt", model_name="kanres")
@@ -899,8 +901,6 @@ def explain(
     if model is not None:
         explainer = ECGExplainer(model, model_name=model_name, **kwargs)
     elif checkpoint is not None:
-        if model_name is None:
-            raise ValueError("model_name is required when loading from a checkpoint.")
         explainer = ECGExplainer.from_checkpoint(
             checkpoint,
             model_name,

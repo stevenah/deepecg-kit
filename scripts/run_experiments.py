@@ -47,6 +47,7 @@ PARAM_KEYS = set(DEFAULTS.keys()) | {
     "force_download",
     "multi_label",
     "sampling_rate",
+    "segment_duration",
     "binary_classification",
     "normalization",
 }
@@ -512,6 +513,8 @@ def build_command(exp: dict[str, Any]) -> list[str]:
         cmd.append("--multi-label")
     if exp.get("sampling_rate"):
         cmd.extend(["--sampling-rate", str(exp["sampling_rate"])])
+    if exp.get("segment_duration"):
+        cmd.extend(["--segment-duration", str(exp["segment_duration"])])
     if exp.get("binary_classification"):
         cmd.append("--binary-classification")
     if exp.get("normalization"):

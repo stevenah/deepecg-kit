@@ -24,25 +24,37 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow.
 ## Usage
 
 ```bash
-deepecg train -m kanres -d af-classification        # train (auto-downloads dataset)
-deepecg evaluate --checkpoint model.pt -m kanres -d af-classification
-deepecg predict --checkpoint model.pt -m kanres --input ecg.npy
-deepecg extract-features --checkpoint model.pt -m kanres -d af-classification -o features.npz
-deepecg explain --checkpoint model.pt -m kanres --input ecg.npy -o explanations/
+deepecg train -m kanres -d af-classification        # train (downloads the dataset, ~100 MB)
+deepecg evaluate --checkpoint runs/<run> -d af-classification
+deepecg predict --checkpoint runs/<run> --input ecg.npy --sampling-rate 300
+deepecg extract-features --checkpoint runs/<run> -d af-classification -o features.npz
+deepecg explain --checkpoint runs/<run> --input ecg.npy -o explanations/
 deepecg list-models                                  # all 21 architectures
-deepecg list-datasets
+deepecg list-datasets                                # sizes, signal shape, local status
 deepecg info -m kanres
 ```
 
 Training writes a run directory `runs/{timestamp}-{model}-{dataset}-seed{seed}/` containing
 checkpoints (top 3 by validation loss), training plots, test metrics
-(`classification_metrics.csv`, confusion matrix, calibration curve), and run metadata.
-`deepecg evaluate` automatically picks up the recorded split configuration from the run
-directory; pass `-o` to write the same artifact set for an existing checkpoint.
+(`classification_metrics.csv`, confusion matrix, calibration curve), and run metadata, and ends
+by printing the best checkpoint. Anywhere a checkpoint is expected, the run directory can be
+passed instead and stands for that best checkpoint.
+
+Checkpoints describe themselves: they record the architecture, the class names, and the
+preprocessing the training data went through (sampling rate, segment length, normalisation).
+That is why `--model` is optional above, why `deepecg evaluate` rebuilds the dataset the way
+the model was trained, and why `deepecg predict` can take a raw recording: it is resampled,
+segmented and normalised to match before it reaches the model.
 
 Run `deepecg list-models` and `deepecg list-datasets` for the full catalogs — datasets cover
 PhysioNet 2017 (`af-classification`), PTB-XL (`ptbxl`), MIT-BIH AFDB (`mitbih-afdb`),
-Long-Term AFDB (`ltafdb`), and the combined `unified-af`.
+Long-Term AFDB (`ltafdb`), and the combined `unified-af`. Each dataset is used at its own
+sampling rate (300 Hz for the AF datasets, 500 Hz for PTB-XL) unless `--sampling-rate` says
+otherwise.
+
+Datasets are downloaded on first use into `~/.deepecgkit/datasets`; set `DEEPECGKIT_HOME` to
+keep them somewhere else. Downloads come from PhysioNet's open-data mirror, fall back to
+physionet.org, and resume if interrupted.
 
 ## Experiments
 
@@ -73,6 +85,8 @@ Defined once in `deepecgkit/cli/defaults.py`:
 | Validation split | 0.2 |
 | Test split | 0.1 |
 | Seed | 42 |
+| Sampling rate | the dataset's own (override with `--sampling-rate`) |
+| Data loader workers | 0 |
 
 ## References
 

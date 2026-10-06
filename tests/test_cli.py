@@ -19,7 +19,6 @@ from deepecgkit.cli import (
     DATASET_NUM_CLASSES,
     MODEL_DESCRIPTIONS,
     MODEL_NAMES,
-    MODEL_WEIGHTS,
     CLILogger,
     evaluate,
     explain,
@@ -223,14 +222,30 @@ class TestListModels:
 
         assert "Description:" in captured.out
 
-    def test_list_models_includes_pretrained_weights(self, capsys):
-        """Test list_models includes pretrained weights info."""
-        list_models()
-        captured = capsys.readouterr()
+    def test_list_models_lists_only_published_weights(self, capsys, monkeypatch):
+        """Weights are advertised once there is something to download, not before."""
+        from deepecgkit.utils import weights as weights_module
 
-        for _, weights in MODEL_WEIGHTS.items():
-            if weights:
-                assert "Pretrained weights:" in captured.out
+        list_models()
+        assert "Pretrained weights:" not in capsys.readouterr().out
+
+        monkeypatch.setitem(
+            weights_module.WEIGHTS_REGISTRY,
+            "kanres-published",
+            {
+                "url": "https://example.org/kanres-published.pt",
+                "model_class": "KanResWideX",
+                "model_kwargs": {"input_channels": 1, "output_size": 4},
+                "description": "published",
+            },
+        )
+        list_models()
+        assert "Pretrained weights: kanres-published" in capsys.readouterr().out
+
+    def test_list_models_shows_input_length_limits(self, capsys):
+        """A model that cannot take every signal length says so in the listing."""
+        list_models()
+        assert "Input length: at least 7971 samples per lead" in capsys.readouterr().out
 
 
 class TestListDatasets:
@@ -677,11 +692,13 @@ class TestCLIParserDefaults:
             assert call_kwargs["learning_rate"] == 1e-3
             assert call_kwargs["val_split"] == 0.2
             assert call_kwargs["test_split"] == 0.1
-            assert call_kwargs["num_workers"] == 4
+            assert call_kwargs["num_workers"] == 0
             assert call_kwargs["accelerator"] == "auto"
             assert call_kwargs["devices"] == 1
             assert call_kwargs["early_stopping_patience"] == 10
             assert call_kwargs["seed"] == 42
+            assert call_kwargs["sampling_rate"] is None
+            assert call_kwargs["segment_duration"] is None
 
     def test_probe_default_values(self):
         """Test probe command default argument values."""
@@ -703,7 +720,7 @@ class TestCLIParserDefaults:
             assert call_kwargs["test_split"] == 0.1
             assert call_kwargs["seed"] == 42
             assert call_kwargs["batch_size"] == 32
-            assert call_kwargs["num_workers"] == 4
+            assert call_kwargs["num_workers"] == 0
             assert call_kwargs["accelerator"] == "auto"
 
     def test_probe_custom_values(self):
@@ -809,10 +826,11 @@ class TestCLIParserDefaults:
 
             call_kwargs = mock_eval.call_args[1]
             assert call_kwargs["batch_size"] == 32
-            assert call_kwargs["num_workers"] == 4
+            assert call_kwargs["num_workers"] == 0
             assert call_kwargs["accelerator"] == "auto"
             assert call_kwargs["devices"] == 1
             assert call_kwargs["split"] == "test"
+            assert call_kwargs["sampling_rate"] is None
 
     def test_predict_default_values(self, temp_dir):
         """Test predict command default argument values."""
@@ -836,7 +854,7 @@ class TestCLIParserDefaults:
             )
 
             call_kwargs = mock_predict.call_args[1]
-            assert call_kwargs["batch_size"] == 1
+            assert call_kwargs["batch_size"] == 32
             assert call_kwargs["accelerator"] == "auto"
             assert call_kwargs["output_path"] is None
 
@@ -1408,7 +1426,8 @@ class TestExplainCommand:
         assert call_kwargs["method"] == "saliency"
         assert call_kwargs["max_samples"] == 8
         assert call_kwargs["ig_steps"] == 64
-        assert call_kwargs["sampling_rate"] == 500.0
+        assert call_kwargs["sampling_rate"] is None
+        assert call_kwargs["preprocess"] is True
         assert call_kwargs["plots"] is True
         assert call_kwargs["target_class"] is None
 
@@ -1513,7 +1532,7 @@ class TestRunDirContract:
         assert payload["model"] == "kanres"
         assert payload["seed"] == 7
         assert payload["returncode"] == 0
-        assert payload["schema_version"] == 1
+        assert payload["schema_version"] == 2
 
     def test_load_run_context_from_metadata(self, temp_dir):
         from deepecgkit.cli.run_dir import load_run_context, write_run_metadata
@@ -1593,3 +1612,651 @@ class TestAnalysisCommands:
         out = capsys.readouterr().out
         assert "2 runs across 1 dataset(s)" in out
         assert "f1" in out
+
+
+class TestGlobalOptionPlacement:
+    """--verbose, --quiet and --config work on either side of the command."""
+
+    def test_version_is_reported(self, capsys):
+        with pytest.raises(SystemExit) as excinfo:
+            main(["--version"])
+        assert excinfo.value.code == 0
+        assert capsys.readouterr().out.startswith("deepecg ")
+
+    def test_config_after_the_command(self, temp_dir):
+        config_file = temp_dir / "config.yaml"
+        config_file.write_text("train:\n  epochs: 100\n")
+        with patch("deepecgkit.cli.train") as mock_train:
+            mock_train.return_value = 0
+            result = main(
+                ["train", "-m", "kanres", "-d", "af-classification", "--config", str(config_file)]
+            )
+        assert result == 0
+        assert mock_train.call_args[1]["epochs"] == 100
+
+    def test_verbosity_flags_after_the_command(self):
+        for flag, attribute in (("-v", "verbose"), ("--quiet", "quiet")):
+            with patch("deepecgkit.cli.train") as mock_train:
+                mock_train.return_value = 0
+                main(["train", "-m", "kanres", "-d", "af-classification", flag])
+            assert getattr(mock_train.call_args[1]["logger"], attribute) is True
+
+    def test_a_flag_before_the_command_survives_the_subcommand(self):
+        with patch("deepecgkit.cli.train") as mock_train:
+            mock_train.return_value = 0
+            main(["-v", "train", "-m", "kanres", "-d", "af-classification"])
+        assert mock_train.call_args[1]["logger"].verbose is True
+
+    def test_config_can_supply_required_arguments(self, temp_dir):
+        config_file = temp_dir / "config.yaml"
+        config_file.write_text("train:\n  model: resnet\n  dataset: ptbxl\n  epochs: 3\n")
+        with patch("deepecgkit.cli.train") as mock_train:
+            mock_train.return_value = 0
+            result = main(["train", "--config", str(config_file)])
+        assert result == 0
+        kwargs = mock_train.call_args[1]
+        assert (kwargs["model_name"], kwargs["dataset_name"], kwargs["epochs"]) == (
+            "resnet",
+            "ptbxl",
+            3,
+        )
+
+    def test_required_arguments_are_still_required_without_a_config(self):
+        with pytest.raises(SystemExit):
+            main(["train", "-m", "kanres"])
+
+    def test_model_is_optional_where_the_checkpoint_can_supply_it(self, temp_dir):
+        checkpoint_file = temp_dir / "model.pt"
+        checkpoint_file.touch()
+        with patch("deepecgkit.cli.evaluate") as mock_evaluate:
+            mock_evaluate.return_value = 0
+            main(["evaluate", "--checkpoint", str(checkpoint_file), "-d", "af-classification"])
+        assert mock_evaluate.call_args[1]["model_name"] is None
+
+    def test_help_names_models_once(self, capsys):
+        with pytest.raises(SystemExit):
+            main(["train", "--help"])
+        assert capsys.readouterr().out.count("xresnet1d-benchmark") == 0
+
+
+@pytest.fixture
+def clean_registries():
+    """Undo any model or dataset registered while a test ran."""
+    from deepecgkit import registry
+
+    models, datasets = dict(registry._MODEL_REGISTRY), dict(registry._DATASET_REGISTRY)
+    modules = set(sys.modules)
+    path = list(sys.path)
+    try:
+        yield
+    finally:
+        registry._MODEL_REGISTRY.clear()
+        registry._MODEL_REGISTRY.update(models)
+        registry._DATASET_REGISTRY.clear()
+        registry._DATASET_REGISTRY.update(datasets)
+        for name in set(sys.modules) - modules:
+            sys.modules.pop(name)
+        sys.path[:] = path
+
+
+PLUGIN_SOURCE = """
+import torch
+from deepecgkit.models import ECGModelBase
+from deepecgkit.registry import register_model
+
+
+@register_model("plugin-model", description="A model registered from outside the package")
+class PluginModel(ECGModelBase):
+    def __init__(self, input_channels, output_size):
+        super().__init__()
+        self.backbone = torch.nn.Conv1d(input_channels, 8, kernel_size=7, padding=3)
+        self._feature_dim = 8
+        self.classifier = torch.nn.Linear(8, output_size)
+
+    def extract_features(self, x):
+        return self.backbone(x).mean(dim=-1)
+"""
+
+
+class TestPluginImport:
+    """Models and datasets registered outside the package are usable by name."""
+
+    def test_import_makes_a_registered_model_available(self, temp_dir, capsys, clean_registries):
+        plugin = temp_dir / "my_plugin_models.py"
+        plugin.write_text(PLUGIN_SOURCE)
+
+        assert main(["--import", str(plugin), "info", "-m", "plugin-model"]) == 0
+        assert "A model registered from outside the package" in capsys.readouterr().out
+
+    def test_import_is_accepted_after_the_command(self, temp_dir, capsys, clean_registries):
+        plugin = temp_dir / "my_plugin_models.py"
+        plugin.write_text(PLUGIN_SOURCE)
+
+        assert main(["info", "-m", "plugin-model", "--import", str(plugin)]) == 0
+
+    def test_environment_variable_names_plugins(
+        self, temp_dir, capsys, monkeypatch, clean_registries
+    ):
+        plugin = temp_dir / "my_plugin_models.py"
+        plugin.write_text(PLUGIN_SOURCE)
+        monkeypatch.setenv("DEEPECGKIT_PLUGINS", str(plugin))
+
+        assert main(["list-models"]) == 0
+        assert "plugin-model" in capsys.readouterr().out
+
+    def test_a_missing_plugin_is_reported(self, capsys):
+        assert main(["--import", "no_such_plugin_module_xyz", "list-models"]) == 1
+        assert "Failed to import 'no_such_plugin_module_xyz'" in capsys.readouterr().err
+
+    def test_an_unregistered_model_is_still_rejected(self):
+        with pytest.raises(SystemExit):
+            main(["info", "-m", "plugin-model"])
+
+
+class TestDatasetOptionValidation:
+    """A flag the dataset cannot honour is refused, not recorded and ignored."""
+
+    @pytest.mark.parametrize(
+        ("dataset", "flags", "expected"),
+        [
+            ("af-classification", ["--binary-classification"], "--binary-classification"),
+            ("af-classification", ["--multi-label"], "--multi-label"),
+            ("ptbxl", ["--segment-duration", "30"], "--segment-duration"),
+            ("ptbxl", ["--binary-classification"], "--binary-classification"),
+            ("mitbih-afdb", ["--multi-label"], "--multi-label"),
+        ],
+    )
+    def test_unsupported_flag_fails_before_anything_is_loaded(
+        self, dataset, flags, expected, temp_dir, capsys, monkeypatch
+    ):
+        monkeypatch.chdir(temp_dir)
+        result = main(["train", "-m", "simple-cnn", "-d", dataset, *flags])
+
+        assert result == 1
+        error = capsys.readouterr().err
+        assert f"{expected} does not apply to the '{dataset}' dataset" in error
+        assert not (temp_dir / "runs").exists()
+
+    def test_every_dataset_accepts_a_sampling_rate(self):
+        from deepecgkit.cli._common import dataset_kwargs_for
+
+        for name in DATASET_NAMES:
+            assert dataset_kwargs_for(name, sampling_rate=250)["sampling_rate"] == 250
+
+    def test_options_left_unset_keep_the_dataset_defaults(self):
+        from deepecgkit.cli._common import dataset_kwargs_for
+
+        kwargs = dataset_kwargs_for("af-classification")
+        assert kwargs == {"force_download": False}
+
+    def test_segment_duration_and_normalization_are_forwarded(self):
+        from deepecgkit.cli._common import dataset_kwargs_for
+
+        kwargs = dataset_kwargs_for("ltafdb", segment_duration=30.0, normalization="minmax")
+        assert kwargs["segment_duration_seconds"] == 30.0
+        assert kwargs["normalization"] == "minmax"
+
+    def test_an_inapplicable_option_is_refused_by_the_builder_too(self):
+        from deepecgkit.cli._common import dataset_kwargs_for
+
+        with pytest.raises(ValueError, match="--binary-classification does not apply"):
+            dataset_kwargs_for("af-classification", binary_classification=True)
+
+    def test_deprecated_devices_flag_says_it_does_nothing(self, temp_dir, capsys, monkeypatch):
+        from deepecgkit.datasets import af_classification as af_module
+
+        def offline(*args, **kwargs):
+            raise RuntimeError("offline")
+
+        monkeypatch.setattr(af_module, "download_file", offline)
+        monkeypatch.chdir(temp_dir)
+
+        main(
+            [
+                "train",
+                "-m",
+                "simple-cnn",
+                "-d",
+                "af-classification",
+                "--devices",
+                "2",
+                "--data-dir",
+                str(temp_dir / "absent"),
+            ]
+        )
+
+        assert "--devices 2 has no effect" in capsys.readouterr().err
+
+    def test_out_of_memory_errors_come_with_what_to_change(self, capsys):
+        from deepecgkit.cli._common import report_shape_error
+
+        error = RuntimeError("MPS backend out of memory (MPS allocated: 37.04 GiB)")
+        assert report_shape_error(error, "transformer", "Training", CLILogger()) == 1
+
+        message = capsys.readouterr().err
+        assert "ran out of memory" in message
+        assert "Lower --batch-size" in message
+
+
+class TestCheckpointResolution:
+    """A run directory stands for the best checkpoint inside it."""
+
+    def _run(self, temp_dir, losses):
+        folder = temp_dir / "run" / "checkpoints"
+        folder.mkdir(parents=True)
+        for epoch, loss in enumerate(losses, 1):
+            (folder / f"epoch={epoch:02d}-val_loss={loss:.4f}.pt").write_bytes(b"x")
+        return temp_dir / "run"
+
+    def test_run_directory_resolves_to_the_lowest_validation_loss(self, temp_dir):
+        from deepecgkit.cli.run_dir import resolve_checkpoint
+
+        run = self._run(temp_dir, [0.93, 0.41, 0.57])
+        assert resolve_checkpoint(run).name == "epoch=02-val_loss=0.4100.pt"
+        assert resolve_checkpoint(run / "checkpoints").name == "epoch=02-val_loss=0.4100.pt"
+
+    def test_a_file_is_returned_unchanged(self, temp_dir):
+        from deepecgkit.cli.run_dir import resolve_checkpoint
+
+        run = self._run(temp_dir, [0.93, 0.41])
+        chosen = run / "checkpoints" / "epoch=01-val_loss=0.9300.pt"
+        assert resolve_checkpoint(chosen) == chosen
+
+    def test_a_directory_without_checkpoints_is_reported(self, temp_dir, capsys):
+        result = evaluate(checkpoint=str(temp_dir), dataset_name="af-classification")
+
+        assert result == 1
+        assert "No checkpoint files" in capsys.readouterr().err
+
+
+@pytest.fixture(scope="module")
+def trained_run(tmp_path_factory):
+    """One short CLI training run on synthetic data, shared by the workflow tests."""
+    from tests.conftest import write_af_dataset
+
+    root = tmp_path_factory.mktemp("workflow")
+    data_dir = write_af_dataset(root / "data")
+    run_dir = root / "run"
+    result = main(
+        [
+            "train",
+            "-m",
+            "simple-cnn",
+            "-d",
+            "af-classification",
+            "--data-dir",
+            str(data_dir),
+            "--epochs",
+            "1",
+            "--accelerator",
+            "cpu",
+            "-o",
+            str(run_dir),
+            "--quiet",
+        ]
+    )
+    assert result == 0
+    return {"run": run_dir, "data": data_dir, "root": root}
+
+
+class TestTrainedRunWorkflow:
+    """Train once, then use the run the way the documentation says to."""
+
+    def _raw_recording(self, trained_run):
+        import scipy.io
+
+        path = trained_run["data"] / "training2017" / "A00001.mat"
+        return scipy.io.loadmat(str(path))["val"].ravel()
+
+    def test_metadata_records_the_values_that_were_in_effect(self, trained_run):
+        metadata = json.loads((trained_run["run"] / "run_metadata.json").read_text())
+
+        assert metadata["schema_version"] == 2
+        assert metadata["returncode"] == 0
+        assert metadata["sampling_rate"] == 300
+        assert metadata["normalization"] == "zscore"
+        assert metadata["segment_duration_seconds"] == 10.0
+        assert metadata["input_length"] == 3000
+        assert metadata["class_names"] == ["Normal", "AF", "Other", "Noisy"]
+        assert metadata["best_checkpoint"].endswith(".pt")
+
+    def test_checkpoint_carries_its_architecture_and_preprocessing(self, trained_run):
+        from deepecgkit.cli.run_dir import resolve_checkpoint
+
+        checkpoint = torch.load(resolve_checkpoint(trained_run["run"]), weights_only=False)
+
+        assert checkpoint["model_config"]["name"] == "simple-cnn"
+        assert checkpoint["data_config"]["dataset"] == "af-classification"
+        assert checkpoint["data_config"]["preprocessing"]["sampling_rate"] == 300
+
+    def test_evaluate_needs_only_the_run_directory(self, trained_run, capsys):
+        result = main(
+            [
+                "evaluate",
+                "--checkpoint",
+                str(trained_run["run"]),
+                "-d",
+                "af-classification",
+                "--data-dir",
+                str(trained_run["data"]),
+                "--accelerator",
+                "cpu",
+            ]
+        )
+
+        output = capsys.readouterr().out
+        assert result == 0
+        assert "Macro F1" in output
+        assert "AUROC" in output
+        assert "Per-Class Results" in output
+
+    def test_evaluate_reports_a_contradicting_model_in_one_line(self, trained_run, capsys):
+        result = main(
+            [
+                "evaluate",
+                "--checkpoint",
+                str(trained_run["run"]),
+                "-d",
+                "af-classification",
+                "-m",
+                "kanres",
+                "--data-dir",
+                str(trained_run["data"]),
+                "--accelerator",
+                "cpu",
+            ]
+        )
+
+        error = capsys.readouterr().err
+        assert result == 1
+        assert "trained as 'simple-cnn', but --model kanres was given" in error
+        assert "state_dict" not in error
+
+    def test_predict_preprocesses_a_raw_recording(self, trained_run, temp_dir):
+        recording = temp_dir / "raw.npy"
+        np.save(str(recording), self._raw_recording(trained_run))
+        output = temp_dir / "prediction.json"
+
+        result = main(
+            [
+                "predict",
+                "--checkpoint",
+                str(trained_run["run"]),
+                "-i",
+                str(recording),
+                "--sampling-rate",
+                "300",
+                "-o",
+                str(output),
+                "--accelerator",
+                "cpu",
+            ]
+        )
+
+        assert result == 0
+        payload = json.loads(output.read_text())
+        assert payload["model"] == "simple-cnn"
+        assert payload["class_names"] == ["Normal", "AF", "Other", "Noisy"]
+        assert payload["labels"][0] in payload["class_names"]
+        assert len(payload["predictions"]) == 1
+        assert len(payload["segments"]) == 3
+        assert [segment["start_seconds"] for segment in payload["segments"]] == [0.0, 10.0, 20.0]
+        assert max(payload["probabilities"][0]) < 0.999
+
+    def test_prediction_does_not_depend_on_the_recording_scale(self, trained_run, temp_dir):
+        raw = self._raw_recording(trained_run)
+        outputs = []
+        for name, scale in (("millivolts.npy", 0.001), ("counts.npy", 1000.0)):
+            recording, output = temp_dir / name, temp_dir / f"{name}.json"
+            np.save(str(recording), raw * scale)
+            main(
+                [
+                    "predict",
+                    "--checkpoint",
+                    str(trained_run["run"]),
+                    "-i",
+                    str(recording),
+                    "-o",
+                    str(output),
+                    "--accelerator",
+                    "cpu",
+                    "--quiet",
+                ]
+            )
+            outputs.append(json.loads(output.read_text())["probabilities"][0])
+
+        np.testing.assert_allclose(outputs[0], outputs[1], atol=1e-4)
+
+    def test_predict_resamples_a_recording_at_another_rate(self, trained_run, temp_dir, capsys):
+        recording = temp_dir / "half_rate.npy"
+        np.save(str(recording), self._raw_recording(trained_run)[::2])
+        output = temp_dir / "prediction.json"
+
+        result = main(
+            [
+                "predict",
+                "--checkpoint",
+                str(trained_run["run"]),
+                "-i",
+                str(recording),
+                "--sampling-rate",
+                "150",
+                "-o",
+                str(output),
+                "--accelerator",
+                "cpu",
+            ]
+        )
+
+        assert result == 0
+        assert "resampled from 150 Hz to 300 Hz" in capsys.readouterr().out
+        assert len(json.loads(output.read_text())["segments"]) == 3
+
+    def test_predict_names_the_class_on_the_console(self, trained_run, temp_dir, capsys):
+        recording = temp_dir / "raw.npy"
+        np.save(str(recording), self._raw_recording(trained_run))
+
+        main(
+            [
+                "predict",
+                "--checkpoint",
+                str(trained_run["run"]),
+                "-i",
+                str(recording),
+                "--accelerator",
+                "cpu",
+            ]
+        )
+
+        output = capsys.readouterr().out
+        assert "Recording 0: " in output
+        assert "averaged over 3 segments" in output
+        assert "Classes: Normal, AF, Other, Noisy" in output
+
+    def test_extract_features_gives_one_row_per_recording(self, trained_run, temp_dir):
+        recording = temp_dir / "raw.npy"
+        np.save(str(recording), self._raw_recording(trained_run))
+        output = temp_dir / "features.npz"
+
+        result = main(
+            [
+                "extract-features",
+                "--checkpoint",
+                str(trained_run["run"]),
+                "-i",
+                str(recording),
+                "-o",
+                str(output),
+                "--accelerator",
+                "cpu",
+                "--quiet",
+            ]
+        )
+
+        assert result == 0
+        assert np.load(str(output))["features"].shape[0] == 1
+
+    def test_explain_places_beats_at_the_training_rate(self, trained_run, temp_dir):
+        recording = temp_dir / "raw.npy"
+        np.save(str(recording), self._raw_recording(trained_run))
+        output = temp_dir / "explanation"
+
+        result = main(
+            [
+                "explain",
+                "--checkpoint",
+                str(trained_run["run"]),
+                "-i",
+                str(recording),
+                "-o",
+                str(output),
+                "--accelerator",
+                "cpu",
+                "--no-plots",
+                "--quiet",
+            ]
+        )
+
+        assert result == 0
+        summary = json.loads((output / "summary.json").read_text())
+        assert summary["sampling_rate"] == 300.0
+        assert summary["timesteps"] == 3000
+
+    def test_a_requested_sampling_rate_is_applied_and_recorded(self, trained_run):
+        run_dir = trained_run["root"] / "run-150"
+        result = main(
+            [
+                "train",
+                "-m",
+                "simple-cnn",
+                "-d",
+                "af-classification",
+                "--sampling-rate",
+                "150",
+                "--data-dir",
+                str(trained_run["data"]),
+                "--epochs",
+                "1",
+                "--accelerator",
+                "cpu",
+                "-o",
+                str(run_dir),
+                "--quiet",
+            ]
+        )
+
+        metadata = json.loads((run_dir / "run_metadata.json").read_text())
+        assert result == 0
+        assert metadata["sampling_rate"] == 150
+        assert metadata["input_length"] == 1500
+
+    def test_a_model_that_cannot_take_the_segments_fails_early_with_a_fix(
+        self, trained_run, capsys
+    ):
+        run_dir = trained_run["root"] / "run-afmodel"
+        result = main(
+            [
+                "train",
+                "-m",
+                "afmodel",
+                "-d",
+                "af-classification",
+                "-o",
+                str(run_dir),
+                "--data-dir",
+                str(trained_run["data"]),
+                "--epochs",
+                "1",
+                "--accelerator",
+                "cpu",
+            ]
+        )
+
+        error = capsys.readouterr().err
+        assert result == 1
+        assert "'afmodel' needs at least 7971 samples per lead" in error
+        assert "3000 samples per lead (10 s at 300 Hz)" in error
+        assert "--segment-duration 27" in error
+        assert not run_dir.exists()
+
+    def test_a_missing_dataset_leaves_no_run_directory(self, trained_run, capsys, monkeypatch):
+        from deepecgkit.datasets import af_classification as af_module
+
+        def offline(*args, **kwargs):
+            raise RuntimeError("Failed to download: network unreachable")
+
+        monkeypatch.setattr(af_module, "download_file", offline)
+        run_dir = trained_run["root"] / "run-missing"
+        result = main(
+            [
+                "train",
+                "-m",
+                "simple-cnn",
+                "-d",
+                "af-classification",
+                "-o",
+                str(run_dir),
+                "--data-dir",
+                str(trained_run["root"] / "no-data"),
+                "--accelerator",
+                "cpu",
+            ]
+        )
+
+        assert result == 1
+        assert "network unreachable" in capsys.readouterr().err
+        assert not run_dir.exists()
+
+    def test_legacy_checkpoint_is_evaluated_at_the_legacy_rate(self, trained_run, capsys):
+        """Checkpoints from before preprocessing was recorded were trained at 500 Hz."""
+        from deepecgkit.cli._common import checkpoint_dataset_kwargs
+        from deepecgkit.cli.run_dir import resolve_checkpoint
+
+        checkpoint = torch.load(resolve_checkpoint(trained_run["run"]), weights_only=False)
+        checkpoint.pop("data_config")
+
+        kwargs, _ = checkpoint_dataset_kwargs("af-classification", checkpoint, CLILogger())
+
+        assert kwargs["sampling_rate"] == 500
+        assert "does not record its preprocessing" in capsys.readouterr().err
+
+    def test_recorded_preprocessing_rebuilds_the_dataset(self, trained_run):
+        from deepecgkit.cli._common import checkpoint_dataset_kwargs
+        from deepecgkit.cli.run_dir import resolve_checkpoint
+
+        checkpoint = torch.load(resolve_checkpoint(trained_run["run"]), weights_only=False)
+        kwargs, multi_label = checkpoint_dataset_kwargs(
+            "af-classification", checkpoint, CLILogger()
+        )
+
+        assert multi_label is False
+        assert kwargs["sampling_rate"] == 300
+        assert kwargs["normalization"] == "zscore"
+        assert kwargs["segment_duration_seconds"] == 10.0
+
+    def test_probe_warns_when_the_encoder_was_trained_at_another_rate(self, trained_run, capsys):
+        from deepecgkit.cli.commands.probe import _warn_on_rate_mismatch
+        from deepecgkit.cli.run_dir import resolve_checkpoint
+
+        source = {"af-classification": str(resolve_checkpoint(trained_run["run"]))}
+
+        _warn_on_rate_mismatch(source, 300, CLILogger())
+        assert capsys.readouterr().err == ""
+
+        _warn_on_rate_mismatch(source, 500, CLILogger())
+        assert "trained at 300 Hz but is probed at 500 Hz" in capsys.readouterr().err
+
+
+class TestListDatasetsDetail:
+    """The listing says what a download involves before it starts."""
+
+    def test_listing_shows_signal_shape_size_and_location(self, capsys, monkeypatch, temp_dir):
+        monkeypatch.setenv("DEEPECGKIT_HOME", str(temp_dir))
+        list_datasets()
+        output = capsys.readouterr().out
+
+        assert "Signal: 1 lead(s), 300 Hz, 10 s segments" in output
+        assert "Classes: 4 (Normal, AF, Other, Noisy)" in output
+        assert "not downloaded (about 100 MB)" in output
+        assert str(temp_dir / "datasets" / "afclassificationdataset") in output
+        assert "Options: --binary-classification, --segment-duration" in output

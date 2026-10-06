@@ -3,6 +3,16 @@
 Neural network architectures for ECG signal processing. All models are `nn.Module` subclasses
 with a consistent interface: `__init__(input_channels, output_size, **kwargs)`.
 
+## Base Class
+
+::: deepecgkit.models.base.ECGModelBase
+
+## Building and Loading
+
+::: deepecgkit.models.factory.build_model
+
+::: deepecgkit.models.factory.build_model_from_checkpoint
+
 ## CNN Architectures
 
 ::: deepecgkit.models.simple_cnn.SimpleCNN

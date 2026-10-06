@@ -5,12 +5,15 @@ Usage:
     deepecg train --model <model> --dataset <dataset> [options]
     deepecg evaluate --checkpoint <path> --dataset <dataset> [options]
     deepecg predict --checkpoint <path> --input <file> [options]
-    deepecg extract-features --checkpoint <path> --model <model> --dataset <dataset> --output <file> [options]
-    deepecg explain --checkpoint <path> --model <model> --input <file> --output <dir> [options]
+    deepecg extract-features --checkpoint <path> --dataset <dataset> --output <file> [options]
+    deepecg explain --checkpoint <path> --input <file> --output <dir> [options]
     deepecg probe --model <model> --source-checkpoint <dataset>=<path> --output <dir> [options]
     deepecg list-models
     deepecg list-datasets
     deepecg info --model <model>
+
+A checkpoint path may be a run directory, which stands for its best checkpoint.
+Checkpoints record their architecture, so --model is only needed for older ones.
 
 Datasets are automatically downloaded when first used if not already present.
 Use --force-download to re-download an existing dataset.

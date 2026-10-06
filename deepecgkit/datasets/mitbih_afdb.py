@@ -8,7 +8,7 @@ import torch
 
 from deepecgkit.registry import register_dataset
 
-from ..utils.download import download_and_extract_zip
+from ..utils.download import has_unfinished_download
 from .base import BaseECGDataset
 from .preprocessing import (
     ECGSegmenter,
@@ -22,9 +22,9 @@ logger = logging.getLogger(__name__)
 
 @register_dataset(
     name="mitbih-afdb",
-    input_channels=2,
+    input_channels=1,
     num_classes=4,
-    description="MIT-BIH AF Database (2-lead, binary or 4-class)",
+    description="MIT-BIH AF Database (first lead by default, binary or 4-class)",
 )
 class MITBIHAFDBDataset(BaseECGDataset):
     """MIT-BIH Atrial Fibrillation Database (AFDB) Dataset.
@@ -45,6 +45,11 @@ class MITBIHAFDBDataset(BaseECGDataset):
     LEADS: ClassVar[list[str]] = ["ECG1", "ECG2"]
     SAMPLING_RATE: ClassVar[int] = 250
     DOWNLOAD_URL: ClassVar[str] = "https://physionet.org/content/afdb/get-zip/1.0.0/"
+    DOWNLOAD_MIRROR: ClassVar[str] = "https://physionet-open.s3.amazonaws.com/afdb/1.0.0/"
+    DOWNLOAD_SIZE: ClassVar[str | None] = "about 640 MB"
+    RECORD_SUFFIXES: ClassVar[tuple[str, ...]] = (".hea", ".atr", ".dat")
+    #: The records are tens of megabytes each, so a few are fetched at a time.
+    DOWNLOAD_WORKERS: ClassVar[int] = 4
 
     RECORD_NAMES: ClassVar[list[str]] = [
         "04015",
@@ -125,15 +130,31 @@ class MITBIHAFDBDataset(BaseECGDataset):
         )
 
     @classmethod
+    def is_downloaded(cls, data_dir: str | Path | None = None) -> bool:
+        """Report whether extracted record files are present.
+
+        A directory still holding the archive or a partial download does not
+        count: the archive is deleted once extraction finishes.
+        """
+        target = Path(data_dir) if data_dir is not None else cls.get_default_data_dir()
+        if has_unfinished_download(target):
+            return False
+        return any(target.glob("*.hea")) or any((target / "files").glob("*.hea"))
+
+    @classmethod
     def _download(cls, data_dir: Path, verbose: bool = True) -> None:
         if verbose:
             logger.info(f"Downloading MIT-BIH AFDB to {data_dir}")
-            logger.info("Note: This is a ~440MB download.")
-        download_and_extract_zip(
-            cls.DOWNLOAD_URL,
+            logger.info(f"Note: this fetches {cls.DOWNLOAD_SIZE}; an interrupted download resumes.")
+        cls._download_records(
             data_dir,
-            zip_name="afdb-1.0.0.zip",
+            [f"{record}{suffix}" for record in cls.RECORD_NAMES for suffix in cls.RECORD_SUFFIXES],
+            mirror=cls.DOWNLOAD_MIRROR,
             desc="Downloading MIT-BIH AFDB",
+            archive_url=cls.DOWNLOAD_URL,
+            archive_name="afdb-1.0.0.zip",
+            workers=cls.DOWNLOAD_WORKERS,
+            keep_alive=False,
             verbose=verbose,
         )
         if verbose:
@@ -154,7 +175,7 @@ class MITBIHAFDBDataset(BaseECGDataset):
 
         if not any(self.data_dir.glob("*.hea")):
             raise FileNotFoundError(
-                f"No record files found in {self.data_dir}. Expected .hea files from MIT-BIH AFDB."
+                self._not_found_message(self.data_dir, ".hea record files from MIT-BIH AFDB")
             )
 
         attempted_records = 0
@@ -187,7 +208,7 @@ class MITBIHAFDBDataset(BaseECGDataset):
 
                 for segment, label in zip(segments, segment_labels, strict=False):
                     normalized_segment = self.standardizer.normalize(segment)
-                    self.signals.append(normalized_segment)
+                    self.signals.append(normalized_segment.astype(np.float32))
                     self.labels.append(label)
                     self.record_names.append(record_name)
 

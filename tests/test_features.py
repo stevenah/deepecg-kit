@@ -430,10 +430,33 @@ class TestExtractFeaturesFunction:
         )
         assert result.features.shape == (4, 64)
 
-    def test_checkpoint_requires_model_name(self, kanres_checkpoint):
-        """A checkpoint without a model name is rejected."""
-        with pytest.raises(ValueError, match="model_name is required"):
-            extract_features(np.random.randn(2, 1, 3000), checkpoint=kanres_checkpoint)
+    def test_checkpoint_supplies_its_own_model_name(self, kanres_checkpoint):
+        """A checkpoint that records its architecture needs no model name."""
+        result = extract_features(
+            np.random.randn(2, 1, 3000), checkpoint=kanres_checkpoint, device="cpu"
+        )
+        assert result.features.shape == (2, 64)
+        assert result.model_name == "kanres"
+
+    def test_checkpoint_without_a_recorded_name_requires_one(self, kanres_model, temp_dir):
+        """Bare weights do not say which architecture they belong to."""
+        path = temp_dir / "bare.pt"
+        torch.save(kanres_model.state_dict(), str(path))
+        with pytest.raises(ValueError, match="does not record which architecture"):
+            extract_features(np.random.randn(2, 1, 3000), checkpoint=path)
+
+    def test_checkpoint_rejects_a_contradicting_model_name(self, kanres_checkpoint):
+        """Naming the wrong architecture is reported as that, in one line."""
+        with pytest.raises(ValueError, match="was trained as 'kanres', not 'resnet'"):
+            extract_features(
+                np.random.randn(2, 1, 3000), checkpoint=kanres_checkpoint, model_name="resnet"
+            )
+
+    def test_a_plain_module_is_rejected_with_a_pointer_to_the_base_class(self):
+        """A model without a feature path explains what it is missing."""
+        plain = torch.nn.Sequential(torch.nn.Flatten(), torch.nn.Linear(3000, 4))
+        with pytest.raises(TypeError, match="ECGModelBase"):
+            extract_features(np.random.randn(2, 1, 3000), model=plain, device="cpu")
 
     def test_requires_exactly_one_source(self, kanres_model, kanres_checkpoint):
         """Zero or several weight sources are rejected."""

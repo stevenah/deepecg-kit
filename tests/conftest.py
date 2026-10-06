@@ -160,6 +160,53 @@ def mock_dataset_files(temp_dir: Path):
     return temp_dir
 
 
+AF_LABELS = ("N", "A", "O", "~")
+
+
+def write_af_dataset(
+    root: Path,
+    records: int = 40,
+    seconds: int = 30,
+    sampling_rate: int = 300,
+    seed: int = 0,
+) -> Path:
+    """Write a small PhysioNet 2017 lookalike: a label file and .mat recordings.
+
+    The recordings are raw-looking (integer scale, not normalised) so that
+    tests exercising preprocessing have something to normalise.
+
+    Args:
+        root: Directory to create the dataset in
+        records: Number of recordings, cycling through the four labels
+        seconds: Length of each recording
+        sampling_rate: Rate the recordings are written at
+        seed: Seed for the synthetic signals
+
+    Returns:
+        The dataset directory, usable as data_dir.
+    """
+    rng = np.random.default_rng(seed)
+    training_dir = root / "training2017"
+    training_dir.mkdir(parents=True, exist_ok=True)
+    lines = []
+    time = np.arange(seconds * sampling_rate) / sampling_rate
+    for index in range(records):
+        label = AF_LABELS[index % len(AF_LABELS)]
+        name = f"A{index:05d}"
+        rhythm = np.sin(2 * np.pi * (1.0 + 0.4 * (index % len(AF_LABELS))) * time)
+        signal = 300.0 * rhythm + 40.0 * rng.standard_normal(time.shape)
+        scipy.io.savemat(str(training_dir / f"{name}.mat"), {"val": signal[np.newaxis, :]})
+        lines.append(f"{name},{label}")
+    (root / "REFERENCE-v3.csv").write_text("\n".join(lines) + "\n")
+    return root
+
+
+@pytest.fixture
+def af_dataset_dir(temp_dir: Path) -> Path:
+    """A 40-recording synthetic AF dataset, large enough to split three ways."""
+    return write_af_dataset(temp_dir / "afdata")
+
+
 CALIBRATION_SAMPLES = 8000
 CALIBRATION_SEED = 20240
 CALIBRATION_LOGIT_SCALE = 1.2

@@ -739,10 +739,12 @@ class TestExplainFunction:
         with pytest.raises(ValueError, match="exactly one"):
             explain(sample_batch_ecg, model=model, checkpoint="best.ckpt")
 
-    def test_a_checkpoint_requires_a_model_name(self, sample_batch_ecg, temp_dir):
+    def test_bare_weights_require_a_model_name(self, sample_batch_ecg, temp_dir):
         """Weights alone do not say which architecture they belong to."""
-        with pytest.raises(ValueError, match="model_name is required"):
-            explain(sample_batch_ecg, checkpoint=str(temp_dir / "missing.ckpt"))
+        path = temp_dir / "bare.pt"
+        torch.save(build_model("kanres", input_channels=1, output_size=4).state_dict(), str(path))
+        with pytest.raises(ValueError, match="does not record which architecture"):
+            explain(sample_batch_ecg, checkpoint=str(path))
 
     def test_it_loads_from_a_checkpoint(self, sample_batch_ecg, temp_dir):
         """A saved model is attributed the same as a live one."""

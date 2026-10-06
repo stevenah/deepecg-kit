@@ -28,11 +28,8 @@ model = model_class(
     output_size=dataset_info["num_classes"],
 )
 
-trainer = ECGTrainer(
-    model=model,
-    train_config={"learning_rate": 1e-3, "scheduler": {"factor": 0.5, "patience": 5}},
-)
-trainer.fit(data_module, epochs=50)
+trainer = ECGTrainer(model)
+trainer.fit(data_module, epochs=50, checkpoint_dir="runs/kanres-af/checkpoints")
 trainer.test(data_module)
 ```
 
@@ -42,14 +39,18 @@ Or use the CLI:
 deepecg train -m kanres -d af-classification --epochs 50
 ```
 
+The first run downloads the dataset (about 100 MB) into `~/.deepecgkit/datasets`.
+
 ## Features
 
 - **21 model architectures** — CNNs, ResNets, RNNs, Transformers, Mamba, and hybrids
 - **5 ECG datasets** — PhysioNet 2017, PTB-XL, MIT-BIH AFDB, LTAFDB, and unified AF
 - **Pure PyTorch** — No framework dependencies beyond PyTorch itself
 - **CLI & Python API** — Train, evaluate, and predict from the command line or code
-- **Registry system** — Decorator-based model/dataset registration for extensibility
-- **Pretrained weights** — Available for select models (KanRes, AFModel)
+- **Registry system** — Decorator-based model/dataset registration; your own are usable from
+  the CLI with `--import`
+- **Self-describing checkpoints** — Architecture, class names and preprocessing are recorded,
+  so evaluation and prediction need only the checkpoint
 
 ## Next Steps
 
