@@ -30,20 +30,23 @@ _COMMAND_MODULES = (
     "info",
 )
 
-#: The module that defines each command. A run of one command imports only
-#: its own module, so the analysis commands, for one, start without PyTorch.
-_MODULE_OF_COMMAND = {
-    "train": "train",
-    "evaluate": "evaluate",
-    "predict": "predict",
-    "extract-features": "extract",
-    "explain": "explain",
-    "probe": "probe",
-    "aggregate": "analysis",
-    "rank": "analysis",
-    "list-models": "info",
-    "list-datasets": "info",
-    "info": "info",
+#: Each command with the module that defines it and the line it is listed
+#: under. A run of one command imports only its own module, so the analysis
+#: commands, for one, start without PyTorch, and listing the commands imports
+#: none of them. The summaries repeat what the modules register; a test keeps
+#: the two the same.
+_COMMANDS = {
+    "train": ("train", "Train a model on a dataset"),
+    "evaluate": ("evaluate", "Evaluate a trained model"),
+    "predict": ("predict", "Run inference on ECG data"),
+    "extract-features": ("extract", "Extract deep embeddings from ECG data"),
+    "explain": ("explain", "Attribute a model's prediction back to the ECG signal"),
+    "probe": ("probe", "Probe frozen encoders across datasets and build a transfer matrix"),
+    "aggregate": ("analysis", "Aggregate per-run test metrics across random seeds"),
+    "rank": ("analysis", "Report how stable architecture rankings are across seeds"),
+    "info": ("info", "Show model information"),
+    "list-models": ("info", "List all available models"),
+    "list-datasets": ("info", "List all available datasets"),
 }
 
 #: Environment variable naming extra modules to import before the parser is
@@ -122,6 +125,7 @@ def _add_global_options(parser: argparse.ArgumentParser, *, top_level: bool) -> 
 
 def build_parser(
     command: str | None = None,
+    listing_only: bool = False,
 ) -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentParser]]:
     """Build the CLI parser.
 
@@ -129,6 +133,9 @@ def build_parser(
         command: The command about to run, when it is already known. Only the
             module defining it is then imported, and the parser knows that
             module's commands alone; anything else gets every command.
+        listing_only: Register the commands by name and summary alone,
+            importing none of them. Enough to print the top-level help or to
+            reject a command that does not exist.
 
     Returns:
         Tuple of the top-level parser and a mapping of command name to its
@@ -144,7 +151,12 @@ def build_parser(
     _add_global_options(parser, top_level=True)
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands", metavar="COMMAND")
-    wanted = _MODULE_OF_COMMAND.get(command or "")
+    if listing_only:
+        for name, (_, summary) in _COMMANDS.items():
+            subparsers.add_parser(name, help=summary)
+        return parser, dict(subparsers.choices)
+
+    wanted = _COMMANDS.get(command or "", (None, ""))[0]
     for name in (wanted,) if wanted else _COMMAND_MODULES:
         module = importlib.import_module(f"deepecgkit.cli.commands.{name}")
         module.add_parser(subparsers)
@@ -275,7 +287,10 @@ def main(argv: list | None = None) -> int:
             print(f"[ERROR] Failed to import '{plugin}': {e}", file=sys.stderr)
             return 1
 
-    parser, subparser_by_name = build_parser(early.command)
+    # Without a command there is nothing to run, only commands to list.
+    parser, subparser_by_name = build_parser(
+        early.command, listing_only=early.command not in _COMMANDS
+    )
 
     try:
         config = _apply_config(subparser_by_name, early.command, early.config)

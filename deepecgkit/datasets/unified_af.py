@@ -69,6 +69,12 @@ class _RemappedDataset(Dataset):
         else:
             self.record_names = []
 
+    def stratification_labels(self) -> np.ndarray | None:
+        """Return the remapped labels without reading a signal; see BaseECGDataset."""
+        if self._target_transform is not None or not self.labels:
+            return None
+        return np.asarray(self.labels, dtype=np.int64)
+
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         signal, label = self._dataset[self._indices[idx]]
         new_label = torch.tensor(self._label_map[label.item()], dtype=torch.long)
@@ -354,6 +360,14 @@ class UnifiedAFDataset(BaseECGDataset):
             class_name = self.class_names[label_idx]
             percentage = (count / len(all_labels)) * 100
             logger.info(f"  {class_name}: {count} ({percentage:.1f}%)")
+
+    def stratification_labels(self) -> np.ndarray | None:
+        """Return every source's labels in order, without reading a signal."""
+        parts = [dataset.stratification_labels() for dataset in self.datasets]
+        if not parts or any(part is None for part in parts):
+            return None
+        joined: np.ndarray = np.concatenate(parts)
+        return joined
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         return self.concat_dataset[idx]

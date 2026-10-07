@@ -68,7 +68,7 @@ DeepECG-Kit automatically detects available hardware:
 |--------|-----------|
 | **CUDA GPU** | Used automatically if `torch.cuda.is_available()` |
 | **Apple MPS** | Used automatically if `torch.backends.mps.is_available()` |
-| **CPU** | Fallback when no GPU is available |
+| **CPU** | Fallback when no GPU is available. On Apple Silicon, PyTorch's NNPACK backend is switched off for CPU runs, where it makes convolutions many times slower |
 
 You can override device selection with `--accelerator cpu|gpu|mps` (CLI) or `device="cpu"` (Python API).
 

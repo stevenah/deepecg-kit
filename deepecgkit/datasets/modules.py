@@ -150,11 +150,7 @@ class ECGDataModule:
             self.stratify and len(self.dataset) >= 8
         ):  # Need at least 2 samples per class for 4 classes
             try:
-                all_labels = []
-                for i in range(len(self.dataset)):
-                    _, label = self.dataset[i]
-                    all_labels.append(label)
-                stacked = torch.stack(all_labels).numpy()
+                stacked = self._collect_labels()
 
                 # For multi-label (2D), convert rows to string keys for stratification
                 if stacked.ndim > 1:
@@ -222,6 +218,19 @@ class ECGDataModule:
             logger.info(f"Training set size: {len(self.train_dataset)}")
             logger.info(f"Validation set size: {len(self.val_dataset)}")
             logger.info(f"Test set size: {len(self.test_dataset)}")
+
+    def _collect_labels(self) -> np.ndarray:
+        """Collect every sample's label, for stratifying the split.
+
+        A dataset that can hand its labels over directly is asked first;
+        otherwise every sample is read for its label.
+        """
+        size = len(self.dataset)
+        direct = getattr(self.dataset, "stratification_labels", None)
+        labels: np.ndarray | None = direct() if callable(direct) else None
+        if labels is None or len(labels) != size:
+            labels = torch.stack([self.dataset[i][1] for i in range(size)]).numpy()
+        return labels
 
     def _loader(self, dataset: Any, shuffle: bool) -> DataLoader:
         """Build a loader over one split.

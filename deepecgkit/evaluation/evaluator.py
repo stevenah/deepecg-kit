@@ -39,6 +39,9 @@ SUPPORTED_METRICS = CLASSIFICATION_METRICS | REGRESSION_METRICS | SCORE_METRICS
 
 PROBABILITY_SUM_TOLERANCE = 1e-4
 
+#: Rows a torch model is given at a time when its inputs arrive as one array.
+PREDICTION_BATCH_SIZE = 64
+
 #: Share of each training fold held back for the learning-rate schedule and
 #: early stopping, as one fold in this many.
 INNER_VALIDATION_FOLDS = 10
@@ -151,6 +154,11 @@ class ECGEvaluator:
         self.y_scores = y_scores
 
         predictions, targets = self._process_input_data(model, test_data)
+        if targets is None:
+            raise ValueError(
+                "Evaluation needs the targets as well as the inputs: pass (inputs, targets), "
+                "a DataLoader that yields both, or predictions together with their targets."
+            )
         self.y_true = targets
         metrics = self._calculate_metrics(predictions, targets, self.y_scores)
 
@@ -275,6 +283,10 @@ class ECGEvaluator:
         """Run one batch through the model, as numpy when the model returns a tensor."""
         if isinstance(model, torch.nn.Module) and not torch.is_tensor(x):
             x = torch.as_tensor(np.asarray(x), dtype=torch.float32)
+        if isinstance(model, torch.nn.Module) and len(x) > PREDICTION_BATCH_SIZE:
+            # A whole split in one forward pass can need more memory than there is.
+            chunks = torch.split(x, PREDICTION_BATCH_SIZE)
+            return np.concatenate([self._predict(model, chunk) for chunk in chunks])
         if torch.is_tensor(x):
             x = x.to(self.device)
 
@@ -359,7 +371,7 @@ class ECGEvaluator:
     def _process_numpy_data(self, model: torch.nn.Module, test_data: np.ndarray) -> tuple:
         """Process data when it's a numpy array."""
         pred = self._predict(model, torch.tensor(test_data, dtype=torch.float32))
-        return pred, np.zeros(len(pred))
+        return pred, None
 
     def _calibration_rows(
         self, predictions: np.ndarray, calibration_fit: tuple | None
