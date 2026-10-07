@@ -8,7 +8,8 @@ Usage:
     python examples/feature_extraction.py
     python examples/feature_extraction.py --model resnet --batch-size 16
     python examples/feature_extraction.py --all-models
-    python examples/feature_extraction.py --dataset af-classification --checkpoint runs/best.ckpt
+    python examples/feature_extraction.py --dataset af-classification \
+        --checkpoint runs/kanres-af/checkpoints/epoch=07-val_loss=0.4123.pt
 """
 
 import argparse
@@ -22,6 +23,8 @@ from deepecgkit.datasets import ECGDataModule
 from deepecgkit.models.factory import build_model
 from deepecgkit.registry import get_dataset, get_model_info, get_model_names
 
+DEFAULT_MODEL = "kanres"
+
 
 def signal_length_for(model_name: str, requested: int) -> int:
     """Clamp a requested signal length into a model's supported range."""
@@ -33,13 +36,18 @@ def signal_length_for(model_name: str, requested: int) -> int:
 
 def parse_args():
     parser = argparse.ArgumentParser(description="ECG feature extraction")
-    parser.add_argument("--model", type=str, default="kanres")
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="Model name (default: kanres, or the one a --checkpoint records)",
+    )
     parser.add_argument("--input-channels", type=int, default=1)
     parser.add_argument("--output-size", type=int, default=4)
     parser.add_argument("--signal-length", type=int, default=3000)
     parser.add_argument("--num-samples", type=int, default=100)
     parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--device", type=str, default="cpu")
+    parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--all-models", action="store_true")
     parser.add_argument("--dataset", type=str, default=None)
     parser.add_argument("--data-dir", type=str, default=None)
@@ -99,7 +107,6 @@ def compare_all_models(args) -> None:
 def linear_probe(args) -> None:
     """Extract over a real dataset and fit a linear probe on the embeddings."""
     from sklearn.linear_model import LogisticRegression
-    from sklearn.model_selection import train_test_split
 
     dataset_kwargs = {"data_dir": args.data_dir} if args.data_dir else {}
     data_module = ECGDataModule(
@@ -124,31 +131,37 @@ def linear_probe(args) -> None:
         )
     else:
         print("No --checkpoint given; using an untrained model, so accuracy will be near chance.")
-        model = build_model(args.model, input_channels=input_channels, output_size=args.output_size)
+        model_name = args.model or DEFAULT_MODEL
+        model = build_model(model_name, input_channels=input_channels, output_size=args.output_size)
         extractor = FeatureExtractor(
             model,
-            model_name=args.model,
+            model_name=model_name,
             batch_size=args.batch_size,
             device=args.device,
             progress=True,
         )
 
-    result = extractor.extract(data_module, split="all")
-    print(f"\nExtracted {result.features.shape} features from {args.dataset}")
-
     if args.output:
-        result.save(args.output)
-        print(f"Saved to {args.output}")
+        everything = extractor.extract(data_module, split="all")
+        everything.save(args.output)
+        print(f"\nSaved {everything.features.shape} features from {args.dataset} to {args.output}")
 
-    if result.labels is None or result.labels.ndim != 1:
+    # The probe is fitted and scored on the data module's own split, which keeps
+    # every segment of a recording on one side. A random split over segments
+    # would put neighbours from the same recording on both and flatter the score.
+    train = extractor.extract(data_module, split="train")
+    test = extractor.extract(data_module, split="test")
+    print(
+        f"\nExtracted {train.features.shape} training and {test.features.shape} test "
+        f"features from {args.dataset}"
+    )
+
+    if train.labels is None or train.labels.ndim != 1:
         print("Skipping the linear probe: this dataset has no single-label targets.")
         return
 
-    x_train, x_test, y_train, y_test = train_test_split(
-        result.features, result.labels, test_size=0.2, random_state=42, stratify=result.labels
-    )
-    probe = LogisticRegression(max_iter=1000).fit(x_train, y_train)
-    print(f"Linear probe accuracy: {probe.score(x_test, y_test):.4f}")
+    probe = LogisticRegression(max_iter=1000).fit(train.features, train.labels)
+    print(f"Linear probe accuracy: {probe.score(test.features, test.labels):.4f}")
 
 
 def main():
@@ -159,7 +172,7 @@ def main():
     elif args.all_models:
         compare_all_models(args)
     else:
-        extract_single_model(args, args.model)
+        extract_single_model(args, args.model or DEFAULT_MODEL)
 
 
 if __name__ == "__main__":

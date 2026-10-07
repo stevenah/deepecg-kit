@@ -1673,7 +1673,7 @@ class TestGlobalOptionPlacement:
             main(["evaluate", "--checkpoint", str(checkpoint_file), "-d", "af-classification"])
         assert mock_evaluate.call_args[1]["model_name"] is None
 
-    def test_help_names_models_once(self, capsys):
+    def test_help_does_not_list_every_model(self, capsys):
         with pytest.raises(SystemExit):
             main(["train", "--help"])
         assert capsys.readouterr().out.count("xresnet1d-benchmark") == 0

@@ -2,13 +2,14 @@
 Main ECG model evaluator class.
 """
 
+import contextlib
 import logging
+from collections.abc import Iterator
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import KFold
 
 from deepecgkit.evaluation.calibration import calibration_report
@@ -26,6 +27,16 @@ MAX_CLASSIFICATION_CLASSES = 20
 
 CALIBRATION_ROW_ORDER = (*CALIBRATION_REPORT_KEYS, "calibration_bins")
 
+#: Metric names the evaluator accepts, by the function that computes them.
+CLASSIFICATION_METRICS = frozenset({"accuracy", "precision", "recall", "f1", "mcc"})
+REGRESSION_METRICS = frozenset(
+    {"mse", "mean_squared_error", "mae", "mean_absolute_error", "r2", "r2_score", "rmse"}
+)
+SCORE_METRICS = frozenset({"auc"})
+SUPPORTED_METRICS = CLASSIFICATION_METRICS | REGRESSION_METRICS | SCORE_METRICS
+
+PROBABILITY_SUM_TOLERANCE = 1e-4
+
 
 class ECGEvaluator:
     """
@@ -34,13 +45,28 @@ class ECGEvaluator:
     This class provides a unified interface for evaluating ECG models with
     various metrics and analysis tools.
 
+    It takes either a model together with its data, or predictions computed
+    elsewhere together with their targets. A torch model is run on the
+    evaluation device in eval mode and handed back on the device and in the
+    mode it came in. Its outputs are taken to be logits, as every model in the
+    package emits and as ECGTrainer assumes, and are turned into probabilities
+    for a classification task: a single output becomes the two columns
+    [1 - p, p], several outputs go through a softmax, or through a sigmoid
+    when the targets are multi-hot. Rows that already sum to one are left
+    alone. Predictions passed in directly are used as they are.
+
     Args:
-        metrics: List of metrics to compute
+        metrics: List of metrics to compute: accuracy, precision, recall, f1,
+            mcc and auc for classification; mse, mae, r2 and rmse for
+            regression
         task_type: Type of task ("classification", "regression", "auto")
         device: Device for model evaluation
         calibration_bins: Number of bins for the calibration metrics reported
             by generate_report. ECE depends on this, so the value is emitted
             alongside the metrics rather than left implicit.
+
+    Raises:
+        ValueError: If metrics names one the evaluator does not compute.
 
     Examples:
         >>> evaluator = ECGEvaluator(metrics=["accuracy", "auc", "f1"])
@@ -55,10 +81,16 @@ class ECGEvaluator:
         calibration_bins: int = DEFAULT_CALIBRATION_BINS,
     ):
         self.metrics = metrics or ["accuracy", "precision", "recall", "f1", "auc"]
+        unknown = [name for name in self.metrics if name not in SUPPORTED_METRICS]
+        if unknown:
+            raise ValueError(
+                f"Unknown metric(s): {', '.join(unknown)}. "
+                f"Supported: {', '.join(sorted(SUPPORTED_METRICS))}."
+            )
         self.task_type = task_type
         self.calibration_bins = calibration_bins
-        self.y_scores = None
-        self.y_true = None
+        self.y_scores: np.ndarray | None = None
+        self.y_true: np.ndarray | None = None
 
         self.device = resolve_device(device)
 
@@ -86,7 +118,7 @@ class ECGEvaluator:
 
         predictions, targets = self._process_input_data(model, test_data)
         self.y_true = targets
-        metrics = self._calculate_metrics(predictions, targets)
+        metrics = self._calculate_metrics(predictions, targets, self.y_scores)
 
         if return_predictions:
             return metrics, predictions
@@ -121,27 +153,37 @@ class ECGEvaluator:
             targets = test_data
         return predictions, targets
 
-    def _calculate_metrics(self, predictions: np.ndarray, targets: np.ndarray) -> dict[str, float]:
+    def _calculate_metric(
+        self,
+        name: str,
+        predictions: np.ndarray,
+        targets: np.ndarray,
+        scores: np.ndarray | None = None,
+    ) -> float:
+        """Calculate one metric. Evaluation and bootstrapping both come through here."""
+        if name in CLASSIFICATION_METRICS:
+            return calculate_classification_metrics(targets, predictions, metrics=[name])[name]
+        if name in REGRESSION_METRICS:
+            return calculate_regression_metrics(targets, predictions, metrics=[name])[name]
+
+        # Per-class predictions are their own scores; hard labels are not scores at all.
+        if scores is None and np.ndim(predictions) > 1:
+            scores = predictions
+        if scores is None:
+            raise ValueError("y_scores required for AUC calculation")
+        return calculate_classification_metrics(targets, scores, metrics=[name])[name]
+
+    def _calculate_metrics(
+        self,
+        predictions: np.ndarray,
+        targets: np.ndarray,
+        scores: np.ndarray | None = None,
+    ) -> dict[str, float]:
         """Calculate metrics based on predictions and targets."""
-        metrics = {}
-        for metric_name in self.metrics:
-            if metric_name in ["accuracy", "precision", "recall", "f1"]:
-                metrics[metric_name] = calculate_classification_metrics(
-                    targets, predictions, metrics=[metric_name]
-                )[metric_name]
-            elif metric_name in ["mse", "mae", "r2"]:
-                metrics[metric_name] = calculate_regression_metrics(
-                    targets, predictions, metrics=[metric_name]
-                )[metric_name]
-            elif metric_name == "auc":
-                if self.y_scores is None:
-                    raise ValueError("y_scores required for AUC calculation")
-                scores = self.y_scores
-                n_classes = len(np.unique(targets))
-                if n_classes <= 2 and scores.ndim > 1:
-                    scores = scores[:, 1]
-                metrics[metric_name] = roc_auc_score(targets, scores)
-        return metrics
+        return {
+            name: self._calculate_metric(name, predictions, targets, scores)
+            for name in self.metrics
+        }
 
     def _get_predictions(
         self,
@@ -152,14 +194,93 @@ class ECGEvaluator:
         if model is None and isinstance(test_data, tuple):
             return self._handle_tuple_test_data(test_data)
 
-        if isinstance(test_data, torch.utils.data.DataLoader):
-            return self._process_dataloader(model, test_data)
-        elif isinstance(test_data, tuple) and len(test_data) == 2:
-            return self._process_tuple_data(model, test_data)
-        elif isinstance(test_data, np.ndarray):
-            return self._process_numpy_data(model, test_data)
-        else:
-            raise ValueError(f"Unsupported test data type: {type(test_data)}")
+        if not callable(model):
+            raise TypeError(
+                f"Expected a model to call or an array of predictions, got {type(model).__name__}."
+            )
+
+        with self._evaluating(model):
+            if isinstance(test_data, torch.utils.data.DataLoader):
+                outputs, targets = self._process_dataloader(model, test_data)
+            elif isinstance(test_data, tuple) and len(test_data) == 2:
+                outputs, targets = self._process_tuple_data(model, test_data)
+            elif isinstance(test_data, np.ndarray):
+                outputs, targets = self._process_numpy_data(model, test_data)
+            else:
+                raise ValueError(f"Unsupported test data type: {type(test_data)}")
+
+        if isinstance(model, torch.nn.Module) and self._is_classification(targets):
+            outputs = self._as_probabilities(outputs, targets)
+        return outputs, targets
+
+    @contextlib.contextmanager
+    def _evaluating(self, model: Any) -> Iterator[None]:
+        """Hold a torch module on the evaluation device and in eval mode.
+
+        The inputs are moved to the evaluation device, so the model has to be
+        there too; and a model left in training mode would be measured with
+        dropout active and would have its batch-norm statistics overwritten by
+        the test data. Both are put back afterwards.
+        """
+        if not isinstance(model, torch.nn.Module):
+            yield
+            return
+
+        was_training = model.training
+        parameter = next(model.parameters(), None)
+        previous_device = None if parameter is None else parameter.device
+        model.to(self.device).eval()
+        try:
+            yield
+        finally:
+            model.train(was_training)
+            if previous_device is not None:
+                model.to(previous_device)
+
+    def _predict(self, model: Any, x: Any) -> Any:
+        """Run one batch through the model, as numpy when the model returns a tensor."""
+        if isinstance(model, torch.nn.Module) and not torch.is_tensor(x):
+            x = torch.as_tensor(np.asarray(x), dtype=torch.float32)
+        if torch.is_tensor(x):
+            x = x.to(self.device)
+
+        with torch.no_grad():
+            pred = model(x)
+
+        if torch.is_tensor(pred):
+            pred = pred.cpu().numpy()
+        return pred
+
+    def _is_classification(self, targets: np.ndarray | None) -> bool:
+        """Whether the evaluated task is classification, resolving "auto" from the targets."""
+        if self.task_type != "auto":
+            return self.task_type == "classification"
+        if set(self.metrics) <= REGRESSION_METRICS:
+            return False
+        return self._detect_task_type(targets) == "classification"
+
+    def _as_probabilities(self, outputs: np.ndarray, targets: np.ndarray | None) -> np.ndarray:
+        """Turn the logits of a classifier into probabilities, the way ECGTrainer does."""
+        logits = torch.as_tensor(np.asarray(outputs))
+        if not torch.is_floating_point(logits) or logits.ndim > 2:
+            return outputs
+
+        if logits.ndim == 2 and logits.shape[1] == 1:
+            logits = logits[:, 0]
+        if logits.ndim == 1:
+            positive = torch.sigmoid(logits)
+            return torch.stack([1 - positive, positive], dim=1).numpy()
+
+        if targets is not None and np.ndim(targets) > 1:
+            return torch.sigmoid(logits).numpy()
+
+        row_sums = logits.sum(dim=1)
+        sums_to_one = torch.allclose(
+            row_sums, torch.ones_like(row_sums), atol=PROBABILITY_SUM_TOLERANCE
+        )
+        if sums_to_one and bool((logits >= 0).all()):
+            return outputs
+        return torch.softmax(logits, dim=1).numpy()
 
     def _handle_tuple_test_data(self, test_data: tuple) -> tuple:
         """Handle test data when it's a tuple."""
@@ -177,40 +298,25 @@ class ECGEvaluator:
         """Process data from a DataLoader."""
         predictions = []
         targets = []
-        with torch.no_grad():
-            for batch in test_data:
-                if isinstance(batch, list | tuple) and len(batch) == 2:
-                    x, y = batch
-                else:
-                    x, y = batch, None
+        for batch in test_data:
+            if isinstance(batch, list | tuple) and len(batch) == 2:
+                x, y = batch
+            else:
+                x, y = batch, None
 
-                if torch.is_tensor(x):
-                    x = x.to(self.device)
+            predictions.append(self._predict(model, x))
 
-                pred = model(x)
-
-                if torch.is_tensor(pred):
-                    pred = pred.cpu().numpy()
-                predictions.append(pred)
-
-                if y is not None:
-                    if torch.is_tensor(y):
-                        y = y.cpu().numpy()
-                    targets.append(y)
+            if y is not None:
+                if torch.is_tensor(y):
+                    y = y.cpu().numpy()
+                targets.append(y)
 
         return np.concatenate(predictions), np.concatenate(targets)
 
     def _process_tuple_data(self, model: torch.nn.Module, test_data: tuple) -> tuple:
         """Process data when it's a tuple."""
         x, y = test_data
-        if torch.is_tensor(x):
-            x = x.to(self.device)
-
-        with torch.no_grad():
-            pred = model(x)
-
-        if torch.is_tensor(pred):
-            pred = pred.cpu().numpy()
+        pred = self._predict(model, x)
         if torch.is_tensor(y):
             y = y.cpu().numpy()
 
@@ -218,13 +324,7 @@ class ECGEvaluator:
 
     def _process_numpy_data(self, model: torch.nn.Module, test_data: np.ndarray) -> tuple:
         """Process data when it's a numpy array."""
-        x = torch.tensor(test_data, dtype=torch.float32).to(self.device)
-
-        with torch.no_grad():
-            pred = model(x)
-
-        if torch.is_tensor(pred):
-            pred = pred.cpu().numpy()
+        pred = self._predict(model, torch.tensor(test_data, dtype=torch.float32))
         return pred, np.zeros(len(pred))
 
     def _calibration_rows(
@@ -249,7 +349,8 @@ class ECGEvaluator:
             return []
 
         scores = self.y_scores if self.y_scores is not None else predictions
-        if scores is None:
+        if scores is None or not np.issubdtype(np.asarray(scores).dtype, np.floating):
+            # Hard labels carry no confidence to calibrate.
             return []
 
         fit_targets, fit_logits = calibration_fit or (None, None)
@@ -275,7 +376,7 @@ class ECGEvaluator:
             rows.append({"Metric": name, "Value": value})
         return rows
 
-    def _detect_task_type(self, targets: np.ndarray) -> str:
+    def _detect_task_type(self, targets: np.ndarray | None) -> str:
         """Detect whether task is classification or regression."""
         if targets is None:
             return "regression"
@@ -336,47 +437,59 @@ class ECGEvaluator:
         test_data: Any,
         n_bootstrap: int = 1000,
         confidence_level: float = 0.95,
+        y_scores: np.ndarray | None = None,
     ) -> dict[str, dict[str, float]]:
         """
         Bootstrap evaluation for confidence intervals.
 
+        Takes the same inputs as evaluate, and computes each metric the same
+        way, so an interval describes the value evaluate reports. Resampling
+        draws from numpy's global generator; seed it for repeatable intervals.
+
         Args:
-            model: Trained model
-            test_data: Test dataset
+            model: PyTorch model or numpy array of predictions
+            test_data: Test data loader or (predictions, targets) tuple
             n_bootstrap: Number of bootstrap samples
             confidence_level: Confidence level for intervals
+            y_scores: Scores/probabilities for AUC calculation (optional)
 
         Returns:
             Dictionary with mean, std, and confidence intervals for each metric
         """
-        predictions, targets = self._get_predictions(model, test_data)
+        self.y_scores = y_scores
+        predictions, targets = self._process_input_data(model, test_data)
+        return self._bootstrap(predictions, targets, self.y_scores, n_bootstrap, confidence_level)
 
+    def _bootstrap(
+        self,
+        predictions: np.ndarray,
+        targets: np.ndarray | None,
+        scores: np.ndarray | None,
+        n_bootstrap: int = 1000,
+        confidence_level: float = 0.95,
+    ) -> dict[str, dict[str, float]]:
+        """Resample predictions with their targets and summarise each metric."""
         if targets is None:
             raise ValueError("Bootstrap evaluation requires ground truth targets")
 
+        predictions, targets = np.asarray(predictions), np.asarray(targets)
+        scores = None if scores is None else np.asarray(scores)
+
+        # A metric that is undefined on the whole set is undefined on every resample.
+        point_estimates = self._calculate_metrics(predictions, targets, scores)
+        names = [name for name, value in point_estimates.items() if not np.isnan(value)]
+
         n_samples = len(targets)
-        bootstrap_results: dict[str, list[float]] = {metric: [] for metric in self.metrics}
+        bootstrap_results: dict[str, list[float]] = {name: [] for name in names}
 
         for _ in range(n_bootstrap):
             indices = np.random.choice(n_samples, n_samples, replace=True)
-            boot_predictions = predictions[indices]
-            boot_targets = targets[indices]
-
-            if (
-                self.task_type == "classification"
-                or self._detect_task_type(boot_targets) == "classification"
-            ):
-                results = calculate_classification_metrics(
-                    boot_targets, boot_predictions, metrics=self.metrics
+            boot_predictions, boot_targets = predictions[indices], targets[indices]
+            boot_scores = None if scores is None else scores[indices]
+            for name in names:
+                bootstrap_results[name].append(
+                    self._calculate_metric(name, boot_predictions, boot_targets, boot_scores)
                 )
-            else:
-                results = calculate_regression_metrics(
-                    boot_targets, boot_predictions, metrics=self.metrics
-                )
-
-            for metric in self.metrics:
-                if metric in results:
-                    bootstrap_results[metric].append(results[metric])
 
         alpha = 1 - confidence_level
         lower_percentile = (alpha / 2) * 100
@@ -384,12 +497,14 @@ class ECGEvaluator:
 
         final_results = {}
         for metric, values in bootstrap_results.items():
-            if values:
+            # A resample can lack a class and leave a metric undefined; those are left out.
+            defined = [value for value in values if not np.isnan(value)]
+            if defined:
                 final_results[metric] = {
-                    "mean": np.mean(values),
-                    "std": np.std(values),
-                    "lower_ci": np.percentile(values, lower_percentile),
-                    "upper_ci": np.percentile(values, upper_percentile),
+                    "mean": np.mean(defined),
+                    "std": np.std(defined),
+                    "lower_ci": np.percentile(defined, lower_percentile),
+                    "upper_ci": np.percentile(defined, upper_percentile),
                 }
 
         return final_results
@@ -433,8 +548,9 @@ class ECGEvaluator:
             metrics_dict, predictions = results, None
 
         try:
-            bootstrap_results = self.bootstrap_evaluate(model, test_data)
-        except Exception:
+            bootstrap_results = self._bootstrap(predictions, self.y_true, self.y_scores)
+        except Exception as error:
+            logger.warning(f"Could not compute bootstrap confidence intervals: {error}")
             bootstrap_results = {}
 
         report_data = []

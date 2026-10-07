@@ -500,3 +500,77 @@ class TestCheckpointArchitectureErrors:
             build_model_from_checkpoint(path, name="kanres", input_channels=1)
 
         assert "\n" not in str(excinfo.value)
+
+
+UNEVEN_SAMPLES = 10
+UNEVEN_BATCH_SIZE = 8
+ZERO_CLASS_LOGIT = 2.0
+
+
+class _AlwaysClassZero(torch.nn.Module):
+    """A two-class model whose answer does not depend on its input."""
+
+    def __init__(self):
+        super().__init__()
+        self.logits = torch.nn.Parameter(torch.tensor([ZERO_CLASS_LOGIT, 0.0]))
+
+    def forward(self, x):
+        return self.logits.expand(len(x), 2)
+
+
+class _Loaders:
+    """The least a trainer asks of a data module: one loader for every split."""
+
+    def __init__(self, loader):
+        self.loader = loader
+
+    def train_dataloader(self):
+        return self.loader
+
+    def val_dataloader(self):
+        return self.loader
+
+    def test_dataloader(self):
+        return self.loader
+
+
+class TestMetricsAreAveragedOverSamples:
+    """A short last batch must not count for as much as a full one.
+
+    Ten samples in batches of eight leave a batch of two. The first batch is
+    all class 0, which the model always predicts, and the last is all class 1:
+    eight of ten are right, where the mean of the two batch accuracies is a half.
+    """
+
+    @pytest.fixture
+    def uneven(self):
+        labels = torch.tensor([0] * UNEVEN_BATCH_SIZE + [1] * (UNEVEN_SAMPLES - UNEVEN_BATCH_SIZE))
+        signals = torch.zeros(UNEVEN_SAMPLES, 1, 16)
+        dataset = torch.utils.data.TensorDataset(signals, labels)
+        loader = torch.utils.data.DataLoader(dataset, batch_size=UNEVEN_BATCH_SIZE)
+        logits = torch.tensor([[ZERO_CLASS_LOGIT, 0.0]]).expand(UNEVEN_SAMPLES, 2)
+        expected_loss = torch.nn.functional.cross_entropy(logits, labels).item()
+        return _Loaders(loader), expected_loss
+
+    def test_test_and_validate_weight_every_sample_equally(self, uneven):
+        data_module, expected_loss = uneven
+        trainer = ECGTrainer(_AlwaysClassZero(), device="cpu")
+
+        tested = trainer.test(data_module)
+        validated = trainer.validate(data_module)
+
+        assert tested["test_acc"] == pytest.approx(0.8)
+        assert tested["test_loss"] == pytest.approx(expected_loss)
+        assert validated["val_acc"] == pytest.approx(0.8)
+        assert validated["val_loss"] == pytest.approx(expected_loss)
+
+    def test_the_loss_that_selects_checkpoints_is_a_sample_mean(self, uneven, temp_dir):
+        """With a learning rate of zero the model stays put, so the epoch's loss is known."""
+        data_module, expected_loss = uneven
+        trainer = ECGTrainer(_AlwaysClassZero(), train_config={"learning_rate": 0.0}, device="cpu")
+
+        trainer.fit(
+            data_module, epochs=1, checkpoint_dir=temp_dir / "checkpoints", progress_bar=False
+        )
+
+        assert trainer.best_val_loss == pytest.approx(expected_loss)

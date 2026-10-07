@@ -45,6 +45,17 @@ def list_all_datasets():
         print()
 
 
+def describe_label(label, class_names) -> str:
+    """Name a sample's label: one class, or every class present for a multi-label dataset."""
+    label = np.asarray(label)
+    if label.ndim == 0:
+        present = [int(label)]
+    else:
+        present = [index for index, flag in enumerate(label.tolist()) if flag]
+    names = [class_names[index] if class_names else str(index) for index in present]
+    return ", ".join(names) or "none"
+
+
 def main():
     args = parse_args()
 
@@ -98,7 +109,7 @@ def main():
             pct = count / total * 100
             print(f"  {cls_name}: {count} ({pct:.1f}%)")
 
-    class_names = getattr(dataset_class, "CLASS_LABELS", None)
+    class_names = getattr(dataset, "class_names", None)
 
     if args.num_samples > 0:
         print(f"\n--- Plotting {args.num_samples} sample(s) ---")
@@ -108,8 +119,7 @@ def main():
             signal, label = dataset[idx]
             signal_np = signal.numpy()
 
-            label_str = class_names[int(label)] if class_names else str(int(label))
-            title = f"Sample {idx} (label: {label_str})"
+            title = f"Sample {idx} (label: {describe_label(label, class_names)})"
 
             save_path = None
             if args.save_dir:
@@ -119,6 +129,7 @@ def main():
 
             plot_ecg_signals(
                 signal_np,
+                sampling_rate=data_module.sampling_rate,
                 title=title,
                 save_path=save_path,
             )

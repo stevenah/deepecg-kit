@@ -53,7 +53,29 @@ def plot_roc_curve(
     title: str = "ROC Curve",
     save_path: str | None = None,
 ) -> None:
-    """Plot ROC curve."""
+    """Plot the ROC curve of a two-class problem.
+
+    Args:
+        y_true: True labels, two classes
+        y_scores: Scores of the positive class, or the two-column probability
+            matrix that ECGTrainer.get_test_results returns for a binary
+            model, whose second column is used
+        title: Figure title
+        save_path: Where to save the figure; None shows it instead
+
+    Raises:
+        ValueError: If y_scores holds a column per class for more than two
+            classes.
+    """
+    y_scores = np.asarray(y_scores)
+    if y_scores.ndim == 2:
+        if y_scores.shape[1] > 2:
+            raise ValueError(
+                f"plot_roc_curve draws one curve for a two-class problem; got scores for "
+                f"{y_scores.shape[1]} classes. For class k against the rest, pass "
+                f"y_true == k and y_scores[:, k]."
+            )
+        y_scores = y_scores[:, -1]
     fpr, tpr, _ = roc_curve(y_true, y_scores)
     roc_auc = auc(fpr, tpr)
 
@@ -100,11 +122,36 @@ def plot_ecg_signals(
     title: str = "ECG Signals",
     save_path: str | None = None,
 ) -> None:
-    """Plot ECG signals."""
+    """Plot one ECG recording, one row per lead.
+
+    Args:
+        data: A single lead as a one-dimensional array, or several leads as a
+            two-dimensional one. Both layouts are accepted for the latter,
+            (leads, time) as the datasets and models use and (time, leads);
+            the longer axis is taken to be time.
+        sampling_rate: Sampling rate of the recording in Hz, for the time axis
+        leads: Name of each lead, in order
+        title: Figure title
+        save_path: Where to save the figure; None shows it instead
+
+    Raises:
+        ValueError: If data has more than two dimensions, or leads does not
+            name every lead.
+    """
+    data = np.asarray(data)
     if data.ndim == 1:
         data = data.reshape(-1, 1)
+    elif data.ndim != 2:
+        raise ValueError(
+            f"plot_ecg_signals draws one recording; got an array of shape {data.shape}. "
+            f"Pass a single (leads, time) recording, for example batch[0]."
+        )
+    elif data.shape[0] < data.shape[1]:
+        data = data.T
 
     n_samples, n_leads = data.shape
+    if leads is not None and len(leads) != n_leads:
+        raise ValueError(f"Got {len(leads)} lead names for a recording with {n_leads} leads.")
     time = np.arange(n_samples) / sampling_rate
 
     if leads is None:
@@ -148,6 +195,8 @@ def plot_training_curves(
         resolved_dir = Path(save_dir)
     elif save_path:
         resolved_dir = Path(save_path).parent
+    if resolved_dir:
+        resolved_dir.mkdir(parents=True, exist_ok=True)
 
     train_loss = df.dropna(subset=["train_loss"]).groupby("epoch")["train_loss"].mean()
     val_loss = df.dropna(subset=["val_loss"]).groupby("epoch")["val_loss"].mean()
@@ -219,6 +268,8 @@ def plot_calibration_curve(
         resolved_dir = Path(save_dir)
     elif save_path:
         resolved_dir = Path(save_path).parent
+    if resolved_dir:
+        resolved_dir.mkdir(parents=True, exist_ok=True)
 
     plt.figure(figsize=(8, 6))
     for i in range(num_classes):

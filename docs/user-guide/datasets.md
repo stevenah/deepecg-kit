@@ -95,13 +95,17 @@ dataset_class = get_dataset("af-classification")
 
 Datasets are downloaded on first use when `download=True` (the CLI always passes it). They are
 stored under `~/.deepecgkit/datasets`, one folder per dataset; set the `DEEPECGKIT_HOME`
-environment variable to move that root, or pass `data_dir` for a single dataset.
+environment variable to move that root, or pass `data_dir` for a single dataset. `unified-af`
+keeps nothing of its own and reads its three sources from their own folders, so a copy fetched
+for one of them is shared; its `data_dir` is the folder that holds those three folders.
 
 Files come from PhysioNet's open-data mirror, with the archives on physionet.org as the
 fallback. Only what the loaders read is fetched. A download that is interrupted resumes where
 it stopped the next time the dataset is requested, and a directory left incomplete is detected
 and completed rather than loaded as it is. Use `force_download=True` (CLI: `--force-download`)
-to discard a local copy and fetch it again.
+to discard a local copy and fetch it again. That deletes the dataset's folder first, so a
+`data_dir` of your own is only cleared when it is empty or recognisably a copy of the dataset;
+anything else is refused rather than deleted.
 
 ```python
 from deepecgkit.datasets import PTBXLDataset

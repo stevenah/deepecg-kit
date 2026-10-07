@@ -27,7 +27,9 @@ python examples/model_comparison.py --device mps
 The script iterates over all registered models:
 
 ```python
-from deepecgkit.registry import get_model, get_model_info, get_model_names
+import torch
+
+from deepecgkit.registry import get_model, get_model_names
 
 for model_name in get_model_names():
     model_class = get_model(model_name)
@@ -35,12 +37,19 @@ for model_name in get_model_names():
     model.eval()
 
     x = torch.randn(1, 1, 3000)
-    with torch.no_grad():
-        output = model(x)
+    try:
+        with torch.no_grad():
+            output = model(x)
+    except Exception as error:
+        print(f"{model_name}: FAILED - {error}")
+        continue
 
     total_params = sum(p.numel() for p in model.parameters())
     print(f"{model_name}: {total_params:,} params, output {tuple(output.shape)}")
 ```
+
+A model that cannot take the requested input is reported and skipped: `afmodel` is built for
+30-second recordings, so it needs `--signal-length 9000` at 300 Hz.
 
 For each model it reports:
 

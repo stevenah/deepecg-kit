@@ -162,10 +162,22 @@ random network the floor describes. The same seed reproduces the same floor exac
 `embed_2d` standardises, reduces wide embeddings by PCA, then projects with scikit-learn's t-SNE.
 `method="pca"` is the cheap alternative. There is no UMAP dependency.
 
+Held-out embeddings are kept only when asked for, since keeping all of them costs memory
+proportional to the corpus:
+
+```python
+matrix = cross_dataset_transfer(checkpoints, "kanres", keep_embeddings="diagonal")
+```
+
+`diagonal` retains the in-domain cells together with the random-init row, which is the pairing worth
+looking at: the same target seen through a trained encoder and through an untrained one. `all`
+retains every cell, `none` is the default. `embedding_for` returns `None` for a cell that was not
+retained.
+
 ```python
 from deepecgkit.evaluation import embed_2d, plot_embedding
 
-features = matrix.embedding_for("af-classification", "ptbxl")
+features = matrix.embedding_for("ptbxl", "ptbxl")
 plot_embedding(
     embed_2d(features.features),
     features.labels,
@@ -176,17 +188,6 @@ plot_embedding(
 
 t-SNE requires a perplexity below the sample count; `embed_2d` clamps it rather than letting
 scikit-learn reject a small split. Multi-hot labels are coloured by their first positive label.
-
-Held-out embeddings are kept only when asked for, since keeping all of them costs memory
-proportional to the corpus:
-
-```python
-matrix = cross_dataset_transfer(checkpoints, "kanres", keep_embeddings="diagonal")
-```
-
-`diagonal` retains the in-domain cells together with the random-init row, which is the pairing worth
-looking at: the same target seen through a trained encoder and through an untrained one. `all`
-retains every cell, `none` is the default.
 
 ## Output
 

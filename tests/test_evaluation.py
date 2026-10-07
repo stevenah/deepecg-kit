@@ -2,9 +2,13 @@
 Tests for deepecgkit.evaluation module.
 """
 
+import matplotlib
+import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 import torch
+from sklearn.metrics import roc_auc_score
+from torch.utils.data import DataLoader, TensorDataset
 
 from deepecgkit.evaluation import (
     TASK_BINARY,
@@ -23,10 +27,12 @@ from deepecgkit.evaluation import (
     expected_calibration_error,
     fit_temperature,
     maximum_calibration_error,
+    plot_calibration_curve,
     plot_confusion_matrix,
     plot_ecg_signals,
     plot_predictions,
     plot_roc_curve,
+    plot_training_curves,
     probabilities_to_logits,
     resolve_task_shape,
     temperature_nll,
@@ -57,6 +63,17 @@ class TestClassificationMetrics:
 
         for metric_name, value in metrics.items():
             assert 0 <= value <= 1, f"{metric_name} should be between 0 and 1"
+
+    def test_float32_scores_are_thresholded_like_float64(self):
+        """Scores converted from a torch tensor are float32 and must not be cast to labels."""
+        y_true = np.array([0, 0, 1, 1, 0, 1, 1, 0])
+        scores = np.array([0.1, 0.2, 0.8, 0.9, 0.3, 0.7, 0.6, 0.4])
+
+        expected = calculate_classification_metrics(y_true, scores)
+        metrics = calculate_classification_metrics(y_true, scores.astype(np.float32))
+
+        assert metrics == pytest.approx(expected)
+        assert metrics["accuracy"] == 1.0
 
     def test_calculate_classification_metrics_multiclass(self):
         """Test multiclass classification metrics."""
@@ -855,3 +872,353 @@ class TestEvaluatorCalibration:
 
         values = dict(zip(report["Metric"], report["Value"], strict=False))
         assert values["calibration_bins"] == 6
+
+
+EVALUATOR_SAMPLES = 64
+EVALUATOR_SIGNAL_LENGTH = 100
+BOOTSTRAP_SAMPLES = 200
+BOOTSTRAP_ACCURACY = 0.8
+
+
+class _SmallClassifier(torch.nn.Module):
+    """A classifier with the two layers that behave differently in training mode."""
+
+    def __init__(self, n_classes: int = 4):
+        super().__init__()
+        self.norm = torch.nn.BatchNorm1d(1)
+        self.drop = torch.nn.Dropout(0.5)
+        self.head = torch.nn.Linear(EVALUATOR_SIGNAL_LENGTH, n_classes)
+
+    def forward(self, x):
+        return self.head(self.drop(self.norm(x)).flatten(1))
+
+
+class _SignLogit(torch.nn.Module):
+    """A model with one output per sample: five times the mean of its input."""
+
+    def __init__(self):
+        super().__init__()
+        self.scale = torch.nn.Parameter(torch.tensor(5.0))
+
+    def forward(self, x):
+        return (self.scale * x.mean(dim=(1, 2))).unsqueeze(-1)
+
+
+class _SoftmaxHead(torch.nn.Module):
+    """A classifier that already ends in a softmax."""
+
+    def __init__(self):
+        super().__init__()
+        self.head = torch.nn.Linear(EVALUATOR_SIGNAL_LENGTH, 4)
+
+    def forward(self, x):
+        return torch.softmax(self.head(x.flatten(1)), dim=1)
+
+
+@pytest.fixture
+def multiclass_loader() -> DataLoader:
+    """Four-class labels over signals that say nothing about them."""
+    signals = torch.randn(EVALUATOR_SAMPLES, 1, EVALUATOR_SIGNAL_LENGTH)
+    labels = torch.arange(EVALUATOR_SAMPLES) % 4
+    return DataLoader(TensorDataset(signals, labels), batch_size=16)
+
+
+@pytest.fixture
+def binary_loader() -> DataLoader:
+    """Signals whose mean is positive exactly when the label is one."""
+    labels = torch.arange(EVALUATOR_SAMPLES) % 2
+    offsets = (2.0 * labels - 1.0).reshape(-1, 1, 1)
+    signals = 0.1 * torch.randn(EVALUATOR_SAMPLES, 1, EVALUATOR_SIGNAL_LENGTH) + offsets
+    return DataLoader(TensorDataset(signals, labels), batch_size=16)
+
+
+@pytest.fixture
+def labelled_predictions() -> tuple[np.ndarray, np.ndarray]:
+    """Binary targets and hard labels that agree on BOOTSTRAP_ACCURACY of the samples."""
+    y_true = np.arange(BOOTSTRAP_SAMPLES) % 2
+    y_pred = y_true.copy()
+    wrong = int(BOOTSTRAP_SAMPLES * (1 - BOOTSTRAP_ACCURACY))
+    y_pred[:wrong] = 1 - y_pred[:wrong]
+    return y_true, y_pred
+
+
+@pytest.fixture
+def headless_matplotlib():
+    """Render without a display and close every figure a test leaves open."""
+    matplotlib.use("Agg", force=True)
+    yield
+    plt.close("all")
+
+
+class TestEvaluatorWithTorchModels:
+    """Test evaluating a torch model directly, the way the user guide shows it."""
+
+    def test_default_metrics_work_on_a_model_and_loader(self, multiclass_loader):
+        """The defaults include AUC, which needs probabilities where the model gives logits."""
+        model = _SmallClassifier().eval()
+        signals, labels = multiclass_loader.dataset.tensors
+        with torch.no_grad():
+            probabilities = torch.softmax(model(signals), dim=1).numpy()
+
+        results = ECGEvaluator().evaluate(model, multiclass_loader)
+
+        assert set(results) == {"accuracy", "precision", "recall", "f1", "auc"}
+        expected_auc = roc_auc_score(labels.numpy(), probabilities, multi_class="ovr")
+        assert results["auc"] == pytest.approx(expected_auc, abs=1e-4)
+        expected_accuracy = (probabilities.argmax(axis=1) == labels.numpy()).mean()
+        assert results["accuracy"] == pytest.approx(expected_accuracy)
+
+    def test_the_model_is_handed_back_as_it_came(self, multiclass_loader):
+        """Evaluation must not move the model, change its mode or touch its statistics."""
+        model = _SmallClassifier()
+        model.train()
+        running_mean = model.norm.running_mean.clone()
+
+        ECGEvaluator(metrics=["accuracy"]).evaluate(model, multiclass_loader)
+
+        assert model.training
+        assert next(model.parameters()).device.type == "cpu"
+        assert torch.equal(model.norm.running_mean, running_mean)
+        assert model.norm.num_batches_tracked.item() == 0
+
+    def test_a_single_logit_is_thresholded_rather_than_argmaxed(self, binary_loader):
+        """The binary models have one output, and an argmax over one column is always zero."""
+        evaluator = ECGEvaluator(metrics=["accuracy", "auc"])
+
+        results = evaluator.evaluate(_SignLogit(), binary_loader)
+
+        assert results["accuracy"] == 1.0
+        assert results["auc"] == 1.0
+
+    def test_probabilities_are_not_softmaxed_twice(self, multiclass_loader):
+        """A model that already emits probabilities keeps them."""
+        model = _SoftmaxHead().eval()
+        signals, _ = multiclass_loader.dataset.tensors
+        with torch.no_grad():
+            expected = model(signals).numpy()
+
+        _, predictions = ECGEvaluator(metrics=["accuracy"]).evaluate(
+            model, multiclass_loader, return_predictions=True
+        )
+
+        np.testing.assert_allclose(predictions, expected, atol=1e-5)
+
+    def test_regression_outputs_are_left_alone(self):
+        """Only the outputs of a classifier are logits."""
+        signals = torch.randn(EVALUATOR_SAMPLES, 1, EVALUATOR_SIGNAL_LENGTH)
+        targets = 5.0 * signals.mean(dim=(1, 2))
+        loader = DataLoader(TensorDataset(signals, targets), batch_size=16)
+        evaluator = ECGEvaluator(task_type="regression", metrics=["mse"])
+
+        results = evaluator.evaluate(_SignLogit(), loader)
+
+        assert results["mse"] == pytest.approx(0.0, abs=1e-8)
+
+    def test_arrays_reach_a_torch_model(self, binary_loader):
+        """Signals given as numpy arrays are converted rather than passed to the module raw."""
+        signals, labels = binary_loader.dataset.tensors
+        evaluator = ECGEvaluator(metrics=["accuracy"])
+
+        results = evaluator.evaluate(_SignLogit(), (signals.numpy(), labels.numpy()))
+
+        assert results["accuracy"] == 1.0
+
+    def test_report_from_a_model_calibrates_probabilities(self, multiclass_loader):
+        """Calibration computed on raw logits gave a Brier score above its maximum."""
+        report = ECGEvaluator(metrics=["accuracy"]).generate_report(
+            _SmallClassifier().eval(), multiclass_loader
+        )
+
+        values = dict(zip(report["Metric"], report["Value"], strict=False))
+        assert 0.0 <= values["brier"] <= 1.0
+
+    def test_unknown_metric_names_are_rejected(self):
+        """A misspelt metric used to be dropped from the results without a word."""
+        with pytest.raises(ValueError, match="auroc"):
+            ECGEvaluator(metrics=["accuracy", "auroc"])
+
+    def test_something_that_is_not_a_model_is_rejected(self):
+        """Neither a model nor predictions leaves nothing to evaluate."""
+        with pytest.raises(TypeError, match="model"):
+            ECGEvaluator(metrics=["accuracy"]).evaluate(None, np.zeros((4, 1, 10)))
+
+    def test_multiclass_auc_from_precomputed_probabilities(self, calibrated_multiclass_predictions):
+        """AUC used to be computed for two classes only and raise for more."""
+        y_true, y_prob, _ = calibrated_multiclass_predictions
+        evaluator = ECGEvaluator(metrics=["auc"])
+
+        results = evaluator.evaluate(y_prob.argmax(axis=1), y_true, y_scores=y_prob)
+
+        assert results["auc"] == pytest.approx(roc_auc_score(y_true, y_prob, multi_class="ovr"))
+
+
+class TestEvaluatorBootstrap:
+    """Test bootstrap confidence intervals."""
+
+    def test_bootstrap_accepts_precomputed_predictions(self, labelled_predictions):
+        """evaluate takes predictions in place of a model, and so must bootstrap_evaluate."""
+        y_true, y_pred = labelled_predictions
+        evaluator = ECGEvaluator(metrics=["accuracy", "f1"], task_type="classification")
+
+        intervals = evaluator.bootstrap_evaluate(y_pred, (y_pred, y_true), n_bootstrap=200)
+
+        assert set(intervals) == {"accuracy", "f1"}
+        accuracy = intervals["accuracy"]
+        assert accuracy["lower_ci"] < BOOTSTRAP_ACCURACY < accuracy["upper_ci"]
+
+    def test_bootstrap_auc_is_computed_from_the_scores(self):
+        """Hard labels have an AUC of their own, well below that of the scores behind them."""
+        rng = np.random.default_rng(0)
+        y_true = np.arange(400) % 2
+        y_scores = np.clip(0.5 + 0.25 * (2 * y_true - 1) + rng.normal(0, 0.25, 400), 0, 1)
+        y_pred = (y_scores > 0.5).astype(int)
+        score_auc = roc_auc_score(y_true, y_scores)
+        assert roc_auc_score(y_true, y_pred) < score_auc - 0.03
+
+        intervals = ECGEvaluator(metrics=["auc"]).bootstrap_evaluate(
+            y_pred, y_true, n_bootstrap=200, y_scores=y_scores
+        )
+
+        assert intervals["auc"]["mean"] == pytest.approx(score_auc, abs=0.02)
+
+    def test_bootstrap_auc_needs_scores_when_given_labels(self, labelled_predictions):
+        """An AUC over hard labels would be reported as though it were the real one."""
+        y_true, y_pred = labelled_predictions
+
+        with pytest.raises(ValueError, match="y_scores"):
+            ECGEvaluator(metrics=["auc"]).bootstrap_evaluate(y_pred, y_true, n_bootstrap=10)
+
+    def test_resamples_where_a_metric_is_undefined_are_left_out(self):
+        """With one positive in ten, a third of the resamples have none and no AUC."""
+        y_true = np.array([0] * 9 + [1])
+        y_scores = np.linspace(0.05, 0.95, 10)
+        y_pred = (y_scores > 0.5).astype(int)
+
+        intervals = ECGEvaluator(metrics=["auc"]).bootstrap_evaluate(
+            y_pred, y_true, n_bootstrap=100, y_scores=y_scores
+        )
+
+        assert intervals["auc"]["mean"] == 1.0
+
+    def test_generate_report_carries_confidence_intervals(self, labelled_predictions):
+        """A failed bootstrap used to be swallowed, leaving the report without intervals."""
+        y_true, y_pred = labelled_predictions
+        evaluator = ECGEvaluator(metrics=["accuracy"], task_type="classification")
+
+        report = evaluator.generate_report(y_pred, y_true)
+
+        row = report.set_index("Metric").loc["accuracy"]
+        assert row["95% CI Lower"] < row["Value"] < row["95% CI Upper"]
+
+    def test_report_from_hard_labels_has_no_calibration_rows(self, labelled_predictions):
+        """Labels carry no confidence, so there is nothing to calibrate."""
+        y_true, y_pred = labelled_predictions
+        evaluator = ECGEvaluator(metrics=["accuracy"], task_type="classification")
+
+        report = evaluator.generate_report(y_pred, y_true)
+
+        assert list(report["Metric"]) == ["accuracy"]
+
+
+class TestPlotEcgSignals:
+    """Test that a recording is drawn one row per lead, whichever way round it arrives."""
+
+    @pytest.fixture
+    def subplot_rows(self, monkeypatch) -> list[int]:
+        """Record how many rows each figure is created with."""
+        rows: list[int] = []
+        create = plt.subplots
+
+        def recording_subplots(nrows, *args, **kwargs):
+            rows.append(nrows)
+            return create(nrows, *args, **kwargs)
+
+        monkeypatch.setattr(plt, "subplots", recording_subplots)
+        return rows
+
+    @pytest.mark.parametrize(
+        ("shape", "expected_rows"),
+        [((2, 500), 2), ((500, 2), 2), ((1, 3000), 1), ((3000,), 1)],
+    )
+    def test_one_row_per_lead_in_either_layout(
+        self, shape, expected_rows, subplot_rows, headless_matplotlib, temp_dir
+    ):
+        """A (leads, time) sample used to be drawn as thousands of one-point leads."""
+        path = temp_dir / "ecg.png"
+
+        plot_ecg_signals(np.random.randn(*shape), sampling_rate=300, save_path=str(path))
+
+        assert subplot_rows == [expected_rows]
+        assert path.exists()
+        assert plt.get_fignums() == []
+
+    def test_a_dataset_sample_can_be_passed_as_a_tensor(
+        self, subplot_rows, headless_matplotlib, temp_dir
+    ):
+        """Datasets return tensors, and the plot should not need them converted first."""
+        plot_ecg_signals(torch.randn(1, 3000), save_path=str(temp_dir / "ecg.png"))
+
+        assert subplot_rows == [1]
+
+    def test_a_batch_is_rejected(self, headless_matplotlib):
+        """One figure shows one recording."""
+        with pytest.raises(ValueError, match="one recording"):
+            plot_ecg_signals(np.zeros((4, 1, 500)))
+
+    def test_lead_names_must_match_the_leads(self, headless_matplotlib):
+        """Too few names used to surface as an IndexError part-way through drawing."""
+        with pytest.raises(ValueError, match="lead names"):
+            plot_ecg_signals(np.zeros((2, 500)), leads=["I"])
+
+
+class TestPlotOutput:
+    """Test where the evaluation plots are written and what they accept."""
+
+    def test_plots_create_the_folder_they_save_into(self, headless_matplotlib, temp_dir):
+        """A save path in a folder that does not exist yet used to raise FileNotFoundError."""
+        y_true = np.array([0, 1, 0, 1])
+        y_pred = np.array([0, 1, 1, 1])
+        path = temp_dir / "plots" / "nested" / "cm.png"
+
+        plot_confusion_matrix(y_true, y_pred, save_path=str(path))
+
+        assert path.exists()
+
+    def test_calibration_and_training_curves_create_their_folder(
+        self, headless_matplotlib, temp_dir, calibrated_binary_predictions
+    ):
+        """These two save several files into a directory rather than to one path."""
+        y_true, y_prob, _ = calibrated_binary_predictions
+        metrics_path = temp_dir / "metrics.csv"
+        metrics_path.write_text(
+            "epoch,train_loss,val_loss,train_acc,val_acc\n1,0.9,0.8,0.5,0.6\n2,0.7,0.75,0.6,0.65\n"
+        )
+        plots = temp_dir / "plots"
+
+        plot_calibration_curve(y_true, y_prob, save_dir=str(plots / "calibration"))
+        plot_training_curves(str(metrics_path), save_dir=str(plots / "training"))
+
+        assert (plots / "calibration" / "calibration_curve.png").exists()
+        assert (plots / "calibration" / "prediction_distribution.png").exists()
+        assert (plots / "training" / "loss.png").exists()
+        assert (plots / "training" / "accuracy.png").exists()
+
+    def test_roc_curve_takes_the_two_column_matrix_of_a_binary_model(
+        self, headless_matplotlib, temp_dir, calibrated_binary_predictions
+    ):
+        """get_test_results returns [1 - p, p] for a binary model, not the positive column."""
+        y_true, y_prob, _ = calibrated_binary_predictions
+        path = temp_dir / "roc.png"
+
+        plot_roc_curve(y_true, y_prob, save_path=str(path))
+
+        assert path.exists()
+
+    def test_roc_curve_rejects_more_than_two_classes(
+        self, headless_matplotlib, calibrated_multiclass_predictions
+    ):
+        """The message has to say what to pass instead; scikit-learn's does not."""
+        y_true, y_prob, _ = calibrated_multiclass_predictions
+
+        with pytest.raises(ValueError, match="two-class"):
+            plot_roc_curve(y_true, y_prob)

@@ -1,4 +1,5 @@
 import logging
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, ClassVar
@@ -109,16 +110,39 @@ class UnifiedAFDataset(BaseECGDataset):
     DOWNLOAD_SIZE: ClassVar[str | None] = "about 4.4 GB across its three sources"
 
     @classmethod
+    def _source_dir(
+        cls, dataset_class: type[BaseECGDataset], data_dir: str | Path | None = None
+    ) -> Path:
+        """Locate one source dataset.
+
+        Each source lives in its own default directory, so a copy fetched for
+        the standalone dataset is shared. A data_dir given explicitly is the
+        folder that holds the sources instead, each under its usual name.
+        """
+        default = dataset_class.get_default_data_dir()
+        if data_dir is None or Path(data_dir) == cls.get_default_data_dir():
+            return default
+        return Path(data_dir) / default.name
+
+    @classmethod
     def is_downloaded(cls, data_dir: str | Path | None = None) -> bool:
         """Report whether every source dataset is present in its own directory."""
         return all(
-            dataset_class.is_downloaded(dataset_class.get_default_data_dir())
+            dataset_class.is_downloaded(cls._source_dir(dataset_class, data_dir))
             for dataset_class in cls.AVAILABLE_DATASETS.values()
         )
 
     def _resolve_dataset_dir(self, dataset_name: str) -> Path:
-        dataset_class = self.AVAILABLE_DATASETS[dataset_name]
-        return dataset_class.get_default_data_dir()
+        return self._source_dir(self.AVAILABLE_DATASETS[dataset_name], self.data_dir)
+
+    def _clear_dataset(self) -> None:
+        """Clear every source's directory; nothing is kept in a directory of its own."""
+        for dataset_name in self.dataset_names:
+            directory = self._resolve_dataset_dir(dataset_name)
+            if directory.exists():
+                self.AVAILABLE_DATASETS[dataset_name]._require_clearable(directory)
+                logger.info(f"Clearing existing dataset at {directory}...")
+                shutil.rmtree(directory)
 
     def __init__(
         self,

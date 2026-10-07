@@ -74,7 +74,8 @@ trainer.fit(
     early_stopping_patience=10,
     checkpoint_dir="runs/kanres-af/checkpoints",
 )
-trainer.test(data_module)
+results = trainer.test(data_module)
+print(f"Test loss: {results['test_loss']:.4f}  Test accuracy: {results['test_acc']:.4f}")
 
 if trainer.best_checkpoint_path:
     print(f"Best checkpoint: {trainer.best_checkpoint_path}")
