@@ -10,10 +10,12 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.model_selection import KFold
+from sklearn.model_selection import GroupKFold, KFold
+from torch.utils.data import DataLoader, TensorDataset
 
 from deepecgkit.evaluation.calibration import calibration_report
 from deepecgkit.evaluation.metrics import (
+    ACCURACY_METRICS,
     CALIBRATION_REPORT_KEYS,
     DEFAULT_CALIBRATION_BINS,
     calculate_classification_metrics,
@@ -28,7 +30,7 @@ MAX_CLASSIFICATION_CLASSES = 20
 CALIBRATION_ROW_ORDER = (*CALIBRATION_REPORT_KEYS, "calibration_bins")
 
 #: Metric names the evaluator accepts, by the function that computes them.
-CLASSIFICATION_METRICS = frozenset({"accuracy", "precision", "recall", "f1", "mcc"})
+CLASSIFICATION_METRICS = frozenset({*ACCURACY_METRICS, "precision", "recall", "f1", "mcc"})
 REGRESSION_METRICS = frozenset(
     {"mse", "mean_squared_error", "mae", "mean_absolute_error", "r2", "r2_score", "rmse"}
 )
@@ -36,6 +38,36 @@ SCORE_METRICS = frozenset({"auc"})
 SUPPORTED_METRICS = CLASSIFICATION_METRICS | REGRESSION_METRICS | SCORE_METRICS
 
 PROBABILITY_SUM_TOLERANCE = 1e-4
+
+#: Share of each training fold held back for the learning-rate schedule and
+#: early stopping, as one fold in this many.
+INNER_VALIDATION_FOLDS = 10
+
+
+class _ArrayLoaders:
+    """What ECGTrainer asks of a data module, over arrays held in memory."""
+
+    def __init__(self, train: tuple, tune: tuple, batch_size: int, seed: int) -> None:
+        self._train = train
+        self._tune = tune
+        self._batch_size = batch_size
+        self._seed = seed
+
+    @staticmethod
+    def _dataset(x: np.ndarray, y: np.ndarray) -> TensorDataset:
+        return TensorDataset(torch.as_tensor(x, dtype=torch.float32), torch.as_tensor(y))
+
+    def train_dataloader(self) -> DataLoader:
+        generator = torch.Generator().manual_seed(self._seed)
+        return DataLoader(
+            self._dataset(*self._train),
+            batch_size=self._batch_size,
+            shuffle=True,
+            generator=generator,
+        )
+
+    def val_dataloader(self) -> DataLoader:
+        return DataLoader(self._dataset(*self._tune), batch_size=self._batch_size)
 
 
 class ECGEvaluator:
@@ -58,7 +90,9 @@ class ECGEvaluator:
     Args:
         metrics: List of metrics to compute: accuracy, precision, recall, f1,
             mcc and auc for classification; mse, mae, r2 and rmse for
-            regression
+            regression. Multi-hot targets are scored as
+            calculate_classification_metrics describes, where
+            exact_match_accuracy is also available.
         task_type: Type of task ("classification", "regression", "auto")
         device: Device for model evaluation
         calibration_bins: Number of bins for the calibration metrics reported
@@ -390,46 +424,147 @@ class ECGEvaluator:
         return "regression"
 
     def cross_validate(
-        self, model_class: type, data: Any, k_folds: int = 5, **model_kwargs: Any
+        self,
+        model_class: type,
+        data: Any,
+        k_folds: int = 5,
+        groups: np.ndarray | None = None,
+        epochs: int = 10,
+        batch_size: int = 32,
+        train_config: dict[str, Any] | None = None,
+        seed: int = 42,
+        **model_kwargs: Any,
     ) -> dict[str, list[float]]:
         """
         Perform k-fold cross-validation.
 
+        A fresh model is built and fitted for every fold and scored on the
+        fold held out. A torch module is trained with ECGTrainer; a tenth of
+        its training fold is set aside for the learning-rate schedule and
+        early stopping, so the held-out fold plays no part in training.
+        Anything else with a fit method is fitted with fit(X, y) and asked for
+        predict_proba, or failing that predict, unless it can be called
+        directly.
+
         Args:
             model_class: Class of model to evaluate
-            data: Dataset for cross-validation
+            data: (X, y) tuple of arrays or tensors
             k_folds: Number of folds
+            groups: Group of each sample, such as the recording or patient it
+                comes from. Folds then never split a group, which segments cut
+                from longer recordings need for the estimate to be honest.
+            epochs: Maximum training epochs per fold, for a torch module
+            batch_size: Batch size for training and scoring a torch module
+            train_config: ECGTrainer settings for a torch module. Multi-hot
+                targets and a regression task_type are recognised without it;
+                a single-output binary model needs binary_classification.
+            seed: Seed for shuffling the folds and the training batches
             **model_kwargs: Keyword arguments for model initialization
 
         Returns:
             Dictionary of metric scores across folds
         """
-        if isinstance(data, tuple):
-            x, y = data
-        else:
+        if not isinstance(data, tuple) or len(data) != 2:
             raise ValueError("Data must be (X, y) tuple for cross-validation")
+        x, y = (np.asarray(part.cpu() if torch.is_tensor(part) else part) for part in data)
+        if groups is not None:
+            groups = np.asarray(groups)
 
-        kf = KFold(n_splits=k_folds, shuffle=True, random_state=42)
         fold_results: dict[str, list[float]] = {metric: [] for metric in self.metrics}
 
-        for fold, (train_idx, val_idx) in enumerate(kf.split(x)):
+        folds = self._folds(len(x), k_folds, groups, seed)
+        for fold, (train_idx, val_idx) in enumerate(folds):
             logger.info(f"Evaluating fold {fold + 1}/{k_folds}")
-
-            x_train, x_val = x[train_idx], x[val_idx]
-            y_train, y_val = y[train_idx], y[val_idx]
+            x_train, y_train = x[train_idx], y[train_idx]
+            x_val, y_val = x[val_idx], y[val_idx]
 
             model = model_class(**model_kwargs)
-
-            if hasattr(model, "fit"):
-                model.fit(x_train, y_train)
-
-            results = self.evaluate(model, (x_val, y_val))
+            if isinstance(model, torch.nn.Module):
+                fold_groups = None if groups is None else groups[train_idx]
+                self._train_fold(
+                    model, x_train, y_train, fold_groups, epochs, batch_size, train_config, seed
+                )
+                held_out = _ArrayLoaders((x_val, y_val), (x_val, y_val), batch_size, seed)
+                results = self.evaluate(model, held_out.val_dataloader())
+            else:
+                results = self._fit_and_score(model, x_train, y_train, x_val, y_val)
 
             for metric in self.metrics:
                 if metric in results:
                     fold_results[metric].append(results[metric])
 
         return fold_results
+
+    @staticmethod
+    def _folds(
+        n_samples: int, n_splits: int, groups: np.ndarray | None, seed: int
+    ) -> Iterator[tuple[np.ndarray, np.ndarray]]:
+        """Split sample indices into folds, keeping each group whole when groups are given."""
+        indices = np.arange(n_samples)
+        folds: Iterator[tuple[np.ndarray, np.ndarray]]
+        if groups is None:
+            folds = KFold(n_splits=n_splits, shuffle=True, random_state=seed).split(indices)
+        else:
+            folds = GroupKFold(n_splits=n_splits).split(indices, groups=groups)
+        return folds
+
+    def _train_fold(
+        self,
+        model: torch.nn.Module,
+        x: np.ndarray,
+        y: np.ndarray,
+        groups: np.ndarray | None,
+        epochs: int,
+        batch_size: int,
+        train_config: dict[str, Any] | None,
+        seed: int,
+    ) -> None:
+        """Train a torch module on one training fold with ECGTrainer."""
+        # Imported here: training does not depend on evaluation, nor the reverse at import.
+        from deepecgkit.training import ECGTrainer
+
+        config = dict(train_config or {})
+        if y.ndim > 1:
+            config.setdefault("multi_label", True)
+        if self.task_type == "regression":
+            config.setdefault("task_type", "regression")
+
+        available = len(x) if groups is None else len(np.unique(groups))
+        inner_folds = min(INNER_VALIDATION_FOLDS, available)
+        if inner_folds < 2:
+            raise ValueError(
+                "Each training fold needs at least two samples (or groups) to set a "
+                "validation part aside; use fewer folds or more data."
+            )
+        fit_idx, tune_idx = next(self._folds(len(x), inner_folds, groups, seed))
+        loaders = _ArrayLoaders(
+            (x[fit_idx], y[fit_idx]), (x[tune_idx], y[tune_idx]), batch_size, seed
+        )
+        trainer = ECGTrainer(model, train_config=config, device=self.device)
+        trainer.fit(loaders, epochs=epochs, progress_bar=False)
+
+    def _fit_and_score(
+        self,
+        model: Any,
+        x_train: np.ndarray,
+        y_train: np.ndarray,
+        x_val: np.ndarray,
+        y_val: np.ndarray,
+    ) -> dict[str, float]:
+        """Fit an estimator that is not a torch module and score it on the held-out fold."""
+        if hasattr(model, "fit"):
+            model.fit(x_train, y_train)
+
+        if callable(model):
+            return self.evaluate(model, (x_val, y_val))
+        if hasattr(model, "predict_proba"):
+            return self.evaluate(model.predict_proba(x_val), y_val)
+        if hasattr(model, "predict"):
+            return self.evaluate(model.predict(x_val), y_val)
+        raise TypeError(
+            f"{type(model).__name__} can be neither called nor asked to predict, so it "
+            f"cannot be cross-validated."
+        )
 
     def bootstrap_evaluate(
         self,

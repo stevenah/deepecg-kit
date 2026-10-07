@@ -75,8 +75,13 @@ No pretrained weights are published with the package yet. Train a model, or star
 checkpoint of your own:
 
 ```bash
-deepecg train -m kanres -d af-classification --weights runs/<run-directory>/checkpoints/<file>.pt
+deepecg train -m kanres -d af-classification --weights runs/<run-directory>
 ```
+
+`--weights` takes a weights file, a checkpoint, or a run directory, which stands for its best
+checkpoint. Whatever fits the model is loaded and the rest is named: a head of another size, as
+when the new task has a different number of classes, is left as initialised, and weights that fit
+nothing at all are an error.
 
 To distribute weights, register them with a URL you host; the name then works wherever a
 weight name is accepted:

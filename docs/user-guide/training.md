@@ -97,6 +97,10 @@ outputs mean. `fit()` fills both in from the model and the data module; set
 trainer = ECGTrainer.load_checkpoint(trainer.best_checkpoint_path)
 ```
 
+Checkpoints are read in PyTorch's restricted mode, which loads tensors and plain values and does
+not run code a file may carry; everything `ECGTrainer` writes loads that way. A checkpoint from
+elsewhere that needs a full unpickle is refused unless you set `DEEPECGKIT_TRUST_CHECKPOINTS=1`.
+
 The architecture is rebuilt from the checkpoint's `model_config`. Pass `model=` to load the
 weights into an instance you built yourself, which is also what a checkpoint without a recorded
 architecture needs. To get just the model, use

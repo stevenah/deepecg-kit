@@ -1,3 +1,4 @@
+import contextlib
 import csv
 import logging
 import os
@@ -13,6 +14,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
+from deepecgkit.utils.checkpoints import load_checkpoint_file
 from deepecgkit.utils.device import resolve_device
 
 logger = logging.getLogger(__name__)
@@ -163,7 +165,7 @@ class ECGTrainer:
         total_acc = 0.0
         n_samples = 0
 
-        ctx = torch.no_grad() if not train else _NullContext()
+        ctx = torch.no_grad() if not train else contextlib.nullcontext()
         with ctx:
             for batch in dataloader:
                 x, y = batch
@@ -376,7 +378,7 @@ class ECGTrainer:
                 )
             return False
 
-        checkpoint = torch.load(self.best_checkpoint_path, map_location="cpu", weights_only=False)
+        checkpoint = load_checkpoint_file(self.best_checkpoint_path)
         self.model.load_state_dict(checkpoint["model_state_dict"])
         self.model.to(self.device)
         return True
@@ -539,7 +541,7 @@ class ECGTrainer:
             ValueError: If no model is given and the checkpoint does not
                 record which architecture it holds.
         """
-        checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+        checkpoint = load_checkpoint_file(path)
 
         if model is None:
             from deepecgkit.models.factory import build_model_from_checkpoint
@@ -570,13 +572,3 @@ class ECGTrainer:
         torch.manual_seed(seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
-
-
-class _NullContext:
-    """Minimal no-op context manager for Python 3.8 compat."""
-
-    def __enter__(self) -> "_NullContext":
-        return self
-
-    def __exit__(self, *args: object) -> None:
-        pass

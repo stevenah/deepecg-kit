@@ -19,6 +19,7 @@ from deepecgkit.utils.weights import WEIGHTS_REGISTRY, get_weight_info, load_pre
 __all__ = [
     "PretrainedMixin",
     "from_pretrained",
+    "load_matching_weights",
     "model_name_for_weights",
 ]
 
@@ -77,6 +78,52 @@ def _split_checkpoint(obj: Any) -> tuple[dict[str, Any], dict[str, Any]]:
         "Checkpoint contains no weights. Expected a state dict, or a dictionary with a "
         "'model_state_dict' or 'state_dict' entry."
     )
+
+
+def load_matching_weights(model: nn.Module, loaded: Any) -> dict[str, list[str]]:
+    """Load into a model whatever in a set of weights fits it, and say what did not.
+
+    This is how training starts from existing weights. A head of another size
+    is expected there, when the new task has a different number of classes,
+    and must not keep the backbone from loading; but a file that matches
+    nothing at all must not pass for a successful load either.
+
+    Args:
+        model: The model to load into
+        loaded: The object torch.load returned: a state dict, an ECGTrainer
+            checkpoint, or a legacy PyTorch Lightning checkpoint
+
+    Returns:
+        Weight names under four keys: "loaded"; "mismatched", present on both
+        sides with different shapes and left as initialised; "missing", in the
+        model but not in the file; and "unexpected", in the file but not in
+        the model.
+
+    Raises:
+        ValueError: If the object holds no weights, or none of them fits the
+            model.
+    """
+    state_dict, _ = _split_checkpoint(loaded)
+    own = model.state_dict()
+
+    fitting = {
+        name: value
+        for name, value in state_dict.items()
+        if name in own and own[name].shape == value.shape
+    }
+    if not fitting:
+        raise ValueError(
+            f"None of the {len(state_dict)} weight tensors in the file fits "
+            f"{type(model).__name__}; they belong to a different architecture."
+        )
+    model.load_state_dict(fitting, strict=False)
+
+    return {
+        "loaded": sorted(fitting),
+        "mismatched": sorted(name for name in state_dict if name in own and name not in fitting),
+        "missing": sorted(name for name in own if name not in state_dict),
+        "unexpected": sorted(name for name in state_dict if name not in own),
+    }
 
 
 def model_name_for_weights(weight_name: str) -> str | None:

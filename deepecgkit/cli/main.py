@@ -30,6 +30,22 @@ _COMMAND_MODULES = (
     "info",
 )
 
+#: The module that defines each command. A run of one command imports only
+#: its own module, so the analysis commands, for one, start without PyTorch.
+_MODULE_OF_COMMAND = {
+    "train": "train",
+    "evaluate": "evaluate",
+    "predict": "predict",
+    "extract-features": "extract",
+    "explain": "explain",
+    "probe": "probe",
+    "aggregate": "analysis",
+    "rank": "analysis",
+    "list-models": "info",
+    "list-datasets": "info",
+    "info": "info",
+}
+
 #: Environment variable naming extra modules to import before the parser is
 #: built, comma-separated; the same as repeating --import.
 PLUGINS_ENV = "DEEPECGKIT_PLUGINS"
@@ -104,8 +120,15 @@ def _add_global_options(parser: argparse.ArgumentParser, *, top_level: bool) -> 
     )
 
 
-def build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentParser]]:
+def build_parser(
+    command: str | None = None,
+) -> tuple[argparse.ArgumentParser, dict[str, argparse.ArgumentParser]]:
     """Build the CLI parser.
+
+    Args:
+        command: The command about to run, when it is already known. Only the
+            module defining it is then imported, and the parser knows that
+            module's commands alone; anything else gets every command.
 
     Returns:
         Tuple of the top-level parser and a mapping of command name to its
@@ -121,7 +144,8 @@ def build_parser() -> tuple[argparse.ArgumentParser, dict[str, argparse.Argument
     _add_global_options(parser, top_level=True)
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands", metavar="COMMAND")
-    for name in _COMMAND_MODULES:
+    wanted = _MODULE_OF_COMMAND.get(command or "")
+    for name in (wanted,) if wanted else _COMMAND_MODULES:
         module = importlib.import_module(f"deepecgkit.cli.commands.{name}")
         module.add_parser(subparsers)
     for subparser in subparsers.choices.values():
@@ -173,13 +197,15 @@ def _prescan(argv: list[str] | None) -> argparse.Namespace:
         argv: The command line being parsed, or None for sys.argv
 
     Returns:
-        Namespace with config, plugins, and command (the first positional).
+        Namespace with config, plugins, version, and command (the first
+        positional).
     """
     scanner = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     scanner.add_argument("--config", "-c", default=None)
     scanner.add_argument("--import", dest="plugins", action="append", default=[])
     scanner.add_argument("--verbose", "-v", action="store_true")
     scanner.add_argument("--quiet", "-q", action="store_true")
+    scanner.add_argument("--version", action="store_true")
     found, remaining = scanner.parse_known_args(sys.argv[1:] if argv is None else argv)
     found.command = next((token for token in remaining if not token.startswith("-")), None)
     return found
@@ -234,6 +260,11 @@ def _apply_config(
 def main(argv: list | None = None) -> int:
     """Main CLI entry point."""
     early = _prescan(argv)
+    if early.version and early.command is None:
+        # Answered here, before the parser and with it every command is imported.
+        # Exits as argparse's own --version does.
+        print(f"deepecg {_package_version()}")
+        sys.exit(0)
 
     plugins = list(early.plugins)
     plugins += [name.strip() for name in os.environ.get(PLUGINS_ENV, "").split(",") if name.strip()]
@@ -244,7 +275,7 @@ def main(argv: list | None = None) -> int:
             print(f"[ERROR] Failed to import '{plugin}': {e}", file=sys.stderr)
             return 1
 
-    parser, subparser_by_name = build_parser()
+    parser, subparser_by_name = build_parser(early.command)
 
     try:
         config = _apply_config(subparser_by_name, early.command, early.config)

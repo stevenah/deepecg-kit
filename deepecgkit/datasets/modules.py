@@ -92,9 +92,14 @@ class ECGDataModule:
         self.train_dataset = None
         self.val_dataset = None
         self.test_dataset = None
+        self._split_settings: tuple | None = None
 
     def setup(self, stage: str | None = None) -> None:
         """Set up the datasets.
+
+        The dataset is loaded and split on the first call. Later calls, which
+        the trainer makes for every stage, return at once unless the dataset or
+        a split setting has changed since.
 
         Args:
             stage: Current stage ('fit', 'validate', 'test', or 'predict')
@@ -128,6 +133,17 @@ class ECGDataModule:
         effective_rate = getattr(self.dataset, "sampling_rate", None)
         if effective_rate is not None:
             self.sampling_rate = effective_rate
+
+        split_settings = (
+            id(self.dataset),
+            self.val_split,
+            self.test_split,
+            self.seed,
+            self.stratify,
+        )
+        if self.train_dataset is not None and split_settings == self._split_settings:
+            return
+        self._split_settings = split_settings
 
         stratify_labels = None
         if (
@@ -203,51 +219,44 @@ class ECGDataModule:
         self.train_dataset, self.val_dataset, self.test_dataset = splitter.split()
 
         if self.verbose:
-            logger.info(f"Dataset size: {len(self.train_dataset)}")
+            logger.info(f"Training set size: {len(self.train_dataset)}")
             logger.info(f"Validation set size: {len(self.val_dataset)}")
             logger.info(f"Test set size: {len(self.test_dataset)}")
 
-    def train_dataloader(self) -> DataLoader:
-        """Get the training data loader."""
-        if self.train_dataset is None:
+    def _loader(self, dataset: Any, shuffle: bool) -> DataLoader:
+        """Build a loader over one split.
+
+        Raises:
+            RuntimeError: If setup() has not been called.
+        """
+        if dataset is None:
             raise RuntimeError("Call setup() before using the data module")
+        options: dict[str, Any] = {}
+        if self.num_workers > 0:
+            # These two only mean something with worker processes, and PyTorch
+            # before 2.0 rejects a prefetch_factor given without any.
+            options["persistent_workers"] = self.persistent_workers
+            options["prefetch_factor"] = self.prefetch_factor
         return DataLoader(
-            self.train_dataset,
+            dataset,
             batch_size=self.batch_size,
-            shuffle=True,
+            shuffle=shuffle,
             num_workers=self.num_workers,
             pin_memory=self.pin_memory,
-            persistent_workers=self.persistent_workers and self.num_workers > 0,
-            prefetch_factor=self.prefetch_factor if self.num_workers > 0 else None,
+            **options,
         )
+
+    def train_dataloader(self) -> DataLoader:
+        """Get the training data loader."""
+        return self._loader(self.train_dataset, shuffle=True)
 
     def val_dataloader(self) -> DataLoader:
         """Get the validation data loader."""
-        if self.val_dataset is None:
-            raise RuntimeError("Call setup() before using the data module")
-        return DataLoader(
-            self.val_dataset,
-            batch_size=self.batch_size,
-            shuffle=False,
-            num_workers=self.num_workers,
-            pin_memory=self.pin_memory,
-            persistent_workers=self.persistent_workers and self.num_workers > 0,
-            prefetch_factor=self.prefetch_factor if self.num_workers > 0 else None,
-        )
+        return self._loader(self.val_dataset, shuffle=False)
 
     def test_dataloader(self) -> DataLoader:
         """Get the test data loader."""
-        if self.test_dataset is None:
-            raise RuntimeError("Call setup() before using the data module")
-        return DataLoader(
-            self.test_dataset,
-            batch_size=self.batch_size,
-            shuffle=False,
-            num_workers=self.num_workers,
-            pin_memory=self.pin_memory,
-            persistent_workers=self.persistent_workers and self.num_workers > 0,
-            prefetch_factor=self.prefetch_factor if self.num_workers > 0 else None,
-        )
+        return self._loader(self.test_dataset, shuffle=False)
 
     def describe(self) -> dict[str, Any]:
         """Describe the data a model is trained on, in the form checkpoints record.

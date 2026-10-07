@@ -26,15 +26,17 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
 ]
+# The lower bounds are the oldest versions the test suite has been run on
+# (Python 3.10); the ones declared before could not even be installed there.
 dependencies = [
-    "numpy>=1.20.0",
-    "scipy>=1.7.0",
-    "torch>=1.9.0",
-    "pandas>=1.3.0",
-    "scikit-learn>=0.24.0",
-    "matplotlib>=3.4.0",
-    "wfdb>=3.4.0",
-    "seaborn>=0.11.0",
+    "numpy>=1.22.0",
+    "scipy>=1.8.0",
+    "torch>=2.1.0",
+    "pandas>=1.4.0",
+    "scikit-learn>=1.1.0",
+    "matplotlib>=3.5.0",
+    "wfdb>=4.0.0",
+    "seaborn>=0.11.2",
     "tqdm>=4.60.0",
     "pyyaml>=6.0.3",
 ]

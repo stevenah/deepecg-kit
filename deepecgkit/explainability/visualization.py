@@ -32,6 +32,7 @@ def plot_attribution(
     time_offset: float = 0.0,
     title: str = "ECG Attribution",
     save_path: str | None = None,
+    unit: str | None = None,
 ) -> None:
     """Plot each lead with its attribution shaded behind the trace.
 
@@ -50,6 +51,9 @@ def plot_attribution(
             starts, so a centre-cropped attribution still reads correctly
         title: Figure title
         save_path: Where to write the figure, or None to show it
+        unit: Unit of the amplitude axis, such as "mV" for a raw recording.
+            The signal a model saw is normalised and has none, so none is
+            shown by default.
 
     Raises:
         ValueError: If the signal is not two-dimensional or the shapes differ.
@@ -87,7 +91,7 @@ def plot_attribution(
             extent=(time[0], time[-1], float(trace[i].min()), float(trace[i].max())),
         )
         ax.plot(time, trace[i], color="black", linewidth=0.8)
-        ax.set_ylabel(f"{names[i]} (mV)")
+        ax.set_ylabel(f"{names[i]} ({unit})" if unit else names[i])
         ax.grid(True, alpha=0.3)
 
     axes[-1].set_xlabel("Time (s)")

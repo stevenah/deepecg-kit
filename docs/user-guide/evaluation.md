@@ -44,8 +44,20 @@ report = evaluator.generate_report(y_pred, y_true, y_scores=y_prob, save_path="r
 `bootstrap_evaluate` resamples the test set and returns the mean, standard deviation and 95%
 interval of each metric; `generate_report` returns a table with the same intervals and the
 calibration metrics. Precision, recall and F1 are positive-class values for a two-class problem and
-macro averages otherwise. Multi-label targets are not supported by this class; `deepecg evaluate`
-handles them.
+macro averages otherwise. Multi-hot targets make the problem multi-label: `accuracy` is then the
+share of individual labels predicted correctly, `exact_match_accuracy` the share of samples with
+every label right, and the other metrics are macro averages over the labels.
+
+`cross_validate` builds and fits a fresh model for every fold and scores it on the fold held out.
+A torch model is trained with `ECGTrainer`; pass `groups` (the recording or patient each sample
+comes from) so that segments of one recording never land on both sides:
+
+```python
+scores = evaluator.cross_validate(
+    model_class, (signals, labels), k_folds=5, groups=record_ids, epochs=20,
+    input_channels=1, output_size=4,
+)
+```
 
 ## Metrics
 

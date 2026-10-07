@@ -21,6 +21,7 @@ from deepecgkit.cli.logger import CLILogger
 from deepecgkit.datasets.io import SUPPORTED_ECG_SUFFIXES, load_recordings, prepare_recording
 from deepecgkit.models.factory import build_model_from_checkpoint, infer_input_channels
 from deepecgkit.registry import get_model_names
+from deepecgkit.utils.checkpoints import load_checkpoint_file
 from deepecgkit.utils.device import resolve_device
 
 
@@ -133,7 +134,7 @@ def predict(
             return 1
 
         logger.info(f"Loading model from {checkpoint}...")
-        ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False)
+        ckpt = load_checkpoint_file(checkpoint)
         ckpt = ckpt if isinstance(ckpt, dict) else {}
 
         model_name = resolve_model_name(ckpt, model_name, logger)

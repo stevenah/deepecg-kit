@@ -22,6 +22,8 @@ class PositionalEncoding(nn.Module):
         dropout: Dropout probability (default: 0.1)
     """
 
+    pe: torch.Tensor
+
     def __init__(self, d_model: int, max_len: int = 5000, dropout: float = 0.1):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
@@ -34,6 +36,12 @@ class PositionalEncoding(nn.Module):
         self.register_buffer("pe", pe)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.size(1) > self.pe.size(1):
+            raise ValueError(
+                f"The sequence is {x.size(1)} time steps long but the positional encoding "
+                f"covers {self.pe.size(1)}. Pass shorter signals (a shorter segment or a lower "
+                f"sampling rate), or build the model with a larger max_len where it takes one."
+            )
         x = x + self.pe[:, : x.size(1)]
         return self.dropout(x)
 

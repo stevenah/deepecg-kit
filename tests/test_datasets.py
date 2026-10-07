@@ -639,12 +639,51 @@ class TestUnifiedAFDataset:
         assert "ltafdb" in UnifiedAFDataset.AVAILABLE_DATASETS
 
     def test_dataset_init(self, tmp_path):
+        with pytest.raises(RuntimeError, match="Could not load 'physionet2017'"):
+            UnifiedAFDataset(
+                data_dir=tmp_path,
+                datasets=["physionet2017"],
+                download=False,
+                verbose=False,
+            )
+
+    def test_a_missing_source_is_an_error_rather_than_a_smaller_dataset(self, temp_dir):
+        """Two sources out of three used to be trained on under the name of all three."""
+        from tests.conftest import write_af_dataset
+
+        write_af_dataset(temp_dir / AFClassificationDataset.get_default_data_dir().name)
+
+        with pytest.raises(RuntimeError, match="Could not load 'mitbih_afdb'"):
+            UnifiedAFDataset(
+                data_dir=temp_dir,
+                datasets=["physionet2017", "mitbih_afdb"],
+                download=False,
+                verbose=False,
+            )
+
+    def test_unavailable_sources_can_be_skipped_on_request(self, temp_dir):
+        from tests.conftest import write_af_dataset
+
+        write_af_dataset(temp_dir / AFClassificationDataset.get_default_data_dir().name)
+
+        dataset = UnifiedAFDataset(
+            data_dir=temp_dir,
+            datasets=["physionet2017", "mitbih_afdb"],
+            download=False,
+            verbose=False,
+            skip_unavailable=True,
+        )
+
+        assert dataset.loaded_dataset_names == ["physionet2017"]
+
+    def test_nothing_to_load_is_an_error_even_when_skipping(self, tmp_path):
         with pytest.raises(RuntimeError, match="No datasets were successfully loaded"):
             UnifiedAFDataset(
                 data_dir=tmp_path,
                 datasets=["physionet2017"],
                 download=False,
                 verbose=False,
+                skip_unavailable=True,
             )
 
     def test_dataset_invalid_name(self, tmp_path):
@@ -723,7 +762,7 @@ class TestUnifiedAFDataset:
 
         monkeypatch.setattr(AFClassificationDataset, "download_to", classmethod(record_fetch))
 
-        with pytest.raises(RuntimeError, match="No datasets were successfully loaded"):
+        with pytest.raises(RuntimeError, match="Could not load 'physionet2017'"):
             UnifiedAFDataset(
                 data_dir=temp_dir, datasets=["physionet2017"], force_download=True, verbose=False
             )
@@ -1053,6 +1092,38 @@ def _zip_folder(folder: Path, archive: Path, prefix: str) -> None:
         for path in sorted(folder.rglob("*")):
             if path.is_file():
                 zf.write(path, f"{prefix}/{path.relative_to(folder)}")
+
+
+class TestSetupSplitsOnce:
+    """The trainer calls setup() for every stage; only the first call should do the work."""
+
+    def _module(self, data_dir, **kwargs):
+        return ECGDataModule(
+            dataset_class=AFClassificationDataset,
+            data_dir=str(data_dir),
+            verbose=False,
+            dataset_kwargs={"verbose": False},
+            **kwargs,
+        )
+
+    def test_a_repeated_setup_keeps_the_split_it_made(self, af_dataset_dir):
+        module = self._module(af_dataset_dir)
+        module.setup(stage="fit")
+        first = (module.train_dataset, module.val_dataset, module.test_dataset)
+
+        module.setup(stage="test")
+
+        assert (module.train_dataset, module.val_dataset, module.test_dataset) == first
+
+    def test_a_changed_setting_splits_again(self, af_dataset_dir):
+        module = self._module(af_dataset_dir, seed=1)
+        module.setup()
+        before = list(module.test_dataset.indices)
+
+        module.seed = 2
+        module.setup()
+
+        assert list(module.test_dataset.indices) != before
 
 
 class TestSamplingRateResolution:

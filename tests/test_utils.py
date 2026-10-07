@@ -11,9 +11,11 @@ from pathlib import Path
 from typing import ClassVar
 
 import pytest
+import torch
 
 import deepecgkit.utils as utils_module
 from deepecgkit.utils import download, read_csv
+from deepecgkit.utils.checkpoints import TRUST_ENV, load_checkpoint_file
 
 
 class TestUtilityFunctions:
@@ -653,3 +655,41 @@ class TestKeepAliveDownloads:
         )
 
         assert (temp_dir / "a.dat").read_bytes() == b"from the second mirror"
+
+
+class _NotPlainData:
+    """Something only a full unpickle can restore, as a tampered checkpoint might carry."""
+
+
+class TestCheckpointLoading:
+    """Checkpoints are read in PyTorch's restricted mode unless their source is trusted."""
+
+    def test_what_the_trainer_writes_loads(self, temp_dir):
+        path = temp_dir / "native.pt"
+        stored = {
+            "model_state_dict": {"weight": torch.ones(2)},
+            "epoch": 3,
+            "best_val_loss": 0.5,
+            "data_config": {"class_names": ["Normal", "AF"], "split": {"seed": 42}},
+        }
+        torch.save(stored, path)
+
+        loaded = load_checkpoint_file(path)
+
+        assert loaded["data_config"] == stored["data_config"]
+        assert torch.equal(loaded["model_state_dict"]["weight"], torch.ones(2))
+
+    def test_a_file_carrying_other_objects_is_refused(self, temp_dir, monkeypatch):
+        monkeypatch.delenv(TRUST_ENV, raising=False)
+        path = temp_dir / "foreign.pt"
+        torch.save({"model_state_dict": {}, "extra": _NotPlainData()}, path)
+
+        with pytest.raises(RuntimeError, match=TRUST_ENV):
+            load_checkpoint_file(path)
+
+    def test_a_trusted_source_can_be_declared(self, temp_dir, monkeypatch):
+        monkeypatch.setenv(TRUST_ENV, "1")
+        path = temp_dir / "foreign.pt"
+        torch.save({"model_state_dict": {}, "extra": _NotPlainData()}, path)
+
+        assert isinstance(load_checkpoint_file(path)["extra"], _NotPlainData)

@@ -210,6 +210,14 @@ class Medformer(ECGModelBase):
         for patch_emb, pos_emb in zip(self.patch_embeddings, self.pos_embeddings, strict=False):
             patches = patch_emb(x)
             num_patches = patches.size(1)
+            if num_patches > pos_emb.size(1):
+                raise ValueError(
+                    f"Medformer received {x.shape[-1]} samples per lead, which makes "
+                    f"{num_patches} patches of {patch_emb.proj.kernel_size[0]} samples, but "
+                    f"was built for {pos_emb.size(1)} per patch size. Pass shorter signals (a "
+                    f"shorter segment or a lower sampling rate), or build the model with a "
+                    f"larger max_patches."
+                )
             patches = patches + pos_emb[:, :num_patches]
             granularity_features.append(patches)
 

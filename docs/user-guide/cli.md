@@ -51,7 +51,7 @@ deepecg train -m kanres -d af-classification --epochs 50
 | `--dataset`, `-d` | *required* | Dataset to train on (see `deepecg list-datasets`) |
 | `--data-dir` | auto-detect | Directory containing the dataset |
 | `--output-dir`, `-o` | `runs/{timestamp}-{model}-{dataset}-seed{seed}` | Output directory |
-| `--weights`, `-w` | None | Pretrained weight name or file path |
+| `--weights`, `-w` | None | Weights to start from: a weights file, a checkpoint, a run directory, or a pretrained weight name |
 | `--epochs`, `-e` | 50 | Number of training epochs |
 | `--batch-size`, `-b` | 32 | Batch size |
 | `--learning-rate`, `--lr` | 0.001 | Learning rate |
@@ -129,7 +129,8 @@ sizes are also verified against the run's `split_info.json`, again with a warnin
 Accuracy, macro precision, recall and F1, AUROC, the per-class table and the calibration block
 are always printed. With `--output`, the full artifact set is also written into the directory:
 `classification_metrics.csv`, `predictions.txt`, `confusion_matrix.png`, `calibration_curve.png`
-and `prediction_distribution.png`.
+and `prediction_distribution.png`. The last column of `predictions.txt` names the recording each
+sample was cut from, so predictions can be grouped by recording afterwards.
 
 ### `deepecg predict`
 

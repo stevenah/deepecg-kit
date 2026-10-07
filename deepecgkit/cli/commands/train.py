@@ -21,15 +21,20 @@ from deepecgkit.cli._common import (
     report_shape_error,
     require_dataset,
     require_model,
+    split_record_names,
 )
 from deepecgkit.cli.logger import CLILogger
 from deepecgkit.cli.registry import MODEL_WEIGHTS, _get_model_registry
-from deepecgkit.cli.run_dir import write_run_metadata
+from deepecgkit.cli.run_dir import resolve_checkpoint, write_run_metadata
 from deepecgkit.evaluation.report import save_evaluation
 from deepecgkit.evaluation.visualization import plot_training_curves
+from deepecgkit.models.pretrained import load_matching_weights
 from deepecgkit.registry import get_dataset_names, get_model_names
 from deepecgkit.training import ECGTrainer
 from deepecgkit.utils.weights import load_pretrained_weights
+
+#: How many weight names a message about partly loaded weights spells out.
+NAMED_WEIGHTS = 5
 
 
 def _package_version() -> str | None:
@@ -263,8 +268,10 @@ def train(
         try:
             weights_path = Path(weights)
             if weights_path.exists():
-                logger.info(f"Loading weights from {weights}...")
-                state_dict = torch.load(weights, map_location="cpu", weights_only=True)
+                # A run directory stands for its best checkpoint, as it does for --checkpoint.
+                weights_path = resolve_checkpoint(weights_path)
+                logger.info(f"Loading weights from {weights_path}...")
+                state_dict = torch.load(weights_path, map_location="cpu", weights_only=True)
             elif any(weights in w for ws in MODEL_WEIGHTS.values() for w in ws):
                 logger.info(f"Loading pretrained weights '{weights}'...")
                 state_dict = load_pretrained_weights(weights, map_location="cpu")
@@ -274,8 +281,21 @@ def train(
                 logger.info(f"Available pretrained weights: {', '.join(all_weights)}")
                 logger.info("Or provide a valid file path to a checkpoint.")
                 return _fail(output_path, f"Weights '{weights}' not found.")
-            model.load_state_dict(state_dict, strict=False)
-            logger.info("Weights loaded successfully.")
+            report = load_matching_weights(model, state_dict)
+            logger.info(
+                f"Loaded {len(report['loaded'])} of the model's {len(model.state_dict())} "
+                f"weight tensors."
+            )
+            left_out = {
+                "Left as initialised, their shape differs": report["mismatched"],
+                "Left as initialised, not in the file": report["missing"],
+                "In the file but not in the model": report["unexpected"],
+            }
+            for reason, names in left_out.items():
+                if names:
+                    shown = ", ".join(names[:NAMED_WEIGHTS])
+                    more = f" and {len(names) - NAMED_WEIGHTS} more" * (len(names) > NAMED_WEIGHTS)
+                    logger.warning(f"{reason}: {shown}{more}")
         except Exception as e:
             logger.error(f"Failed to load weights: {e}")
             return _fail(output_path, f"Failed to load weights: {e}")
@@ -362,6 +382,7 @@ def train(
                 val_targets=val_targets,
                 val_logits=val_logits,
                 test_logits=test_logits,
+                record_names=split_record_names(data_module, "test"),
             )
         elif data_module.test_dataset is not None and len(data_module.test_dataset) > 0:
             raise RuntimeError(

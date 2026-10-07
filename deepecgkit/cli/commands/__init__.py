@@ -1,24 +1,6 @@
-"""CLI command functions."""
+"""CLI command modules, one per command or group of related commands.
 
-from deepecgkit.cli.commands.analysis import aggregate, rank
-from deepecgkit.cli.commands.evaluate import evaluate
-from deepecgkit.cli.commands.explain import explain
-from deepecgkit.cli.commands.extract import extract_features
-from deepecgkit.cli.commands.info import list_datasets, list_models, show_info
-from deepecgkit.cli.commands.predict import predict
-from deepecgkit.cli.commands.probe import probe
-from deepecgkit.cli.commands.train import train
-
-__all__ = [
-    "aggregate",
-    "evaluate",
-    "explain",
-    "extract_features",
-    "list_datasets",
-    "list_models",
-    "predict",
-    "probe",
-    "rank",
-    "show_info",
-    "train",
-]
+Nothing is imported here: each module pulls in what its command needs, and a
+run of one command should not pay for the others. The command functions are
+reached through their own modules or, lazily, through deepecgkit.cli.
+"""
