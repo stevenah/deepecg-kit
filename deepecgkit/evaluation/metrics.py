@@ -99,7 +99,7 @@ def calculate_classification_metrics(
         y_pred_labels = np.argmax(y_pred, axis=1)
         y_scores = y_pred
     elif (
-        y_pred.dtype == float
+        np.issubdtype(y_pred.dtype, np.floating)
         and np.max(y_pred) <= 1.0
         and len(np.unique(y_true)) <= MULTICLASS_THRESHOLD
     ):

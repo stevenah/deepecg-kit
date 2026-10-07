@@ -37,8 +37,9 @@ from deepecgkit.datasets.io import (
 class TestBaseECGDataset:
     """Test the BaseECGDataset abstract class."""
 
-    def test_get_default_data_dir(self):
+    def test_get_default_data_dir(self, monkeypatch):
         """Test the default data directory path."""
+        monkeypatch.delenv("DEEPECGKIT_HOME", raising=False)
         data_dir = BaseECGDataset.get_default_data_dir()
 
         assert isinstance(data_dir, Path)
@@ -691,6 +692,81 @@ class TestUnifiedAFDataset:
 
         assert dataset.num_classes == 2
         assert dataset.class_names == ["Non-AF", "AF"]
+
+    def test_sources_are_read_from_an_explicit_data_dir(self, temp_dir):
+        """data_dir used to be accepted and ignored, every source coming from its default."""
+        from tests.conftest import write_af_dataset
+
+        write_af_dataset(temp_dir / AFClassificationDataset.get_default_data_dir().name)
+
+        dataset = UnifiedAFDataset(
+            data_dir=temp_dir, datasets=["physionet2017"], download=False, verbose=False
+        )
+
+        assert len(dataset) > 0
+        assert dataset.loaded_dataset_names == ["physionet2017"]
+
+    def test_is_downloaded_looks_under_an_explicit_data_dir(self, temp_dir):
+        assert not UnifiedAFDataset.is_downloaded(temp_dir)
+
+    def test_forced_download_clears_the_sources_and_nothing_else(self, temp_dir, monkeypatch):
+        """force_download used to delete data_dir whole and then fetch nothing."""
+        from tests.conftest import write_af_dataset
+
+        mine = temp_dir / "notes.txt"
+        mine.write_text("mine")
+        source = write_af_dataset(temp_dir / AFClassificationDataset.get_default_data_dir().name)
+        fetched = []
+
+        def record_fetch(cls, data_dir=None, verbose=True):
+            fetched.append(Path(data_dir))
+
+        monkeypatch.setattr(AFClassificationDataset, "download_to", classmethod(record_fetch))
+
+        with pytest.raises(RuntimeError, match="No datasets were successfully loaded"):
+            UnifiedAFDataset(
+                data_dir=temp_dir, datasets=["physionet2017"], force_download=True, verbose=False
+            )
+
+        assert mine.read_text() == "mine"
+        assert not source.exists()
+        assert fetched == [source]
+
+
+class TestForcedDownloadGuard:
+    """A forced download deletes the directory first, so it has to be the dataset's own."""
+
+    def test_a_directory_holding_something_else_is_left_alone(self, temp_dir):
+        (temp_dir / "thesis.txt").write_text("irreplaceable")
+
+        with pytest.raises(RuntimeError, match="Refusing to clear"):
+            AFClassificationDataset(data_dir=temp_dir, force_download=True, verbose=False)
+
+        assert (temp_dir / "thesis.txt").read_text() == "irreplaceable"
+
+    @pytest.mark.parametrize("state", ["empty", "complete", "interrupted"])
+    def test_a_recognised_directory_may_be_cleared(self, state, temp_dir):
+        from deepecgkit.utils.download import IN_PROGRESS_MARKER
+        from tests.conftest import write_af_dataset
+
+        target = temp_dir / "data"
+        target.mkdir()
+        if state == "complete":
+            write_af_dataset(target)
+        elif state == "interrupted":
+            (target / IN_PROGRESS_MARKER).touch()
+            (target / "training2017.zip.part").write_bytes(b"partial")
+
+        AFClassificationDataset._require_clearable(target)
+
+    def test_the_default_directory_is_the_packages_own(self, temp_dir, monkeypatch):
+        """Whatever an older version left there, the default directory is safe to replace."""
+        monkeypatch.setenv("DEEPECGKIT_HOME", str(temp_dir))
+        default = AFClassificationDataset.get_default_data_dir()
+        default.mkdir(parents=True)
+        (default / "challenge-2017-1.0.0.zip").write_bytes(b"PK\x03\x04truncated")
+
+        AFClassificationDataset._require_clearable(default)
 
 
 class TestDatasetIntegration:

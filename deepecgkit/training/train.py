@@ -157,9 +157,11 @@ class ECGTrainer:
         else:
             self.model.eval()
 
+        # Sums over samples, not batches: the last batch is usually smaller, and
+        # counting it as a full one would give its samples more than their share.
         total_loss = 0.0
         total_acc = 0.0
-        n_batches = 0
+        n_samples = 0
 
         ctx = torch.no_grad() if not train else _NullContext()
         with ctx:
@@ -181,15 +183,16 @@ class ECGTrainer:
                         )
                     self.optimizer.step()
 
-                total_loss += loss.item()
+                batch_size = len(y)
+                total_loss += loss.item() * batch_size
                 if self._is_classification:
-                    total_acc += self._compute_acc(y_hat, y)
-                n_batches += 1
+                    total_acc += self._compute_acc(y_hat, y) * batch_size
+                n_samples += batch_size
                 if hasattr(dataloader, "set_postfix"):
-                    dataloader.set_postfix(loss=f"{total_loss / n_batches:.4f}", refresh=False)
+                    dataloader.set_postfix(loss=f"{total_loss / n_samples:.4f}", refresh=False)
 
-        avg_loss = total_loss / max(n_batches, 1)
-        avg_acc = total_acc / max(n_batches, 1) if self._is_classification else None
+        avg_loss = total_loss / max(n_samples, 1)
+        avg_acc = total_acc / max(n_samples, 1) if self._is_classification else None
         return avg_loss, avg_acc
 
     def fit(
@@ -417,7 +420,7 @@ class ECGTrainer:
 
         total_loss = 0.0
         total_acc = 0.0
-        n_batches = 0
+        n_samples = 0
 
         with torch.no_grad():
             for batch in dataloader:
@@ -425,7 +428,8 @@ class ECGTrainer:
                 x, y = x.to(self.device), y.to(self.device)
                 y_hat = self.model(x)
                 loss = self._calculate_loss(y_hat, y)
-                total_loss += loss.item()
+                batch_size = len(y)
+                total_loss += loss.item() * batch_size
                 self.test_logits.append(y_hat.detach().cpu())
 
                 if self._is_classification:
@@ -451,14 +455,14 @@ class ECGTrainer:
                         self.test_predictions.append(preds.cpu())
                         self.test_targets.append(y.long().cpu())
                         self.test_probabilities.append(probs.cpu())
-                    total_acc += acc
+                    total_acc += acc * batch_size
 
-                n_batches += 1
+                n_samples += batch_size
 
-        avg_loss = total_loss / max(n_batches, 1)
+        avg_loss = total_loss / max(n_samples, 1)
         results = {f"{prefix}_loss": avg_loss}
         if self._is_classification:
-            results[f"{prefix}_acc"] = total_acc / max(n_batches, 1)
+            results[f"{prefix}_acc"] = total_acc / max(n_samples, 1)
         return results
 
     def get_test_results(self) -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:

@@ -143,6 +143,55 @@ versions follow [SemVer](https://semver.org/).
 - `extract-features` and `explain` built their dataset in its default
   labelling mode instead of the one the checkpoint was trained in.
 - CSV recordings without a header row lost their first sample.
+- `force_download` (`--force-download`) deleted whatever directory `data_dir`
+  named, whole, before fetching. A directory of the caller's choosing is now
+  cleared only when it is empty, a complete copy of the dataset, or a download
+  the package began; anything else is refused.
+- `UnifiedAFDataset` accepted `data_dir` and ignored it, always reading its
+  sources from their default directories, and its forced download cleared
+  that unused directory and fetched nothing. `data_dir` is now the folder
+  holding the three source folders, and a forced download re-fetches the
+  sources. With it, two tests no longer depend on which datasets the machine
+  running them has downloaded.
+- CI: the test matrix ran Python 3.10 in every job, because uv follows
+  `.python-version` over the interpreter the job sets up. Each job now sets
+  `UV_PYTHON`.
+- `ECGTrainer` averaged loss and accuracy over batches instead of samples, so
+  a short last batch counted for as much as a full one. `trainer.test()`
+  could report an accuracy a few tenths of a percentage point away from the
+  one its own predictions give, and the validation loss that selects
+  checkpoints and stops training was off in the third decimal. The metrics
+  `deepecg train` writes to `classification_metrics.csv` were always computed
+  from the predictions and are unchanged; which epoch counts as the best one
+  can differ.
+- `ECGEvaluator.evaluate(model, loader)` failed on any machine with a GPU:
+  the inputs were moved to the evaluation device and the model was not. The
+  model is now run there, in eval mode, and handed back on the device and in
+  the mode it came in. Its logits are turned into probabilities the way
+  `ECGTrainer` does, so a single-output binary model is no longer scored as
+  predicting class 0 throughout, AUC is available (the default metric list
+  asked for it and raised), and the report's calibration rows are no longer
+  computed on raw logits.
+- `ECGEvaluator`: AUC for more than two classes raised; it is now
+  one-vs-rest, as in `calculate_classification_metrics`.
+  `bootstrap_evaluate` accepts precomputed predictions as `evaluate` does
+  (it tried to call the array), takes `y_scores`, and computes each metric
+  the way `evaluate` does. `generate_report` hid that failure and returned a
+  report without confidence intervals; it now carries them, and reports no
+  calibration rows for hard labels. An unknown metric name is an error
+  instead of being dropped from the results.
+- `calculate_classification_metrics` cast one-dimensional float32 scores
+  (any array converted from a tensor) to integer labels instead of
+  thresholding them, giving wrong accuracy, precision, recall and F1.
+- `plot_ecg_signals` given a `(leads, time)` sample, the layout every dataset
+  returns, set out to draw one row per time step and never finished. It
+  accepts both layouts and rejects a batch.
+- Examples: `inference.py` reported "class 0, confidence 1.0" for every
+  recording with a binary checkpoint and applied a softmax to multi-label
+  ones; `evaluate_model.py` stopped at its bootstrap step;
+  `explore_dataset.py` hung on its first plot; `feature_extraction.py`
+  rejected checkpoints of any model but `kanres` unless `--model` was given
+  and fitted its probe on a split that separated segments of one recording.
 
 ### Deprecated
 - `--devices` has no effect and will be removed; it now says so when used.

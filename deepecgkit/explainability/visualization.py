@@ -1,12 +1,11 @@
 """Drawing attribution over the signal it describes.
 
 The plots follow the style of the evaluation visualisations: a ``plot_``
-prefix, an optional ``save_path``, and nothing returned. They differ from
-``plot_ecg_signals`` in one respect that matters. That function takes
-(time, leads); these take (leads, time), matching the model input, the
-attribution tensor, and every other array in the package. Following the
-neighbouring function instead would put a transpose at every call site, and
-each of those is somewhere to get the axes the wrong way round.
+prefix, an optional ``save_path``, and nothing returned. They take
+(leads, time), matching the model input, the attribution tensor, and every
+other array in the package. ``plot_ecg_signals`` was written for
+(time, leads); it now accepts either layout, but these take (leads, time)
+only.
 """
 
 import matplotlib.pyplot as plt

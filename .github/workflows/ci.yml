@@ -87,6 +87,10 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
+    env:
+      # uv follows .python-version (3.10) over the interpreter set up below,
+      # so without this every job in the matrix would test 3.10.
+      UV_PYTHON: ${{ matrix.python-version }}
 
     steps:
     - name: Checkout code

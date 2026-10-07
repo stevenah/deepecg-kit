@@ -103,6 +103,10 @@ with torch.no_grad():
 print(data_config["class_names"][int(probabilities.argmax())])
 ```
 
+The softmax suits this four-class model. A binary model has a single output that needs a sigmoid,
+and a multi-label one a sigmoid per class; `deepecg predict` and `examples/inference.py` handle all
+three.
+
 ## CLI Workflow
 
 The same workflow via the `deepecg` command:

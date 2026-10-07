@@ -28,7 +28,24 @@ evaluator = ECGEvaluator(metrics=["accuracy", "precision", "recall", "f1", "auc"
 results = evaluator.evaluate(model, test_loader)
 ```
 
-`ECGEvaluator` supports passing a model + DataLoader, or pre-computed predictions + targets as numpy arrays.
+`ECGEvaluator` takes a model with a DataLoader, or predictions computed elsewhere with their
+targets. A model is run on the evaluation device in eval mode and handed back as it came, and its
+logits are turned into probabilities the way `ECGTrainer` does. With predictions, pass the
+probabilities as `y_scores`, which is what AUC and the calibration metrics are computed from:
+
+```python
+y_pred, y_true, y_prob = trainer.get_test_results()
+
+results = evaluator.evaluate(y_pred, y_true, y_scores=y_prob)
+intervals = evaluator.bootstrap_evaluate(y_pred, y_true, n_bootstrap=1000, y_scores=y_prob)
+report = evaluator.generate_report(y_pred, y_true, y_scores=y_prob, save_path="report.csv")
+```
+
+`bootstrap_evaluate` resamples the test set and returns the mean, standard deviation and 95%
+interval of each metric; `generate_report` returns a table with the same intervals and the
+calibration metrics. Precision, recall and F1 are positive-class values for a two-class problem and
+macro averages otherwise. Multi-label targets are not supported by this class; `deepecg evaluate`
+handles them.
 
 ## Metrics
 
@@ -85,6 +102,10 @@ from deepecgkit.evaluation import plot_roc_curve
 plot_roc_curve(y_true, y_prob, save_path="roc.png")
 ```
 
+This is the curve of a two-class problem: `y_prob` is the score of the positive class, or the
+two-column matrix a binary model yields. With more classes, draw one class against the rest, for
+example `plot_roc_curve(y_true == 1, y_prob[:, 1])`.
+
 ### Training Curves
 
 Plot loss and accuracy from CSV logs:
@@ -112,6 +133,10 @@ from deepecgkit.evaluation import plot_ecg_signals
 
 plot_ecg_signals(signal, sampling_rate=300, leads=["ECG"], save_path="ecg.png")
 ```
+
+`signal` is one recording, `(leads, time)` as the datasets return it; `(time, leads)` is accepted as
+well, the longer axis being taken as time. Pass the rate the signal is actually sampled at
+(`data_module.sampling_rate` after `setup()`), since the default of 500 Hz only suits PTB-XL.
 
 ### Prediction Visualization
 

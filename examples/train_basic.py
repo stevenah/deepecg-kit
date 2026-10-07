@@ -78,7 +78,8 @@ def main():
         early_stopping_patience=10,
         checkpoint_dir=str(output_path / "checkpoints"),
     )
-    trainer.test(data_module)
+    results = trainer.test(data_module)
+    print(f"\nTest loss: {results['test_loss']:.4f}  Test accuracy: {results['test_acc']:.4f}")
 
     if trainer.best_checkpoint_path:
         print(f"\nBest checkpoint: {trainer.best_checkpoint_path}")

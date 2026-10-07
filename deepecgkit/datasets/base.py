@@ -12,6 +12,7 @@ from torch.utils.data import Dataset
 
 from deepecgkit.datasets.preprocessing import convert_to_tensor
 from deepecgkit.utils.download import (
+    IN_PROGRESS_MARKER,
     download_and_extract_zip,
     download_files,
     download_lock,
@@ -223,9 +224,35 @@ class BaseECGDataset(Dataset, ABC):
         """True when the data directory is missing or holds no entries."""
         return not self.data_dir.exists() or not any(self.data_dir.iterdir())
 
+    @classmethod
+    def _require_clearable(cls, directory: Path) -> None:
+        """Refuse to delete a directory that is not recognisably this dataset.
+
+        A forced download removes the whole directory first. The default
+        directory is the package's own, but a data_dir of the caller's
+        choosing may hold anything, so it is only cleared when it is empty, a
+        complete copy of the dataset, or a download this package began.
+
+        Raises:
+            RuntimeError: If the directory holds something else.
+        """
+        recognised = (
+            directory.resolve() == cls.get_default_data_dir().resolve()
+            or not any(directory.iterdir())
+            or (directory / IN_PROGRESS_MARKER).exists()
+            or cls.is_downloaded(directory)
+        )
+        if not recognised:
+            raise RuntimeError(
+                f"Refusing to clear {directory} for a forced download: it is not empty and "
+                f"does not look like a copy of {cls.__name__}, and everything in it would be "
+                f"deleted. Remove it yourself, or choose an empty data directory."
+            )
+
     def _clear_dataset(self) -> None:
         """Clear the dataset directory for re-download."""
         if self.data_dir.exists():
+            self._require_clearable(self.data_dir)
             logger.info(f"Clearing existing dataset at {self.data_dir}...")
             shutil.rmtree(self.data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)

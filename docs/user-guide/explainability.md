@@ -138,9 +138,9 @@ plot_attribution(result.signal[0], result.values[0], sampling_rate=500.0,
 plot_beat_profile(result.beat_profile, result.beat_times_ms, save_path="beats.png")
 ```
 
-These take `(leads, time)`, matching the model input and the attribution tensor. Note that the older
-`plot_ecg_signals` in [Evaluation](evaluation.md) takes `(time, leads)` instead; the new plots follow
-the convention used everywhere else in the package rather than the one used by their neighbour.
+These take `(leads, time)`, matching the model input and the attribution tensor. The older
+`plot_ecg_signals` in [Evaluation](evaluation.md) was written for `(time, leads)` and accepts either
+layout; the new plots take `(leads, time)` only, the convention used everywhere else in the package.
 Omitting `save_path` calls `plt.show()`, which will block in a script.
 
 ## Model constraints
