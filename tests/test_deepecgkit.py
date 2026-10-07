@@ -487,11 +487,44 @@ class TestImportCost:
 
     def test_every_command_names_the_module_that_defines_it(self):
         """A command missing from the table would be parsed with every module imported."""
-        from deepecgkit.cli.main import _MODULE_OF_COMMAND, build_parser
+        from deepecgkit.cli.main import _COMMANDS, build_parser
 
         _, every_command = build_parser()
-        assert set(_MODULE_OF_COMMAND) == set(every_command)
+        assert list(_COMMANDS) == list(every_command)
 
         for command in every_command:
             _, own_module_only = build_parser(command)
             assert command in own_module_only
+
+    def test_the_command_listing_says_what_the_commands_register(self):
+        """The top-level help is printed from a table, which must not drift from the commands."""
+        from deepecgkit.cli.main import build_parser
+
+        def summaries(parser):
+            (subcommands,) = (
+                action for action in parser._actions if hasattr(action, "_choices_actions")
+            )
+            return {action.dest: action.help for action in subcommands._choices_actions}
+
+        listed, _ = build_parser(listing_only=True)
+        real, _ = build_parser()
+
+        assert summaries(listed) == summaries(real)
+
+    @pytest.mark.parametrize("argv", [[], ["--help"], ["no-such-command"]])
+    def test_listing_the_commands_imports_none_of_them(self, argv):
+        code = (
+            "import sys\n"
+            "from deepecgkit.cli import main\n"
+            "try:\n"
+            f"    main({argv!r})\n"
+            "except SystemExit:\n"
+            "    pass\n"
+            "assert 'torch' not in sys.modules\n"
+            "assert not any(name.startswith('deepecgkit.cli.commands.') for name in sys.modules)\n"
+        )
+
+        result = _run_fresh(code)
+
+        assert result.returncode == 0, result.stderr
+        assert "train" in result.stdout + result.stderr

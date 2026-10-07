@@ -285,9 +285,9 @@ class TestECGEvaluator:
         y_true = sample_labels.numpy()
         y_pred = outputs.numpy()
 
-        results = evaluator.evaluate(y_true, y_pred)
+        results = evaluator.evaluate(y_pred, y_true)
 
-        assert "accuracy" in results
+        assert results["accuracy"] == pytest.approx((y_pred.argmax(axis=1) == y_true).mean())
 
 
 class TestVisualizationFunctions:
@@ -1031,6 +1031,30 @@ class TestEvaluatorWithTorchModels:
 
         values = dict(zip(report["Metric"], report["Value"], strict=False))
         assert 0.0 <= values["brier"] <= 1.0
+
+    def test_inputs_without_targets_are_refused(self):
+        """They used to be scored against targets of all zeros."""
+        with pytest.raises(ValueError, match="targets"):
+            ECGEvaluator(metrics=["accuracy"]).evaluate(
+                _SignLogit(), np.zeros((4, 1, EVALUATOR_SIGNAL_LENGTH), dtype=np.float32)
+            )
+
+    def test_a_large_array_goes_through_the_model_in_batches(self):
+        """One forward pass over a whole split can need more memory than there is."""
+        seen = []
+
+        class Recording(_SignLogit):
+            def forward(self, x):
+                seen.append(len(x))
+                return super().forward(x)
+
+        signals = torch.randn(150, 1, EVALUATOR_SIGNAL_LENGTH)
+        labels = (signals.mean(dim=(1, 2)) > 0).long()
+
+        results = ECGEvaluator(metrics=["accuracy"]).evaluate(Recording(), (signals, labels))
+
+        assert seen == [64, 64, 22]
+        assert results["accuracy"] == 1.0
 
     def test_unknown_metric_names_are_rejected(self):
         """A misspelt metric used to be dropped from the results without a word."""

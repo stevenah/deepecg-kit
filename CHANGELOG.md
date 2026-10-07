@@ -129,9 +129,9 @@ versions follow [SemVer](https://semver.org/).
 - `import deepecgkit` no longer imports PyTorch and the rest of the
   scientific stack: public names, and `deepecgkit.evaluation`'s, are imported
   when first used, and the registries import the built-in models and datasets
-  on first lookup. `deepecg --version` answers at once, and each command
-  imports only its own module, so `deepecg aggregate` and `deepecg rank`
-  start without PyTorch. `deepecgkit.cli.commands` no longer re-exports the
+  on first lookup. `deepecg --version`, `deepecg --help` and a mistyped
+  command answer at once, and each command imports only its own module, so
+  `deepecg aggregate` and `deepecg rank` start without PyTorch. `deepecgkit.cli.commands` no longer re-exports the
   command functions; they are in `deepecgkit.cli` and in their own modules.
 - Checkpoints are read in PyTorch's restricted mode, which does not run code
   a file may carry. Everything `ECGTrainer` writes loads that way; a file
@@ -142,6 +142,16 @@ versions follow [SemVer](https://semver.org/).
   trainer's later calls for each stage return at once.
 - The amplitude axis of `plot_ecg_signals` and `plot_attribution` no longer
   says mV, which the normalised signals they are normally given are not in.
+- Resolving to the CPU on Apple Silicon switches PyTorch's NNPACK backend
+  off for the process. PyTorch uses it for convolutions from a batch size of
+  16 up, where it is many times slower there than the path used below 16
+  (one layer at batch 32: 368 ms against 5.5 ms), which made every CPU run at
+  the default batch size crawl.
+- The split is stratified on labels taken from the dataset
+  (`stratification_labels()`) instead of read sample by sample, which paged
+  in every signal of a memory-mapped dataset. The split itself is unchanged.
+- `ECGEvaluator` sends a large array through a torch model in batches of 64
+  rather than in one forward pass.
 - Dropped unused dependencies `pyEDFlib` and `PyWavelets`.
 - Library diagnostics go through `logging` under the `deepecgkit.*`
   hierarchy; the CLI's `-v`/`-q` now govern all output. Enable
@@ -200,6 +210,9 @@ versions follow [SemVer](https://semver.org/).
   successfully". Weights that fit are now loaded and counted, a head of
   another size is left as initialised and named, and weights that fit
   nothing are an error.
+- `ECGEvaluator.evaluate(model, inputs)` given inputs without targets scored
+  the model against targets of all zeros. It now says the targets are
+  missing.
 - `transformer`, `dualnet` and `medformer` given a signal past their length
   limit failed with a tensor-size error; they now say what the limit is.
 - `ECGDataModule` could not build a loader on PyTorch before 2.0.

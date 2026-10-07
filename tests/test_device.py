@@ -77,3 +77,42 @@ class TestResolverConsumers:
             from deepecgkit.evaluation.evaluator import ECGEvaluator
 
             assert ECGEvaluator(device="auto").device == torch.device("mps")
+
+
+class TestAppleSiliconCpu:
+    """Resolving to the CPU on Apple Silicon keeps convolutions off the slow NNPACK path."""
+
+    @pytest.fixture
+    def nnpack_flags(self, monkeypatch):
+        """Record what the resolver sets the NNPACK flag to."""
+        from deepecgkit.utils import device as device_module
+
+        calls = []
+        monkeypatch.setattr(torch.backends.nnpack, "set_flags", calls.append)
+        return device_module, calls
+
+    @pytest.mark.parametrize("requested", ["cpu", torch.device("cpu")])
+    def test_the_cpu_switches_nnpack_off_there(self, requested, nnpack_flags, monkeypatch):
+        device_module, calls = nnpack_flags
+        monkeypatch.setattr(device_module, "_on_apple_silicon", lambda: True)
+
+        resolve_device(requested)
+
+        assert calls == [False]
+
+    def test_other_platforms_are_left_as_they_are(self, nnpack_flags, monkeypatch):
+        device_module, calls = nnpack_flags
+        monkeypatch.setattr(device_module, "_on_apple_silicon", lambda: False)
+
+        resolve_device("cpu")
+
+        assert calls == []
+
+    def test_an_accelerator_leaves_the_cpu_setting_alone(self, nnpack_flags, monkeypatch):
+        device_module, calls = nnpack_flags
+        monkeypatch.setattr(device_module, "_on_apple_silicon", lambda: True)
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+
+        resolve_device("auto")
+
+        assert calls == []

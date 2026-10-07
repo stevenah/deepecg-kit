@@ -596,16 +596,21 @@ class TestConstraints:
         assert length_bounds(model, "kanres")[1] is None
 
     def test_the_explainer_records_the_crop_offset(self, sample_batch_ecg_30s):
-        """A cropped attribution can still be placed on the original time axis."""
-        model = build_model("transformer", input_channels=1, output_size=4)
+        """A cropped attribution can still be placed on the original time axis.
+
+        Medformer stands for the length-limited models here: it attends over
+        patches, where the transformer attends over all 5000 samples and takes
+        well over a gigabyte to attribute.
+        """
+        model = build_model("medformer", input_channels=1, output_size=4)
 
         with pytest.warns(RuntimeWarning, match="centre-cropping"):
             result = ECGExplainer(
-                model, model_name="transformer", device="cpu", batch_size=2, align_beats=False
+                model, model_name="medformer", device="cpu", batch_size=2, align_beats=False
             ).explain(sample_batch_ecg_30s)
 
-        assert result.values.shape[-1] == LENGTH_CEILINGS["transformer"]
-        assert result.crop_offset == (15000 - LENGTH_CEILINGS["transformer"]) // 2
+        assert result.values.shape[-1] == LENGTH_CEILINGS["medformer"]
+        assert result.crop_offset == (15000 - LENGTH_CEILINGS["medformer"]) // 2
 
 
 class TestExplainerBehaviour:

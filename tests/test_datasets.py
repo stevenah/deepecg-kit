@@ -1126,6 +1126,71 @@ class TestSetupSplitsOnce:
         assert list(module.test_dataset.indices) != before
 
 
+class _SignalsMustNotBeRead:
+    """Stands in for a dataset's signals where reading one would be a mistake."""
+
+    def __getitem__(self, index):
+        raise AssertionError("a signal was read to get at a label")
+
+
+class TestSplitLabels:
+    """The split is stratified on labels taken from the dataset, not read sample by sample."""
+
+    def _dataset(self, data_dir, **kwargs):
+        return AFClassificationDataset(data_dir=str(data_dir), verbose=False, **kwargs)
+
+    def test_direct_labels_are_what_the_samples_carry(self, af_dataset_dir):
+        dataset = self._dataset(af_dataset_dir)
+        from_samples = torch.stack([dataset[i][1] for i in range(len(dataset))]).numpy()
+
+        direct = dataset.stratification_labels()
+
+        assert direct.dtype == from_samples.dtype
+        np.testing.assert_array_equal(direct, from_samples)
+
+    def test_the_split_does_not_read_a_signal_for_them(self, af_dataset_dir):
+        """On a memory-mapped dataset of gigabytes that paged all of it in."""
+        dataset = self._dataset(af_dataset_dir)
+        expected = dataset.stratification_labels()
+        dataset.signals = _SignalsMustNotBeRead()
+        module = ECGDataModule(dataset=dataset, verbose=False)
+
+        np.testing.assert_array_equal(module._collect_labels(), expected)
+
+    def test_the_split_is_the_one_reading_every_sample_gave(self, af_dataset_dir, monkeypatch):
+        def split_indices():
+            module = ECGDataModule(dataset=self._dataset(af_dataset_dir), verbose=False, seed=3)
+            module.setup()
+            return [
+                list(part.indices)
+                for part in (module.train_dataset, module.val_dataset, module.test_dataset)
+            ]
+
+        direct = split_indices()
+        monkeypatch.setattr(AFClassificationDataset, "stratification_labels", lambda self: None)
+
+        assert split_indices() == direct
+
+    def test_a_target_transform_sends_it_back_to_the_samples(self, af_dataset_dir):
+        """The transform decides the label, so only the samples know it."""
+        dataset = self._dataset(af_dataset_dir, target_transform=lambda label: label * 0)
+
+        assert dataset.stratification_labels() is None
+        module = ECGDataModule(dataset=dataset, verbose=False)
+        assert set(module._collect_labels().tolist()) == {0}
+
+    def test_the_unified_dataset_joins_its_sources_labels(self, temp_dir):
+        from tests.conftest import write_af_dataset
+
+        write_af_dataset(temp_dir / AFClassificationDataset.get_default_data_dir().name)
+        dataset = UnifiedAFDataset(
+            data_dir=temp_dir, datasets=["physionet2017"], download=False, verbose=False
+        )
+        from_samples = torch.stack([dataset[i][1] for i in range(len(dataset))]).numpy()
+
+        np.testing.assert_array_equal(dataset.stratification_labels(), from_samples)
+
+
 class TestSamplingRateResolution:
     """A dataset is resampled only when someone asks for it."""
 

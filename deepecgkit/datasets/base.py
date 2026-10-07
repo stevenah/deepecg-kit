@@ -391,6 +391,27 @@ class BaseECGDataset(Dataset, ABC):
             "signal_shape": self.signals[idx].shape,
         }
 
+    def stratification_labels(self) -> np.ndarray | None:
+        """Return every sample's label as __getitem__ gives it, without reading a signal.
+
+        ECGDataModule stratifies its split on these. Collecting them through
+        __getitem__ reads every signal on the way, which for a memory-mapped
+        dataset of several gigabytes means paging all of it in.
+
+        Returns:
+            Integer labels, one per sample, or None when they cannot be had
+            without reading the samples: a target_transform is set, or the
+            subclass builds its samples in a __getitem__ of its own.
+        """
+        labels = getattr(self, "labels", None)
+        if (
+            labels is None
+            or self.target_transform is not None
+            or type(self).__getitem__ is not BaseECGDataset.__getitem__
+        ):
+            return None
+        return np.asarray(labels).astype(np.int64)
+
     def get_class_distribution(self) -> dict[str, int]:
         """Count samples per class name."""
         labels = getattr(self, "labels", None)
