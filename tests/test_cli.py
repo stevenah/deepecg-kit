@@ -3,6 +3,7 @@ Tests for deepecgkit.cli module.
 """
 
 import json
+import re
 import sys
 from typing import ClassVar
 from unittest.mock import patch
@@ -1684,6 +1685,9 @@ def clean_registries():
     """Undo any model or dataset registered while a test ran."""
     from deepecgkit import registry
 
+    # Looked up first so that the built-ins are registered before the copy is taken.
+    registry.get_model_names()
+    registry.get_dataset_names()
     models, datasets = dict(registry._MODEL_REGISTRY), dict(registry._DATASET_REGISTRY)
     modules = set(sys.modules)
     path = list(sys.path)
@@ -1919,6 +1923,57 @@ class TestTrainedRunWorkflow:
         assert metadata["input_length"] == 3000
         assert metadata["class_names"] == ["Normal", "AF", "Other", "Noisy"]
         assert metadata["best_checkpoint"].endswith(".pt")
+
+    def _train_from(self, trained_run, model, weights, output_name):
+        return main(
+            [
+                "train",
+                "-m",
+                model,
+                "-d",
+                "af-classification",
+                "--data-dir",
+                str(trained_run["data"]),
+                "--epochs",
+                "1",
+                "--accelerator",
+                "cpu",
+                "--weights",
+                str(weights),
+                "-o",
+                str(trained_run["root"] / output_name),
+            ]
+        )
+
+    def test_training_can_start_from_an_earlier_checkpoint(self, trained_run, capsys):
+        """A checkpoint passed as --weights used to load nothing and be reported as loaded."""
+        result = self._train_from(trained_run, "simple-cnn", trained_run["run"], "from-weights")
+        streams = capsys.readouterr()
+        output = streams.out + streams.err
+
+        assert result == 0
+        assert re.search(r"Loaded (\d+) of the model's \1 weight tensors", output)
+        assert "Left as initialised" not in output
+
+    def test_weights_of_another_architecture_are_refused(self, trained_run, capsys):
+        from deepecgkit.cli.run_dir import resolve_checkpoint
+
+        checkpoint = resolve_checkpoint(trained_run["run"])
+        result = self._train_from(trained_run, "kanres", checkpoint, "from-foreign-weights")
+
+        assert result == 1
+        assert "belong to a different architecture" in capsys.readouterr().err
+
+    def test_predictions_name_the_recording_of_each_sample(self, trained_run):
+        """Without it, predictions cannot be grouped by recording afterwards."""
+        lines = (trained_run["run"] / "predictions.txt").read_text().splitlines()
+        header, rows = lines[0].split("\t"), [line.split("\t") for line in lines[1:]]
+        split_info = json.loads((trained_run["run"] / "split_info.json").read_text())
+
+        assert header[-1] == "record"
+        assert all(len(row) == len(header) for row in rows)
+        assert all(row[-1].startswith("A0") for row in rows)
+        assert len({row[-1] for row in rows}) == split_info["n_test_groups"]
 
     def test_checkpoint_carries_its_architecture_and_preprocessing(self, trained_run):
         from deepecgkit.cli.run_dir import resolve_checkpoint

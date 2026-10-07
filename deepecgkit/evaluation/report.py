@@ -12,6 +12,7 @@ The same numbers are always reported to the console; passing no output
 directory skips the files and nothing else.
 """
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,24 @@ from deepecgkit.evaluation.visualization import (
     plot_multilabel_calibration_curve,
     plot_multilabel_confusion_matrices,
 )
+
+
+def _record_header(record_names: Sequence[str] | None, n_samples: int) -> str:
+    """Head the record column of predictions.txt, when there are names to fill it.
+
+    Raises:
+        ValueError: If the names do not number one per sample.
+    """
+    if record_names is None:
+        return ""
+    if len(record_names) != n_samples:
+        raise ValueError(f"Got {len(record_names)} record names for {n_samples} evaluated samples.")
+    return "\trecord"
+
+
+def _record_cell(record_names: Sequence[str] | None, index: int) -> str:
+    """Give one row's record column, or nothing when records are not named."""
+    return "" if record_names is None else f"\t{record_names[index]}"
 
 
 def _calibration_columns(
@@ -112,6 +131,7 @@ def save_single_label_evaluation(
     val_logits: np.ndarray | None = None,
     test_logits: np.ndarray | None = None,
     n_bins: int = DEFAULT_CALIBRATION_BINS,
+    record_names: Sequence[str] | None = None,
 ) -> None:
     """Report single-label results, writing the artifact set when output_path is given."""
     display_names = class_names or [f"Class {i}" for i in range(y_prob.shape[1])]
@@ -142,12 +162,12 @@ def save_single_label_evaluation(
             header = "index\ttrue_label\tpredicted_label"
             for name in display_names:
                 header += f"\tprob_{name}"
-            f.write(header + "\n")
+            f.write(header + _record_header(record_names, len(y_true)) + "\n")
             for idx in range(len(y_true)):
                 row = f"{idx}\t{y_true[idx]}\t{y_pred[idx]}"
                 for c in range(y_prob.shape[1]):
                     row += f"\t{y_prob[idx, c]:.6f}"
-                f.write(row + "\n")
+                f.write(row + _record_cell(record_names, idx) + "\n")
         logger.info(f"Test predictions saved to {predictions_path}")
 
     cm_results = confusion_matrix_analysis(y_true, y_pred)
@@ -220,6 +240,7 @@ def save_multi_label_evaluation(
     val_logits: np.ndarray | None = None,
     test_logits: np.ndarray | None = None,
     n_bins: int = DEFAULT_CALIBRATION_BINS,
+    record_names: Sequence[str] | None = None,
 ) -> None:
     """Report multi-label results, writing the artifact set when output_path is given."""
 
@@ -233,12 +254,12 @@ def save_multi_label_evaluation(
             header = "index"
             for name in display_names:
                 header += f"\ttrue_{name}\tpred_{name}\tprob_{name}"
-            f.write(header + "\n")
+            f.write(header + _record_header(record_names, len(y_true)) + "\n")
             for idx in range(len(y_true)):
                 row = str(idx)
                 for c in range(num_classes):
                     row += f"\t{y_true[idx, c]}\t{y_pred[idx, c]}\t{y_prob[idx, c]:.6f}"
-                f.write(row + "\n")
+                f.write(row + _record_cell(record_names, idx) + "\n")
         logger.info(f"Test predictions saved to {predictions_path}")
 
         plot_multilabel_confusion_matrices(
@@ -337,11 +358,16 @@ def save_evaluation(
     val_logits: np.ndarray | None = None,
     test_logits: np.ndarray | None = None,
     n_bins: int = DEFAULT_CALIBRATION_BINS,
+    record_names: Sequence[str] | None = None,
 ) -> None:
     """Report an evaluation, dispatching on the label shape.
 
     The metrics are always logged. With an output_path the full artifact set
     is written there as well; with None the console report is all there is.
+
+    record_names, one per evaluated sample, adds a last column to
+    predictions.txt naming the recording each sample was cut from, so that
+    predictions can be grouped by recording or patient afterwards.
     """
     saver = save_multi_label_evaluation if y_true.ndim > 1 else save_single_label_evaluation
     saver(
@@ -357,4 +383,5 @@ def save_evaluation(
         val_logits=val_logits,
         test_logits=test_logits,
         n_bins=n_bins,
+        record_names=record_names,
     )

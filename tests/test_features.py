@@ -126,7 +126,7 @@ class TestLengthConstraints:
         model = build_model(model_name, input_channels=1, output_size=4)
         model.eval()
 
-        with pytest.raises(RuntimeError), torch.no_grad():
+        with pytest.raises(ValueError, match="Pass shorter signals"), torch.no_grad():
             model.extract_features(sample_batch_ecg_30s)
 
 

@@ -23,6 +23,10 @@ logger = logging.getLogger(__name__)
 BINARY_THRESHOLD = 0.5
 MULTICLASS_THRESHOLD = 2
 
+#: Names under which accuracy can be asked for. They differ for multi-hot
+#: targets only: per label ("accuracy", "label_accuracy") or per sample.
+ACCURACY_METRICS = ("accuracy", "label_accuracy", "exact_match_accuracy")
+
 TASK_BINARY = "binary"
 TASK_MULTICLASS = "multiclass"
 TASK_MULTILABEL = "multilabel"
@@ -55,7 +59,8 @@ def resolve_average(y_true: np.ndarray, average: str = "auto") -> str:
     Precision, recall and F1 are not comparable across averaging modes, so the
     mode in force must be recorded alongside the values rather than inferred.
     Under "auto" a two-class problem yields positive-class ("binary") values,
-    not macro-averaged ones.
+    not macro-averaged ones. Multi-hot targets are macro-averaged over their
+    labels.
 
     Args:
         y_true: True labels, used only to count classes under "auto"
@@ -66,6 +71,8 @@ def resolve_average(y_true: np.ndarray, average: str = "auto") -> str:
     """
     if average != "auto":
         return average
+    if np.ndim(y_true) > 1:
+        return "macro"
     return "binary" if len(np.unique(y_true)) <= MULTICLASS_THRESHOLD else "macro"
 
 
@@ -78,10 +85,20 @@ def calculate_classification_metrics(
     """
     Calculate classification metrics.
 
+    Multi-hot targets of shape (n_samples, n_labels) make the problem
+    multi-label, and the metrics are defined as `deepecg evaluate` reports
+    them: predictions are probabilities thresholded at 0.5 (or 0/1 labels),
+    "accuracy" is the share of individual labels predicted correctly, as
+    ECGTrainer reports it, "exact_match_accuracy" the share of samples with
+    every label right, and precision, recall, F1 and AUC are macro averages
+    over the labels. MCC is not defined for them.
+
     Args:
-        y_true: True labels
+        y_true: True labels, or multi-hot targets
         y_pred: Predicted labels or probabilities
-        metrics: List of metrics to compute
+        metrics: List of metrics to compute, from accuracy, label_accuracy,
+            exact_match_accuracy, precision, recall, f1, auc and mcc. The two
+            longer accuracy names equal accuracy for single-label targets.
         average: Averaging for precision/recall/f1. "auto" selects positive-class
             values for two-class problems and macro averaging otherwise. Pass an
             explicit mode to make the choice independent of the label set. Use
@@ -90,12 +107,19 @@ def calculate_classification_metrics(
     Returns:
         Dictionary of computed metrics
     """
+    multilabel = np.ndim(y_true) > 1
     if metrics is None:
-        metrics = ["accuracy", "precision", "recall", "f1", "auc", "mcc"]
+        metrics = ["accuracy", "precision", "recall", "f1", "auc"]
+        metrics.append("exact_match_accuracy" if multilabel else "mcc")
 
     results = {}
 
-    if y_pred.ndim > 1:
+    if multilabel:
+        y_true = np.asarray(y_true).astype(int)
+        is_score = np.issubdtype(y_pred.dtype, np.floating)
+        y_pred_labels = (y_pred > BINARY_THRESHOLD).astype(int) if is_score else y_pred
+        y_scores = y_pred
+    elif y_pred.ndim > 1:
         y_pred_labels = np.argmax(y_pred, axis=1)
         y_scores = y_pred
     elif (
@@ -114,8 +138,13 @@ def calculate_classification_metrics(
 
     def _compute_metric(metric: str) -> Any:
         result = np.nan
-        if metric == "accuracy":
-            result = accuracy_score(y_true, y_pred_labels)
+        if metric in ACCURACY_METRICS:
+            if multilabel:
+                correct = y_pred_labels == y_true
+                exact = metric == "exact_match_accuracy"
+                result = correct.all(axis=1).mean() if exact else correct.mean()
+            else:
+                result = accuracy_score(y_true, y_pred_labels)
         elif metric in ["precision", "recall", "f1"]:
             precision, recall, f1, _ = precision_recall_fscore_support(
                 y_true, y_pred_labels, average=avg, zero_division=0
@@ -127,13 +156,17 @@ def calculate_classification_metrics(
             elif metric == "f1":
                 result = f1
         elif metric == "auc":
-            if n_classes > MULTICLASS_THRESHOLD:
+            if multilabel:
+                result = roc_auc_score(y_true, y_scores, average="macro")
+            elif n_classes > MULTICLASS_THRESHOLD:
                 result = roc_auc_score(y_true, y_scores, multi_class="ovr")
             else:
                 # Binary AUC expects 1D scores (positive class probability)
                 scores = y_scores[:, 1] if y_scores.ndim > 1 else y_scores
                 result = roc_auc_score(y_true, scores)
         elif metric == "mcc":
+            if multilabel:
+                raise ValueError("MCC is not defined for multi-label targets")
             result = matthews_corrcoef(y_true, y_pred_labels)
         return result
 

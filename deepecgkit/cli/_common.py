@@ -15,8 +15,6 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-import torch
-
 from deepecgkit.cli import defaults
 from deepecgkit.cli.logger import CLILogger
 from deepecgkit.cli.registry import _get_dataset_registry, _get_model_registry
@@ -25,6 +23,7 @@ from deepecgkit.datasets import ECGDataModule
 from deepecgkit.models.factory import recorded_model_name
 from deepecgkit.models.pretrained import model_name_for_weights
 from deepecgkit.registry import get_dataset_names, get_model_info, get_model_names
+from deepecgkit.utils.checkpoints import load_checkpoint_file
 
 #: Substrings of RuntimeError messages that indicate a signal-shape problem.
 LENGTH_MARKERS = ("Kernel size", "must match the size of tensor", "needs at least")
@@ -119,7 +118,7 @@ def read_checkpoint(checkpoint: str | Path) -> dict[str, Any]:
         The checkpoint dictionary, or an empty one when the file holds
         something other than a dictionary.
     """
-    stored = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    stored = load_checkpoint_file(checkpoint)
     return stored if isinstance(stored, dict) else {}
 
 
@@ -459,6 +458,25 @@ def report_data_error(
         logger.error(f"Failed to load the '{dataset_name}' dataset: {detail}")
     logger.debug(traceback.format_exc())
     return 1
+
+
+def split_record_names(data_module: ECGDataModule, split: str = "test") -> list[str] | None:
+    """Name the recording behind each sample of a split, in the order it is evaluated.
+
+    Args:
+        data_module: The data module, after setup
+        split: "test" or "val"
+
+    Returns:
+        One name per sample, or None when the dataset does not say which
+        recording its samples come from.
+    """
+    dataset = data_module.dataset
+    names = getattr(dataset, "record_names", None) or getattr(dataset, "group_ids", None)
+    indices = getattr(getattr(data_module, f"{split}_dataset", None), "indices", None)
+    if not names or indices is None or any(index >= len(names) for index in indices):
+        return None
+    return [str(names[index]) for index in indices]
 
 
 def describe_data(data_module: ECGDataModule, dataset_name: str) -> dict[str, Any]:

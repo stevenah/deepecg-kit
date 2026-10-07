@@ -17,6 +17,11 @@ rate (300 Hz for PhysioNet 2017, 250 Hz for MIT-BIH AFDB, 128 Hz for LTAFDB) so 
 datasets share an input shape. Pass `sampling_rate` to change it. `deepecg list-datasets` prints
 the same table together with where each dataset is stored and whether it has been downloaded.
 
+In their four-class mode MIT-BIH AFDB and LTAFDB label segments Normal, AF, AFL or J from the
+rhythm annotations, and every other annotated rhythm (ventricular tachycardia, bigeminy and the
+rest, which LTAFDB has many of) counts as Normal. With `binary_classification` the two classes are
+AF and everything else, which is what that grouping amounts to.
+
 ## ECGDataModule
 
 `ECGDataModule` handles dataset creation, train/val/test splitting, and DataLoader construction:
@@ -97,7 +102,9 @@ Datasets are downloaded on first use when `download=True` (the CLI always passes
 stored under `~/.deepecgkit/datasets`, one folder per dataset; set the `DEEPECGKIT_HOME`
 environment variable to move that root, or pass `data_dir` for a single dataset. `unified-af`
 keeps nothing of its own and reads its three sources from their own folders, so a copy fetched
-for one of them is shared; its `data_dir` is the folder that holds those three folders.
+for one of them is shared; its `data_dir` is the folder that holds those three folders. A source
+that cannot be loaded is an error rather than a smaller dataset; `skip_unavailable=True` builds it
+from the sources that do load.
 
 Files come from PhysioNet's open-data mirror, with the archives on physionet.org as the
 fallback. Only what the loaders read is fetched. A download that is interrupted resumes where

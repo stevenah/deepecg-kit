@@ -97,6 +97,11 @@ class UnifiedAFDataset(BaseECGDataset):
       - Normal (N) → Normal, AF (A) → AF
       - Other (O) and Noisy (~) are dropped in 4-class mode
       - Other (O) → Non-AF and Noisy (~) is dropped in binary mode
+
+    A source that cannot be loaded is an error: a dataset built from two of
+    its three sources is a different dataset under the same name. Pass
+    skip_unavailable=True to build it from whichever sources do load, or name
+    the wanted sources in datasets.
     """
 
     CLASS_LABELS: ClassVar[list[str]] = ["Normal", "AF", "AFL", "J"]
@@ -158,7 +163,9 @@ class UnifiedAFDataset(BaseECGDataset):
         force_download: bool = False,
         verbose: bool = True,
         dataset_kwargs: dict[str, dict] | None = None,
+        skip_unavailable: bool = False,
     ):
+        self.skip_unavailable = skip_unavailable
         self.segment_duration_seconds = segment_duration_seconds
         self.binary_classification = binary_classification
         self.normalization = normalization
@@ -280,6 +287,11 @@ class UnifiedAFDataset(BaseECGDataset):
                         logger.info(f"Class distribution: {dist}")
 
             except Exception as e:
+                if not self.skip_unavailable:
+                    raise RuntimeError(
+                        f"Could not load '{dataset_name}', one of the sources of the unified "
+                        f"AF dataset: {e}"
+                    ) from e
                 logger.warning("Failed to load %s: %s", dataset_name, e)
                 continue
 

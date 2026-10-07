@@ -53,6 +53,14 @@ wheels fail to load on macOS 27; published metadata is unaffected.
   state_dict keys. If it fails, your change renamed a module attribute and
   would break loading of existing checkpoints; only regenerate the fixture
   for a deliberate breaking release (instructions in that file's docstring).
+- `tests/test_examples.py` runs every script in `examples/`, and
+  `tests/test_docs.py` the Python blocks of the documentation, on a
+  synthetic dataset. A new docs page with code goes in `PAGES` there; a
+  block that cannot run (a placeholder, or one needing the network) is
+  listed in `LEFT_OUT` by a phrase it contains.
+- The lower bounds in `pyproject.toml` are versions the suite has been run
+  on. Before lowering one, install it and run the suite:
+  `uv pip install "torch==2.1.0" ... -e .` in a scratch environment.
 
 ## Releasing
 

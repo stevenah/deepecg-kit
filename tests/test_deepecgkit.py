@@ -2,6 +2,8 @@
 Tests for the main deepecgkit package and integration tests.
 """
 
+import subprocess
+import sys
 import time
 
 import numpy as np
@@ -424,3 +426,72 @@ class TestPerformance:
                 output = model(input_tensor)
 
             del input_tensor, output
+
+
+def _run_fresh(code: str) -> subprocess.CompletedProcess:
+    """Run code in a new interpreter, where nothing has been imported yet."""
+    return subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
+
+
+class TestImportCost:
+    """What is imported, and when: start-up should not pay for what a run does not use."""
+
+    def test_importing_the_package_does_not_load_pytorch(self):
+        result = _run_fresh("import sys, deepecgkit; assert 'torch' not in sys.modules")
+
+        assert result.returncode == 0, result.stderr
+
+    def test_public_names_and_subpackages_load_on_first_use(self):
+        code = (
+            "import deepecgkit\n"
+            "assert deepecgkit.ECGTrainer.__name__ == 'ECGTrainer'\n"
+            "assert deepecgkit.datasets.ECGDataModule.__name__ == 'ECGDataModule'\n"
+            "assert 'ECGTrainer' in dir(deepecgkit)\n"
+        )
+
+        result = _run_fresh(code)
+
+        assert result.returncode == 0, result.stderr
+
+    def test_an_unknown_name_is_still_an_attribute_error(self):
+        with pytest.raises(AttributeError, match="no_such_name"):
+            _ = deepecgkit.no_such_name
+
+    def test_the_registry_fills_itself_when_first_asked(self):
+        """Nothing has imported the models here; the lookup has to."""
+        code = (
+            "from deepecgkit.registry import get_dataset_names, get_model_names\n"
+            "assert 'kanres' in get_model_names()\n"
+            "assert 'af-classification' in get_dataset_names()\n"
+        )
+
+        result = _run_fresh(code)
+
+        assert result.returncode == 0, result.stderr
+
+    @pytest.mark.parametrize("argv", [["--version"], ["aggregate", "--help"], ["rank", "--help"]])
+    def test_light_commands_start_without_pytorch(self, argv):
+        code = (
+            "import sys\n"
+            "from deepecgkit.cli import main\n"
+            "try:\n"
+            f"    main({argv!r})\n"
+            "except SystemExit as stop:\n"
+            "    assert stop.code == 0\n"
+            "assert 'torch' not in sys.modules\n"
+        )
+
+        result = _run_fresh(code)
+
+        assert result.returncode == 0, result.stderr
+
+    def test_every_command_names_the_module_that_defines_it(self):
+        """A command missing from the table would be parsed with every module imported."""
+        from deepecgkit.cli.main import _MODULE_OF_COMMAND, build_parser
+
+        _, every_command = build_parser()
+        assert set(_MODULE_OF_COMMAND) == set(every_command)
+
+        for command in every_command:
+            _, own_module_only = build_parser(command)
+            assert command in own_module_only

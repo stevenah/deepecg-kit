@@ -14,6 +14,7 @@ from torch import nn
 
 from deepecgkit.models.pretrained import _split_checkpoint
 from deepecgkit.registry import get_model, get_model_info, get_model_names
+from deepecgkit.utils.checkpoints import load_checkpoint_file
 
 __all__ = [
     "build_model",
@@ -149,7 +150,7 @@ def build_model_from_checkpoint(
             architecture than the one requested, does not say which
             architecture it holds, or the lead count cannot be determined.
     """
-    checkpoint = torch.load(checkpoint_path, map_location=map_location, weights_only=False)
+    checkpoint = load_checkpoint_file(checkpoint_path, map_location)
     try:
         state_dict, recorded = _split_checkpoint(checkpoint)
     except ValueError as error:

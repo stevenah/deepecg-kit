@@ -318,3 +318,44 @@ class TestPretrainedMixin:
 
         loaded = from_pretrained("kanres", str(path), input_channels=1, output_size=4)
         assert isinstance(loaded, KanResWideX)
+
+
+class TestInputLengthLimits:
+    """A signal past a model's limit is reported in words rather than as a tensor-shape error."""
+
+    @pytest.mark.parametrize("model_name", ["transformer", "dualnet", "medformer"])
+    def test_a_signal_past_the_registered_maximum_is_explained(self, model_name):
+        """The registry records the ceiling; the model has to enforce it readably."""
+        from deepecgkit.registry import get_model_info
+
+        too_long = get_model_info(model_name)["max_input_length"] + 1
+        model = get_model(model_name)(input_channels=1, output_size=2).eval()
+
+        with pytest.raises(ValueError, match="Pass shorter signals"), torch.no_grad():
+            model(torch.zeros(1, 1, too_long))
+
+
+class TestLoadMatchingWeights:
+    """Starting from existing weights loads what fits and says what did not."""
+
+    def test_a_head_of_another_size_does_not_stop_the_backbone_loading(self):
+        from deepecgkit.models.pretrained import load_matching_weights
+
+        source = KanResWideX(input_channels=1, output_size=4)
+        target = KanResWideX(input_channels=1, output_size=2)
+
+        report = load_matching_weights(target, {"model_state_dict": source.state_dict()})
+
+        assert report["mismatched"] == ["classifier.bias", "classifier.weight"]
+        assert report["missing"] == report["unexpected"] == []
+        loaded = target.state_dict()
+        for name in report["loaded"]:
+            assert torch.equal(loaded[name], source.state_dict()[name])
+
+    def test_weights_that_fit_nothing_are_an_error(self):
+        from deepecgkit.models.pretrained import load_matching_weights
+
+        other = get_model("simple-cnn")(input_channels=1, output_size=4)
+
+        with pytest.raises(ValueError, match="different architecture"):
+            load_matching_weights(KanResWideX(input_channels=1, output_size=4), other.state_dict())

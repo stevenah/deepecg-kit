@@ -16,11 +16,35 @@ Usage:
         ...
 """
 
+import importlib
 from collections.abc import Callable
 from typing import Any
 
 _MODEL_REGISTRY: dict[str, dict[str, Any]] = {}
 _DATASET_REGISTRY: dict[str, dict[str, Any]] = {}
+
+#: The packages whose modules register the built-in models and datasets when
+#: imported. Nothing imports them up front, so that `import deepecgkit` stays
+#: cheap; the first lookup does.
+_BUILTIN_PACKAGES = {"models": "deepecgkit.models", "datasets": "deepecgkit.datasets"}
+_loaded_builtins: set[str] = set()
+
+
+def _load_builtins(kind: str) -> None:
+    """Import the built-in models or datasets so that they are registered.
+
+    Args:
+        kind: "models" or "datasets"
+    """
+    if kind in _loaded_builtins:
+        return
+    # Marked first: importing the package calls back into this module.
+    _loaded_builtins.add(kind)
+    try:
+        importlib.import_module(_BUILTIN_PACKAGES[kind])
+    except BaseException:
+        _loaded_builtins.discard(kind)
+        raise
 
 
 def register_model(
@@ -98,6 +122,7 @@ def get_model(name: str) -> type:
     Raises:
         KeyError: If the name is not registered.
     """
+    _load_builtins("models")
     if name not in _MODEL_REGISTRY:
         available = ", ".join(sorted(_MODEL_REGISTRY.keys()))
         raise KeyError(f"Unknown model: {name}. Available: {available}")
@@ -110,6 +135,7 @@ def get_dataset(name: str) -> type:
     Raises:
         KeyError: If the name is not registered.
     """
+    _load_builtins("datasets")
     if name not in _DATASET_REGISTRY:
         available = ", ".join(sorted(_DATASET_REGISTRY.keys()))
         raise KeyError(f"Unknown dataset: {name}. Available: {available}")
@@ -118,11 +144,13 @@ def get_dataset(name: str) -> type:
 
 def get_model_names() -> list[str]:
     """Return every registered model name, sorted."""
+    _load_builtins("models")
     return sorted(_MODEL_REGISTRY.keys())
 
 
 def get_dataset_names() -> list[str]:
     """Return every registered dataset name, sorted."""
+    _load_builtins("datasets")
     return sorted(_DATASET_REGISTRY.keys())
 
 
@@ -133,6 +161,7 @@ def get_model_info(name: str) -> dict[str, Any]:
     Raises:
         KeyError: If the name is not registered.
     """
+    _load_builtins("models")
     if name not in _MODEL_REGISTRY:
         raise KeyError(f"Unknown model: {name}")
     return dict(_MODEL_REGISTRY[name])
@@ -145,6 +174,7 @@ def get_dataset_info(name: str) -> dict[str, Any]:
     Raises:
         KeyError: If the name is not registered.
     """
+    _load_builtins("datasets")
     if name not in _DATASET_REGISTRY:
         raise KeyError(f"Unknown dataset: {name}")
     entry = dict(_DATASET_REGISTRY[name])

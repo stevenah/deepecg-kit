@@ -121,6 +121,7 @@ def plot_ecg_signals(
     leads: list[str] | None = None,
     title: str = "ECG Signals",
     save_path: str | None = None,
+    unit: str | None = None,
 ) -> None:
     """Plot one ECG recording, one row per lead.
 
@@ -133,6 +134,9 @@ def plot_ecg_signals(
         leads: Name of each lead, in order
         title: Figure title
         save_path: Where to save the figure; None shows it instead
+        unit: Unit of the amplitude axis, such as "mV" for a raw recording.
+            The datasets return normalised signals, which have none, so none
+            is shown by default.
 
     Raises:
         ValueError: If data has more than two dimensions, or leads does not
@@ -163,7 +167,7 @@ def plot_ecg_signals(
 
     for i, ax in enumerate(axes):
         ax.plot(time, data[:, i])
-        ax.set_ylabel(f"{leads[i]} (mV)")
+        ax.set_ylabel(f"{leads[i]} ({unit})" if unit else leads[i])
         ax.grid(True, alpha=0.3)
 
     axes[-1].set_xlabel("Time (s)")

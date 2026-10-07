@@ -354,6 +354,12 @@ def probe_features_multilabel() -> tuple[
     return draw(PROBE_TRAIN_SAMPLES), draw(PROBE_TEST_SAMPLES)
 
 
+# On Apple Silicon PyTorch runs CPU convolutions through NNPACK from a batch of 16
+# up, which is many times slower there. The tests gain nothing from it.
+if hasattr(torch.backends, "nnpack"):
+    torch.backends.nnpack.set_flags(False)
+
+
 @pytest.fixture(autouse=True)
 def set_random_seed():
     """Set random seeds for reproducible tests."""

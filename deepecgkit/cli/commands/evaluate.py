@@ -18,6 +18,7 @@ from deepecgkit.cli._common import (
     require_dataset,
     require_model,
     resolve_model_name,
+    split_record_names,
 )
 from deepecgkit.cli.logger import CLILogger
 from deepecgkit.cli.run_dir import load_run_context, verify_split
@@ -321,6 +322,7 @@ def evaluate(
                 val_logits=fit_logits,
                 test_logits=logits,
                 n_bins=calibration_bins,
+                record_names=split_record_names(data_module, split),
             )
             if output_path is None:
                 logger.info("Pass -o DIR to save these metrics, the predictions and the plots.")

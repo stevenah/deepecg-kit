@@ -1222,3 +1222,142 @@ class TestPlotOutput:
 
         with pytest.raises(ValueError, match="two-class"):
             plot_roc_curve(y_true, y_prob)
+
+
+class _LinearClassifier(torch.nn.Module):
+    """The smallest model that can learn which way a signal is offset."""
+
+    def __init__(self, n_outputs: int = 2):
+        super().__init__()
+        self.head = torch.nn.Linear(EVALUATOR_SIGNAL_LENGTH, n_outputs)
+
+    def forward(self, x):
+        return self.head(x.flatten(1))
+
+
+@pytest.fixture
+def separable_arrays(binary_loader) -> tuple[np.ndarray, np.ndarray]:
+    """The binary signals and labels as arrays: positive mean exactly when the label is one."""
+    signals, labels = binary_loader.dataset.tensors
+    return signals.numpy(), labels.numpy()
+
+
+class TestMultiLabelMetrics:
+    """Test metrics over multi-hot targets, defined as the evaluate command reports them."""
+
+    def test_metrics_match_their_definitions(self, calibrated_multilabel_predictions):
+        from sklearn.metrics import precision_recall_fscore_support
+
+        y_true, y_prob, _ = calibrated_multilabel_predictions
+        predicted = (y_prob > 0.5).astype(int)
+        precision, recall, f1, _ = precision_recall_fscore_support(
+            y_true, predicted, average="macro", zero_division=0
+        )
+
+        metrics = calculate_classification_metrics(y_true, y_prob.astype(np.float32))
+
+        assert metrics["accuracy"] == pytest.approx((predicted == y_true).mean())
+        assert metrics["exact_match_accuracy"] == pytest.approx(
+            (predicted == y_true).all(axis=1).mean()
+        )
+        assert (metrics["precision"], metrics["recall"], metrics["f1"]) == pytest.approx(
+            (precision, recall, f1)
+        )
+        assert metrics["auc"] == pytest.approx(roc_auc_score(y_true, y_prob, average="macro"))
+
+    def test_mcc_is_reported_as_undefined(self, calibrated_multilabel_predictions):
+        y_true, y_prob, _ = calibrated_multilabel_predictions
+
+        metrics = calculate_classification_metrics(y_true, y_prob, metrics=["mcc"])
+
+        assert np.isnan(metrics["mcc"])
+
+    def test_the_evaluator_scores_a_multi_label_model(self):
+        """Multi-hot targets used to come back as NaN with a warning per metric."""
+        signals = torch.randn(EVALUATOR_SAMPLES, 1, EVALUATOR_SIGNAL_LENGTH)
+        targets = (torch.rand(EVALUATOR_SAMPLES, 3) > 0.5).float()
+        loader = DataLoader(TensorDataset(signals, targets), batch_size=16)
+        model = _LinearClassifier(n_outputs=3).eval()
+        with torch.no_grad():
+            predicted = (torch.sigmoid(model(signals)) > 0.5).float()
+        evaluator = ECGEvaluator(metrics=["accuracy", "exact_match_accuracy", "f1", "auc"])
+
+        results = evaluator.evaluate(model, loader)
+
+        assert results["accuracy"] == pytest.approx((predicted == targets).float().mean().item())
+        assert results["exact_match_accuracy"] == pytest.approx(
+            (predicted == targets).all(dim=1).float().mean().item()
+        )
+        assert 0.0 <= results["auc"] <= 1.0
+
+    def test_bootstrap_resamples_multi_label_rows(self, calibrated_multilabel_predictions):
+        y_true, y_prob, _ = calibrated_multilabel_predictions
+        evaluator = ECGEvaluator(metrics=["accuracy", "f1"])
+        point = evaluator.evaluate(y_prob, y_true)
+
+        intervals = evaluator.bootstrap_evaluate(y_prob, y_true, n_bootstrap=50)
+
+        for name in ("accuracy", "f1"):
+            assert intervals[name]["lower_ci"] <= point[name] <= intervals[name]["upper_ci"]
+
+
+class TestCrossValidation:
+    """Test that cross-validation fits a model per fold and scores it on the fold held out."""
+
+    def test_a_torch_model_is_trained_on_each_fold(self, separable_arrays):
+        """An untrained model used to be scored, which is chance on a learnable problem."""
+        evaluator = ECGEvaluator(metrics=["accuracy"], device="cpu")
+
+        scores = evaluator.cross_validate(
+            _LinearClassifier,
+            separable_arrays,
+            k_folds=4,
+            epochs=20,
+            batch_size=8,
+            train_config={"learning_rate": 0.01},
+        )
+
+        assert len(scores["accuracy"]) == 4
+        assert min(scores["accuracy"]) > 0.9
+
+    def test_a_scikit_learn_estimator_is_fitted_and_asked_for_probabilities(self, separable_arrays):
+        """An estimator is not callable, so calling it as a model used to fail."""
+        from sklearn.linear_model import LogisticRegression
+
+        signals, labels = separable_arrays
+        evaluator = ECGEvaluator(metrics=["accuracy", "auc"])
+
+        scores = evaluator.cross_validate(
+            LogisticRegression, (signals.reshape(len(signals), -1), labels), k_folds=4
+        )
+
+        assert scores["accuracy"] == [1.0] * 4
+        assert scores["auc"] == [1.0] * 4
+
+    def test_groups_are_never_split_between_training_and_scoring(self):
+        """Segments of one recording on both sides would flatter the score."""
+        groups = np.repeat(np.arange(8), 5)
+
+        for train_idx, val_idx in ECGEvaluator._folds(len(groups), 4, groups, seed=0):
+            assert not set(groups[train_idx]) & set(groups[val_idx])
+
+    def test_grouped_cross_validation_trains_and_scores(self, separable_arrays):
+        signals, labels = separable_arrays
+        groups = np.arange(len(labels)) // 4
+        evaluator = ECGEvaluator(metrics=["accuracy"], device="cpu")
+
+        scores = evaluator.cross_validate(
+            _LinearClassifier,
+            (signals, labels),
+            k_folds=4,
+            groups=groups,
+            epochs=20,
+            batch_size=8,
+            train_config={"learning_rate": 0.01},
+        )
+
+        assert min(scores["accuracy"]) > 0.9
+
+    def test_data_must_be_a_pair(self):
+        with pytest.raises(ValueError, match=r"\(X, y\)"):
+            ECGEvaluator(metrics=["accuracy"]).cross_validate(_LinearClassifier, np.zeros((4, 1)))

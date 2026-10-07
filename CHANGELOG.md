@@ -63,6 +63,27 @@ versions follow [SemVer](https://semver.org/).
 - `ECGDataModule.describe()` and `BaseECGDataset.get_preprocessing()`.
 - A progress bar over the batches of the current epoch on interactive
   terminals.
+- `ECGEvaluator.cross_validate` fits a fresh model for every fold: a torch
+  model is trained with `ECGTrainer`, a scikit-learn style estimator is fitted
+  and asked for `predict_proba`. `groups` keeps every recording on one side
+  of each fold.
+- Multi-label targets in `calculate_classification_metrics` and
+  `ECGEvaluator`, defined as `deepecg evaluate` reports them, with
+  `exact_match_accuracy` and `label_accuracy` as metric names.
+- `predictions.txt` ends with a `record` column naming the recording each
+  sample was cut from, when the dataset knows it.
+- `deepecg train --weights` takes a run directory or a checkpoint as well as
+  a weights file, and reports how many weight tensors were loaded and which
+  were left as initialised. `load_matching_weights` does the same in Python.
+- `UnifiedAFDataset(skip_unavailable=True)` builds the dataset from the
+  sources that load.
+- `plot_ecg_signals` and `plot_attribution` take a `unit` for the amplitude
+  axis.
+- `scripts/preflight_experiments.py --device ... --train-step` runs one
+  training step per pairing, to find the ones that do not fit in GPU memory
+  before a sweep does.
+- Tests that run every script in `examples/` and the Python snippets of the
+  documentation on a synthetic dataset.
 
 ### Changed
 - **Datasets are used at their own sampling rate.** `ECGDataModule` no longer
@@ -100,6 +121,27 @@ versions follow [SemVer](https://semver.org/).
 - `mitbih-afdb` and `ltafdb` are registered with one input channel, which is
   what their default configuration yields.
 - Python 3.10+ required (the package already used 3.10-only syntax at runtime).
+- Minimum dependency versions are now ones the test suite passes on:
+  PyTorch 2.1, numpy 1.22, scipy 1.8, pandas 1.4, scikit-learn 1.1,
+  matplotlib 3.5, wfdb 4.0, seaborn 0.11.2. The earlier ones (PyTorch 1.9,
+  numpy 1.20, ...) could not be installed on Python 3.10, and the package
+  did not run on them.
+- `import deepecgkit` no longer imports PyTorch and the rest of the
+  scientific stack: public names, and `deepecgkit.evaluation`'s, are imported
+  when first used, and the registries import the built-in models and datasets
+  on first lookup. `deepecg --version` answers at once, and each command
+  imports only its own module, so `deepecg aggregate` and `deepecg rank`
+  start without PyTorch. `deepecgkit.cli.commands` no longer re-exports the
+  command functions; they are in `deepecgkit.cli` and in their own modules.
+- Checkpoints are read in PyTorch's restricted mode, which does not run code
+  a file may carry. Everything `ECGTrainer` writes loads that way; a file
+  that needs a full unpickle is refused unless `DEEPECGKIT_TRUST_CHECKPOINTS=1`.
+- A source of `unified-af` that cannot be loaded is an error. It used to be
+  skipped with a warning, leaving a smaller dataset under the same name.
+- `ECGDataModule.setup()` loads and splits on its first call only; the
+  trainer's later calls for each stage return at once.
+- The amplitude axis of `plot_ecg_signals` and `plot_attribution` no longer
+  says mV, which the normalised signals they are normally given are not in.
 - Dropped unused dependencies `pyEDFlib` and `PyWavelets`.
 - Library diagnostics go through `logging` under the `deepecgkit.*`
   hierarchy; the CLI's `-v`/`-q` now govern all output. Enable
@@ -153,6 +195,16 @@ versions follow [SemVer](https://semver.org/).
   holding the three source folders, and a forced download re-fetches the
   sources. With it, two tests no longer depend on which datasets the machine
   running them has downloaded.
+- `deepecg train --weights` given a checkpoint from an earlier run, as the
+  model zoo page shows, loaded nothing and reported "Weights loaded
+  successfully". Weights that fit are now loaded and counted, a head of
+  another size is left as initialised and named, and weights that fit
+  nothing are an error.
+- `transformer`, `dualnet` and `medformer` given a signal past their length
+  limit failed with a tensor-size error; they now say what the limit is.
+- `ECGDataModule` could not build a loader on PyTorch before 2.0.
+- The data module's log line for the training split was headed
+  "Dataset size".
 - CI: the test matrix ran Python 3.10 in every job, because uv follows
   `.python-version` over the interpreter the job sets up. Each job now sets
   `UV_PYTHON`.
