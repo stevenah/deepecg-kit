@@ -76,6 +76,8 @@ class RunRecord(NamedTuple):
     n_test: int | None
     n_test_groups: int | None
     mtime: float
+    returncode: int | None = None
+    fingerprint: str | None = None
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -156,6 +158,12 @@ def read_run_metrics(run_dir: Path) -> RunRecord | None:
     seed = metadata.get("seed")
     if not isinstance(seed, int) or isinstance(seed, bool):
         seed = _seed_from_directory(run_dir)
+    returncode = metadata.get("returncode")
+    if not isinstance(returncode, int) or isinstance(returncode, bool):
+        returncode = None
+    fingerprint = metadata.get("params_fingerprint")
+    if not isinstance(fingerprint, str):
+        fingerprint = None
 
     split_info = _read_json(run_dir / SPLIT_INFO_FILENAME) or {}
 
@@ -176,6 +184,8 @@ def read_run_metrics(run_dir: Path) -> RunRecord | None:
         n_test=_size("n_test"),
         n_test_groups=_size("n_test_groups"),
         mtime=metrics_path.stat().st_mtime,
+        returncode=returncode,
+        fingerprint=fingerprint,
     )
 
 
@@ -184,8 +194,20 @@ def discover_runs(
     recursive: bool = False,
     include_legacy: bool = False,
     on_duplicate: str = ON_DUPLICATE_NEWEST,
+    include_failed: bool = False,
 ) -> tuple[list[RunRecord], dict[str, list[str]]]:
     """Collect usable runs beneath the given roots.
+
+    A run whose ``run_metadata.json`` records a non-zero ``returncode`` (the
+    batch runner writes the training subprocess's exit status there) failed
+    after writing its metrics and is set aside under the "failed" diagnostic
+    unless ``include_failed`` is given. Runs without a recorded status are
+    kept.
+
+    Two runs count as duplicates when they share dataset, model, seed and, when
+    recorded, the batch runner's ``params_fingerprint``; runs of one pairing
+    and seed with different hyperparameters are therefore kept apart rather
+    than resolved by modification time.
 
     Args:
         roots: Directories to search.
@@ -195,6 +217,7 @@ def discover_runs(
             pooled with seeded runs.
         on_duplicate: One of "newest", "error" or "all", controlling what
             happens when the same model, dataset and seed appear twice.
+        include_failed: Keep runs whose recorded exit status is non-zero.
 
     Returns:
         The records and a diagnostics mapping from reason to directory names.
@@ -206,7 +229,12 @@ def discover_runs(
     if on_duplicate not in (ON_DUPLICATE_NEWEST, ON_DUPLICATE_ERROR, ON_DUPLICATE_ALL):
         raise ValueError(f"Unknown on_duplicate: {on_duplicate}")
 
-    diagnostics: dict[str, list[str]] = {"unreadable": [], "no_seed": [], "duplicate": []}
+    diagnostics: dict[str, list[str]] = {
+        "unreadable": [],
+        "no_seed": [],
+        "duplicate": [],
+        "failed": [],
+    }
     candidates: list[Path] = []
     for root in roots:
         root_path = Path(root)
@@ -221,6 +249,10 @@ def discover_runs(
         if record is None:
             diagnostics["unreadable"].append(str(run_dir))
             continue
+        if record.returncode not in (None, 0):
+            diagnostics["failed"].append(f"{run_dir} (returncode {record.returncode})")
+            if not include_failed:
+                continue
         if record.seed is None:
             diagnostics["no_seed"].append(str(run_dir))
             if not include_legacy:
@@ -231,23 +263,25 @@ def discover_runs(
     if on_duplicate == ON_DUPLICATE_ALL:
         return records, diagnostics
 
-    kept: dict[tuple[str, str, int], RunRecord] = {}
+    kept: dict[tuple[str, str, int, str | None], RunRecord] = {}
     for record in records:
-        key = (record.dataset, record.model, int(record.seed))
+        key = (record.dataset, record.model, int(record.seed), record.fingerprint)
         previous = kept.get(key)
         if previous is None:
             kept[key] = record
             continue
-        diagnostics["duplicate"].append(str(record.run_dir))
         if on_duplicate == ON_DUPLICATE_ERROR:
             raise ValueError(
                 f"Duplicate run for {record.model} on {record.dataset} seed {record.seed}: "
                 f"{previous.run_dir} and {record.run_dir}"
             )
-        if record.mtime > previous.mtime:
-            kept[key] = record
+        newer, older = (record, previous) if record.mtime > previous.mtime else (previous, record)
+        diagnostics["duplicate"].append(f"{older.run_dir} (dropped; kept {newer.run_dir})")
+        kept[key] = newer
 
-    ordered = sorted(kept.values(), key=lambda r: (r.dataset, r.model, int(r.seed)))
+    ordered = sorted(
+        kept.values(), key=lambda r: (r.dataset, r.model, int(r.seed), r.fingerprint or "")
+    )
     return ordered, diagnostics
 
 

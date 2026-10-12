@@ -1055,8 +1055,20 @@ class TestExtractFeaturesCommand:
         assert exit_code == 1
         assert "Input file not found" in capsys.readouterr().err
 
-    def test_weights_model_mismatch(self, capsys, temp_dir):
+    def test_weights_model_mismatch(self, capsys, temp_dir, monkeypatch):
         """Pretrained weights belonging to another model are rejected early."""
+        from deepecgkit.utils import weights as weights_module
+
+        monkeypatch.setitem(
+            weights_module.WEIGHTS_REGISTRY,
+            "kanres-af-30s",
+            {
+                "url": "https://github.com/your-org/x/kanres-af-30s.pt",
+                "model_class": "KanResWideX",
+                "model_kwargs": {"input_channels": 1, "output_size": 4},
+                "description": "test entry",
+            },
+        )
         input_file = temp_dir / "in.npy"
         np.save(str(input_file), np.random.randn(1, 1, 3000))
 
@@ -1533,7 +1545,7 @@ class TestRunDirContract:
         assert payload["model"] == "kanres"
         assert payload["seed"] == 7
         assert payload["returncode"] == 0
-        assert payload["schema_version"] == 2
+        assert payload["schema_version"] == 3
 
     def test_load_run_context_from_metadata(self, temp_dir):
         from deepecgkit.cli.run_dir import load_run_context, write_run_metadata
@@ -1915,7 +1927,7 @@ class TestTrainedRunWorkflow:
     def test_metadata_records_the_values_that_were_in_effect(self, trained_run):
         metadata = json.loads((trained_run["run"] / "run_metadata.json").read_text())
 
-        assert metadata["schema_version"] == 2
+        assert metadata["schema_version"] == 3
         assert metadata["returncode"] == 0
         assert metadata["sampling_rate"] == 300
         assert metadata["normalization"] == "zscore"

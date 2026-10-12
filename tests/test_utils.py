@@ -470,13 +470,30 @@ class TestDataHome:
 class TestPretrainedWeightListing:
     """Only weights that can be downloaded are listed as available."""
 
-    def test_placeholder_entries_are_not_listed(self):
+    def test_no_weights_are_advertised(self):
+        """The package publishes no weights, so nothing is listed as available."""
         from deepecgkit.utils.weights import is_published, list_pretrained_weights
 
-        assert not is_published("kanres-af-30s")
+        assert list_pretrained_weights() == {}
+        assert list_pretrained_weights(include_unpublished=True) == {}
         assert not is_published("no-such-weights")
-        assert "kanres-af-30s" not in list_pretrained_weights()
-        assert "kanres-af-30s" in list_pretrained_weights(include_unpublished=True)
+
+    def test_placeholder_entries_would_not_be_listed(self, monkeypatch):
+        """A registry entry with a placeholder URL is unpublished, not downloadable."""
+        from deepecgkit.utils import weights as weights_module
+
+        monkeypatch.setitem(
+            weights_module.WEIGHTS_REGISTRY,
+            "demo-weights",
+            {
+                "url": "https://github.com/your-org/x/demo.pt",
+                "model_class": "KanResWideX",
+                "description": "test entry",
+            },
+        )
+        assert not weights_module.is_published("demo-weights")
+        assert "demo-weights" not in weights_module.list_pretrained_weights()
+        assert "demo-weights" in weights_module.list_pretrained_weights(include_unpublished=True)
 
 
 class TestDownloadLock:

@@ -185,7 +185,7 @@ def aggregate(
         if emit_latex:
             tables = {
                 f"results_{dataset.replace('-', '_')}": results_table(
-                    aggregated, dataset, metrics=metrics
+                    aggregated, dataset, metrics=metrics, confidence_level=confidence_level
                 )
                 for dataset in sorted(aggregated["dataset"].unique())
             }
@@ -335,7 +335,12 @@ def rank(
                 "kendall_tau": tau_table(taus),
             }
             if not flips.empty:
-                tables["flip_survival"] = flip_survival_table(flips, metric=metric)
+                tables["flip_survival"] = flip_survival_table(
+                    flips,
+                    metric=metric,
+                    confidence_level=confidence_level,
+                    correction=correction,
+                )
             written.extend(Path(path).name for path in write_tables(tables, target))
 
         print(f"\nWrote {len(written)} file(s) to {target}:")

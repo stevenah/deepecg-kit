@@ -1,6 +1,6 @@
 # Model Zoo
 
-DeepECG-Kit includes 21 model architectures for ECG signal classification. All models follow a consistent interface:
+DeepECG-Kit includes 26 model architectures for ECG signal classification. All models follow a consistent interface:
 
 ```python
 model = ModelClass(input_channels=1, output_size=4)
@@ -31,6 +31,11 @@ model = ModelClass(input_channels=1, output_size=4)
 | `medformer` | `Medformer` | Transformer | Multi-granularity patching Transformer (NeurIPS 2024) |
 | `dualnet` | `ECGDualNet` | Hybrid | Dual-path CNN-LSTM + Transformer |
 | `mamba` | `Mamba1D` | State Space | Bidirectional Mamba with linear complexity |
+| `mlp-wang` | `MLPWang` | MLP | Multilayer perceptron (Wang et al.) on the time-pooled, flattened signal |
+| `rocket` | `ROCKET` | Random kernels | Frozen random convolution kernels (PPV and max) with a linear head |
+| `resnet-hannun` | `ResNetHannun` | Residual CNN | 34-layer pre-activation ResNet (Hannun et al. 2019) |
+| `xresnet1d101` | `XResNet1d101Benchmark` | Residual CNN | XResNet1d-101 of the PTB-XL benchmark (bottleneck, [3, 4, 23, 3]) |
+| `spectrogram-cnn` | `SpectrogramCNN` | Time-frequency CNN | 2-D CNN on per-lead log-magnitude STFT spectrograms |
 
 ## Choosing a Model
 
@@ -38,6 +43,12 @@ model = ModelClass(input_channels=1, output_size=4)
 
 - `simple-cnn` — Minimal parameters, fast training
 - `kanres` — Good accuracy/speed trade-off
+
+**Non-deep and classical baselines:**
+
+- `rocket` — Random convolutional features, only the linear head is trained
+- `mlp-wang` — Fully connected baseline of Wang et al.
+- `spectrogram-cnn` — Time-frequency input instead of the raw signal
 
 **Long sequences:**
 
@@ -48,6 +59,8 @@ model = ModelClass(input_channels=1, output_size=4)
 
 - `deep-res-cnn` — 2D convolutions across leads
 - `xresnet1d-benchmark` — Designed for the PTB-XL benchmark
+- `xresnet1d101` — The PTB-XL benchmark's deep model
+- `resnet-hannun` — The 34-layer rhythm classifier of Hannun et al.
 
 **State-of-the-art research:**
 

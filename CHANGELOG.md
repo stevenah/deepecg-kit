@@ -15,6 +15,45 @@ versions follow [SemVer](https://semver.org/).
   analysis, now first-class commands: `deepecg aggregate` and `deepecg rank`
   (the `scripts/` entry points remain as shims).
 - `mamba` and `medformer` architectures.
+- `mlp-wang`, `rocket`, `resnet-hannun`, `xresnet1d101` and `spectrogram-cnn`
+  architectures (two non-deep baselines, two reference ECG networks and a
+  time-frequency CNN); `xresnet1d-benchmark` gains a `block_channels` option.
+- Display names for every registered architecture in the LaTeX emitters.
+- `run_metadata.json` schema 3 records the package's git commit and whether the
+  tree was dirty, the host, platform, Python and library versions, the resolved
+  device, the dataset's download URL and a name-and-size fingerprint of the
+  dataset files (`deepecgkit.utils.provenance`).
+- `deepecg aggregate`/`rank` set aside runs whose recorded exit status is
+  non-zero (diagnostic "failed"; `include_failed` keeps them), and treat two
+  runs as duplicates only when their batch-runner `params_fingerprint` also
+  matches; the duplicate diagnostic names both the dropped and the kept run.
+- `all_flip_tests(fdr_family=...)`: the Benjamini-Yekutieli family is every
+  testable comparison by default (`"testable"`), so its size no longer depends
+  on the verdicts; `"significant"` restores the previous family. Every testable
+  flip test now carries its intersection-union p-value, and the frame records
+  the family and its size.
+- `evaluate_rank_claim` checks the direction of each component: a supported
+  reversal opposite to the claim is relabelled contradicted, and
+  `n_supported_in_direction` is reported.
+- Ranking on a calibration error (`ece`, `brier`, ...) now ranks lower values
+  as better; `LOWER_IS_BETTER` lists the metrics that are negated.
+- `classification_metrics.csv` records `n_test_classes` and
+  `n_predicted_classes`, so a run whose test partition lacked a class can be
+  flagged when runs are aggregated.
+- Linear probes: macro AUROC is the mean of one-versus-rest AUROCs over the
+  classes present in the held-out split (a two-class held-out split of a
+  four-class task was scored as a binary problem on one column); probability
+  columns are placed at their class indices when the training split lacked a
+  class; the solver's convergence and the number of held-out classes are
+  recorded in the result's note instead of being silenced.
+- Grouped splits warn when stratification is dropped, at each of the three
+  places where it used to fall back silently.
+- The per-run reliability plot uses the same bin count as the recorded
+  calibration metrics (15 by default) instead of ten.
+- LaTeX emitters: captions state the confidence level and the standard-error
+  correction that were used, the grouped split as it is, the verdict
+  definitions and the FDR family; the Kendall note gives the smallest
+  attainable p for the actual model count instead of a fixed four-model floor.
 - Typed package: `py.typed` shipped, all functions annotated.
 - Run-directory contract: `deepecg train` writes `run_metadata.json`, its
   default output directory gains a `-seed{N}` suffix, and the analysis
@@ -164,6 +203,9 @@ versions follow [SemVer](https://semver.org/).
   irreproducible and frozen into the cache.
 
 ### Fixed
+- The pretrained-weight registry no longer advertises two placeholder entries
+  (`kanres-af-30s`, `afmodel-30s`) whose URLs never existed; it is empty until
+  weights are published.
 - **LTAFDB was labelled almost entirely Normal.** Its annotation files hold
   an annotation per heartbeat between the rhythm changes, and every beat
   ended the rhythm episode before it, so an AF episode lasted one beat: none

@@ -24,20 +24,26 @@ from deepecgkit.models.kanres_wide_x import KanResWideX
 from deepecgkit.models.lstm_model import LSTMECG
 from deepecgkit.models.mamba1d import Mamba1D
 from deepecgkit.models.medformer import Medformer
+from deepecgkit.models.mlp_wang import MLPWang
 from deepecgkit.models.pretrained import PretrainedMixin, from_pretrained, model_name_for_weights
 from deepecgkit.models.resnet1d import ResNet1D
 from deepecgkit.models.resnet1d_wang import ResNetWang
+from deepecgkit.models.resnet_hannun import ResNetHannun
+from deepecgkit.models.rocket import ROCKET
 from deepecgkit.models.se_resnet1d import SEResNet1D
 from deepecgkit.models.simple_cnn import SimpleCNN
+from deepecgkit.models.spectrogram_cnn import SpectrogramCNN
 from deepecgkit.models.tcn import TCN
 from deepecgkit.models.transformer_ecg import TransformerECG
 from deepecgkit.models.xresnet1d import XResNet1D
+from deepecgkit.models.xresnet1d101_benchmark import XResNet1d101Benchmark
 from deepecgkit.models.xresnet1d_benchmark import XResNet1dBenchmark
 
 __all__ = [
     "CRNN",
     "GRUECG",
     "LSTMECG",
+    "ROCKET",
     "TCN",
     "AFModel",
     "ConvNeXtV21D",
@@ -48,15 +54,19 @@ __all__ = [
     "InceptionTime1D",
     "KanResDeepX",
     "KanResWideX",
+    "MLPWang",
     "Mamba1D",
     "Medformer",
     "PretrainedMixin",
     "ResNet1D",
+    "ResNetHannun",
     "ResNetWang",
     "SEResNet1D",
     "SimpleCNN",
+    "SpectrogramCNN",
     "TransformerECG",
     "XResNet1D",
+    "XResNet1d101Benchmark",
     "XResNet1dBenchmark",
     "build_model",
     "build_model_from_checkpoint",

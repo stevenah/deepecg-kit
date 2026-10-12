@@ -2,7 +2,7 @@
 
 A deep learning library for ECG analysis and arrhythmia classification.
 
-DeepECG-Kit provides **21 model architectures**, **5 ECG datasets**, and a complete training/evaluation pipeline — all without framework dependencies beyond PyTorch.
+DeepECG-Kit provides **26 model architectures**, **5 ECG datasets**, and a complete training/evaluation pipeline — all without framework dependencies beyond PyTorch.
 
 ## Quick Install
 
@@ -43,7 +43,7 @@ The first run downloads the dataset (about 100 MB) into `~/.deepecgkit/datasets`
 
 ## Features
 
-- **21 model architectures** — CNNs, ResNets, RNNs, Transformers, Mamba, and hybrids
+- **26 model architectures** — CNNs, ResNets, RNNs, Transformers, Mamba, and hybrids
 - **5 ECG datasets** — PhysioNet 2017, PTB-XL, MIT-BIH AFDB, LTAFDB, and unified AF
 - **Pure PyTorch** — No framework dependencies beyond PyTorch itself
 - **CLI & Python API** — Train, evaluate, and predict from the command line or code
@@ -56,6 +56,6 @@ The first run downloads the dataset (about 100 MB) into `~/.deepecgkit/datasets`
 
 - [Installation](getting-started/installation.md) — Detailed installation instructions
 - [Quick Start Guide](getting-started/quickstart.md) — Step-by-step walkthrough
-- [Model Zoo](user-guide/model-zoo.md) — Browse all 21 model architectures
+- [Model Zoo](user-guide/model-zoo.md) — Browse all 26 model architectures
 - [CLI Usage](user-guide/cli.md) — Command-line reference
 - [API Reference](api/index.md) — Full API documentation

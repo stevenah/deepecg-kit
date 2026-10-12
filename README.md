@@ -1,7 +1,7 @@
 # DeepECG-Kit
 
 A deep learning library for ECG analysis and arrhythmia classification. Provides a CLI for
-training, evaluation, inference, feature extraction, and explainability across 21 model
+training, evaluation, inference, feature extraction, and explainability across 26 model
 architectures and 5 ECG datasets.
 
 **Documentation:** https://stevenah.github.io/deepecg-kit/
@@ -29,7 +29,7 @@ deepecg evaluate --checkpoint runs/<run> -d af-classification
 deepecg predict --checkpoint runs/<run> --input ecg.npy --sampling-rate 300
 deepecg extract-features --checkpoint runs/<run> -d af-classification -o features.npz
 deepecg explain --checkpoint runs/<run> --input ecg.npy -o explanations/
-deepecg list-models                                  # all 21 architectures
+deepecg list-models                                  # all 26 architectures
 deepecg list-datasets                                # sizes, signal shape, local status
 deepecg info -m kanres
 ```

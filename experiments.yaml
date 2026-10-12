@@ -3,7 +3,7 @@
 # num_workers, accelerator, devices, early_stopping_patience, seed).
 #
 # THE FULL GRID: every registered architecture on every registered dataset.
-# 20 models x 5 datasets = 100 pairings x 5 seeds = 500 runs.
+# 24 models x 5 datasets = 120 pairings x 5 seeds = 600 runs.
 #
 # Why the whole grid and not just the gaps: the currently published snapshot
 # (deepecg-kit-bench, 2026-cbms-preliminary) was built with include_legacy and
@@ -13,9 +13,12 @@
 # "preliminary, one run per pair" into a seeded one that can be declared
 # current. `--resume` makes stopping and restarting cheap.
 #
+# mamba is ABSENT DELIBERATELY: it was dropped from the journal benchmark.
+#
 # afmodel is ABSENT DELIBERATELY. AFModel(recording_length=30) requires at
-# least 7971 samples per lead, and every dataset here emits 3000 (300 Hz) or
-# 5000 (PTB-XL, 500 Hz), so all five pairings raise ValueError at build time.
+# least 7971 samples per lead, and the CLI resamples every dataset to 500 Hz,
+# so each emits 5000 samples per lead and all five pairings raise ValueError at
+# build time.
 # It is not a missing entry; it is structurally incompatible with a 10-second
 # segmentation. Verified by building all 21 x 5 combinations -- see
 # scripts/preflight_experiments.py. Give it 30-second segments, or a smaller
@@ -62,9 +65,6 @@ experiments:
   - model: lstm
     dataset: ptbxl
     multi_label: true
-  - model: mamba
-    dataset: ptbxl
-    multi_label: true
   - model: medformer
     dataset: ptbxl
     multi_label: true
@@ -90,12 +90,27 @@ experiments:
     dataset: ptbxl
     multi_label: true
   - model: xresnet1d-benchmark
+    dataset: ptbxl
+    multi_label: true
+  - model: mlp-wang
+    dataset: ptbxl
+    multi_label: true
+  - model: resnet-hannun
+    dataset: ptbxl
+    multi_label: true
+  - model: rocket
+    dataset: ptbxl
+    multi_label: true
+  - model: spectrogram-cnn
+    dataset: ptbxl
+    multi_label: true
+  - model: xresnet1d101
     dataset: ptbxl
     multi_label: true
 
   # --------------------------------------------------------------------------
   # PhysioNet/CinC 2017: single-lead, 4 classes (normal, AF, other, noisy).
-  # Single-label. 300 Hz x 10 s = 3000 samples.
+  # Single-label. Resampled to 500 Hz x 10 s = 5000 samples.
   # --------------------------------------------------------------------------
   - model: convnext-v2
     dataset: af-classification
@@ -117,8 +132,6 @@ experiments:
     dataset: af-classification
   - model: lstm
     dataset: af-classification
-  - model: mamba
-    dataset: af-classification
   - model: medformer
     dataset: af-classification
   - model: resnet
@@ -136,11 +149,21 @@ experiments:
   - model: xresnet
     dataset: af-classification
   - model: xresnet1d-benchmark
+    dataset: af-classification
+  - model: mlp-wang
+    dataset: af-classification
+  - model: resnet-hannun
+    dataset: af-classification
+  - model: rocket
+    dataset: af-classification
+  - model: spectrogram-cnn
+    dataset: af-classification
+  - model: xresnet1d101
     dataset: af-classification
 
   # --------------------------------------------------------------------------
-  # MIT-BIH AFDB: 2-lead, AF vs non-AF.
-  # Binary. 300 Hz x 10 s = 3000 samples per lead.
+  # MIT-BIH AFDB: first lead only, AF vs non-AF.
+  # Binary. Resampled to 500 Hz x 10 s = 5000 samples.
   # --------------------------------------------------------------------------
   - model: convnext-v2
     dataset: mitbih-afdb
@@ -172,9 +195,6 @@ experiments:
   - model: lstm
     dataset: mitbih-afdb
     binary_classification: true
-  - model: mamba
-    dataset: mitbih-afdb
-    binary_classification: true
   - model: medformer
     dataset: mitbih-afdb
     binary_classification: true
@@ -200,12 +220,27 @@ experiments:
     dataset: mitbih-afdb
     binary_classification: true
   - model: xresnet1d-benchmark
+    dataset: mitbih-afdb
+    binary_classification: true
+  - model: mlp-wang
+    dataset: mitbih-afdb
+    binary_classification: true
+  - model: resnet-hannun
+    dataset: mitbih-afdb
+    binary_classification: true
+  - model: rocket
+    dataset: mitbih-afdb
+    binary_classification: true
+  - model: spectrogram-cnn
+    dataset: mitbih-afdb
+    binary_classification: true
+  - model: xresnet1d101
     dataset: mitbih-afdb
     binary_classification: true
 
   # --------------------------------------------------------------------------
-  # LTAFDB: 2-lead, AF vs non-AF.
-  # Binary. 300 Hz x 10 s = 3000 samples per lead.
+  # LTAFDB: first lead only, AF vs non-AF.
+  # Binary. Resampled to 500 Hz x 10 s = 5000 samples.
   # --------------------------------------------------------------------------
   - model: convnext-v2
     dataset: ltafdb
@@ -237,9 +272,6 @@ experiments:
   - model: lstm
     dataset: ltafdb
     binary_classification: true
-  - model: mamba
-    dataset: ltafdb
-    binary_classification: true
   - model: medformer
     dataset: ltafdb
     binary_classification: true
@@ -265,12 +297,27 @@ experiments:
     dataset: ltafdb
     binary_classification: true
   - model: xresnet1d-benchmark
+    dataset: ltafdb
+    binary_classification: true
+  - model: mlp-wang
+    dataset: ltafdb
+    binary_classification: true
+  - model: resnet-hannun
+    dataset: ltafdb
+    binary_classification: true
+  - model: rocket
+    dataset: ltafdb
+    binary_classification: true
+  - model: spectrogram-cnn
+    dataset: ltafdb
+    binary_classification: true
+  - model: xresnet1d101
     dataset: ltafdb
     binary_classification: true
 
   # --------------------------------------------------------------------------
   # Unified AF: combined corpus over PhysioNet 2017, MIT-BIH AFDB and LTAFDB.
-  # Single-label, 4 classes. 300 Hz x 10 s = 3000 samples.
+  # Single-label, 4 classes. Resampled to 500 Hz x 10 s = 5000 samples.
   # --------------------------------------------------------------------------
   - model: convnext-v2
     dataset: unified-af
@@ -292,8 +339,6 @@ experiments:
     dataset: unified-af
   - model: lstm
     dataset: unified-af
-  - model: mamba
-    dataset: unified-af
   - model: medformer
     dataset: unified-af
   - model: resnet
@@ -311,4 +356,14 @@ experiments:
   - model: xresnet
     dataset: unified-af
   - model: xresnet1d-benchmark
+    dataset: unified-af
+  - model: mlp-wang
+    dataset: unified-af
+  - model: resnet-hannun
+    dataset: unified-af
+  - model: rocket
+    dataset: unified-af
+  - model: spectrogram-cnn
+    dataset: unified-af
+  - model: xresnet1d101
     dataset: unified-af
