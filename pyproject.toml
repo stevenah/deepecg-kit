@@ -10,7 +10,7 @@ deepecgkit = ["py.typed"]
 
 [project]
 name = "deepecgkit"
-version = "0.2.0"
+version = "0.3.0"
 authors = [
     { name = "Steven", email = "steven@simula.no" },
 ]
