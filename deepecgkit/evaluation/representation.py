@@ -28,6 +28,7 @@ import numpy as np
 import pandas as pd
 import torch
 from sklearn.decomposition import PCA
+from sklearn.exceptions import ConvergenceWarning
 from sklearn.linear_model import LogisticRegression
 from sklearn.manifold import TSNE
 from sklearn.metrics import balanced_accuracy_score, f1_score, roc_auc_score
@@ -286,20 +287,32 @@ def _multilabel_metrics(y_true: np.ndarray, y_prob: np.ndarray) -> dict[str, flo
 def _single_label_metrics(y_true: np.ndarray, y_prob: np.ndarray) -> dict[str, float]:
     """Score a class-index target against a probability matrix.
 
+    The macro AUROC is the mean of one-versus-rest AUROCs over the classes
+    present in the held-out labels, each computed from that class's own
+    probability column. The definition is the same whether two or more
+    classes are present, so a four-class target whose held-out split happens
+    to hold two classes is scored like any other, not as a binary problem on
+    the second column.
+
     Args:
         y_true: Class indices of shape (n_samples,)
-        y_prob: Probabilities of shape (n_samples, n_classes)
+        y_prob: Probabilities of shape (n_samples, n_classes), one column per
+            class index
 
     Returns:
         Every metric in PROBE_METRICS, with NaN where one was not computable.
     """
     base = calculate_classification_metrics(
-        y_true, y_prob, metrics=["accuracy", "f1", "auc"], average="macro"
+        y_true, y_prob, metrics=["accuracy", "f1"], average="macro"
     )
     metrics = _nan_metrics()
     metrics[METRIC_ACCURACY] = float(base.get("accuracy", float("nan")))
     metrics[METRIC_F1_MACRO] = float(base.get("f1", float("nan")))
-    metrics[METRIC_AUROC_MACRO] = float(base.get("auc", float("nan")))
+    present = [int(c) for c in np.unique(y_true) if int(c) < y_prob.shape[1]]
+    if len(present) >= 2:
+        metrics[METRIC_AUROC_MACRO] = float(
+            np.mean([roc_auc_score(y_true == c, y_prob[:, c]) for c in present])
+        )
     try:
         metrics[METRIC_BALANCED_ACCURACY] = float(
             balanced_accuracy_score(y_true, np.argmax(y_prob, axis=1))
@@ -325,12 +338,22 @@ def _probe_metrics(y_true: np.ndarray, y_prob: np.ndarray, task: str) -> dict[st
     return _single_label_metrics(y_true, y_prob)
 
 
-def _probe_probabilities(pipeline: Pipeline, features: np.ndarray) -> np.ndarray:
+def _probe_probabilities(
+    pipeline: Pipeline, features: np.ndarray, n_classes: int | None = None
+) -> np.ndarray:
     """Obtain probabilities from a fitted probe in a shape the scorers accept.
+
+    A logistic regression orders its probability columns by the classes it
+    saw in training. When the training split lacked a class, the columns are
+    placed at their class indices in a matrix of ``n_classes`` columns, with
+    zero probability for the unseen classes, so that an argmax is a class
+    index rather than a position among the seen classes.
 
     Args:
         pipeline: A fitted probe pipeline
         features: Embeddings of shape (n_samples, feature_dim)
+        n_classes: Total number of class indices for a single-label target;
+            None for a multi-label target or when the columns are complete
 
     Returns:
         Probabilities of shape (n_samples, n_classes) or (n_samples, n_labels).
@@ -338,7 +361,24 @@ def _probe_probabilities(pipeline: Pipeline, features: np.ndarray) -> np.ndarray
     probabilities = np.asarray(pipeline.predict_proba(features))
     if probabilities.ndim == 1:
         probabilities = np.column_stack([1.0 - probabilities, probabilities])
+    estimator = pipeline.named_steps.get("probe")
+    classes = getattr(estimator, "classes_", None)
+    if n_classes is not None and classes is not None and probabilities.shape[1] < n_classes:
+        full = np.zeros((probabilities.shape[0], n_classes), dtype=probabilities.dtype)
+        full[:, np.asarray(classes, dtype=int)] = probabilities
+        probabilities = full
     return probabilities
+
+
+def _probe_converged(pipeline: Pipeline, max_iter: int) -> bool:
+    """Whether every solver of the fitted probe stopped before its iteration ceiling."""
+    estimator = pipeline.named_steps.get("probe")
+    estimators = getattr(estimator, "estimators_", None) or [estimator]
+    for member in estimators:
+        iterations = np.asarray(getattr(member, "n_iter_", 0)).ravel()
+        if iterations.size and int(iterations.max()) >= max_iter:
+            return False
+    return True
 
 
 def linear_probe(
@@ -403,19 +443,32 @@ def linear_probe(
     )
 
     pipeline = build_probe(multilabel=multilabel, **probe_kwargs)
+    n_classes = None
+    if not multilabel:
+        n_classes = int(max(np.max(train_labels), np.max(test_labels))) + 1
     try:
         with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
+            # The solver's own convergence warning is replaced by the note below.
+            warnings.simplefilter("ignore", category=ConvergenceWarning)
             pipeline.fit(train_features, train_labels)
-            probabilities = _probe_probabilities(pipeline, test_features)
+            probabilities = _probe_probabilities(pipeline, test_features, n_classes)
     except ValueError as error:
         result.note = f"probe could not be fitted: {error}"
         return result
 
     result.task = resolve_task_shape(test_labels, probabilities)
     result.metrics = _probe_metrics(test_labels, probabilities, result.task)
+    notes: list[str] = []
     if not np.isfinite(result.score):
-        result.note = f"{metric} is undefined for this held-out split"
+        notes.append(f"{metric} is undefined for this held-out split")
+    max_iter = int(probe_kwargs.get("max_iter", 1000))
+    if not _probe_converged(pipeline, max_iter):
+        notes.append(f"probe did not converge within {max_iter} iterations")
+    if not multilabel:
+        present = len(np.unique(test_labels))
+        if present < n_classes:
+            notes.append(f"held-out split holds {present} of {n_classes} classes")
+    result.note = "; ".join(notes) if notes else None
     return result
 
 

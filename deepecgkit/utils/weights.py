@@ -8,20 +8,11 @@ from deepecgkit.utils.paths import DATA_HOME_ENV, get_data_home
 
 _PLACEHOLDER_URL_MARKERS = ("your-org",)
 
-WEIGHTS_REGISTRY: dict[str, dict] = {
-    "kanres-af-30s": {
-        "url": "https://github.com/your-org/deepecg-kit/releases/download/v1.0.0/kanres-af-30s.pt",
-        "model_class": "KanResWideX",
-        "model_kwargs": {"input_channels": 1, "output_size": 4, "base_channels": 64},
-        "description": "KanResWideX trained on AF classification (30s recordings)",
-    },
-    "afmodel-30s": {
-        "url": "https://github.com/your-org/deepecg-kit/releases/download/v1.0.0/afmodel-30s.pt",
-        "model_class": "AFModel",
-        "model_kwargs": {"recording_length": 30},
-        "description": "AFModel trained on PhysioNet 2017 Challenge (30s recordings)",
-    },
-}
+#: Published pretrained weights, keyed by name. The package publishes none at
+#: present; an entry needs a public URL, the model class and its constructor
+#: arguments, and a description. Entries whose URL still holds a placeholder
+#: marker are reported as unpublished rather than fetched.
+WEIGHTS_REGISTRY: dict[str, dict] = {}
 
 
 def get_weights_dir() -> Path:

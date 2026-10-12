@@ -27,6 +27,25 @@ from deepecgkit.analysis.statistics import (
 )
 
 DEFAULT_RANK_METRIC = "f1"
+#: How the false-discovery-rate family of the flip-test grid is formed.
+FDR_FAMILY_TESTABLE = "testable"
+FDR_FAMILY_SIGNIFICANT = "significant"
+
+#: Metrics for which a smaller value is the better one. They are negated
+#: before ranking so that every statistic reads "higher is better".
+LOWER_IS_BETTER: frozenset[str] = frozenset(
+    {
+        "ece",
+        "adaptive_ece",
+        "mce",
+        "brier",
+        "ece_temp",
+        "adaptive_ece_temp",
+        "mce_temp",
+        "brier_temp",
+    }
+)
+
 MIN_TEST_GROUPS = 10
 MIN_MODELS_FOR_TAU = 3
 
@@ -57,6 +76,11 @@ def _metric_slice(runs: pd.DataFrame, metric: str) -> pd.DataFrame:
     selected = runs[runs["metric"] == metric]
     if selected.empty:
         raise ValueError(f"No rows for metric '{metric}'")
+    if metric in LOWER_IS_BETTER:
+        # Ranks, paired differences and flip tests all read "higher is
+        # better"; a calibration error is negated so that the orientation
+        # holds and a positive paired difference still means "A is better".
+        selected = selected.assign(value=-selected["value"].to_numpy(dtype=float))
     return selected
 
 
@@ -375,10 +399,13 @@ def flip_test(
     n_seeds = min(int(first["n"]), int(second["n"]))
     verdict, reason = _classify_flip(first, second, n_seeds, min_seeds, min_seeds_for_claim)
 
-    if verdict in (VERDICT_SUPPORTED, VERDICT_SUGGESTIVE, VERDICT_CONTRADICTED):
-        p_flip = max(float(first["p_value"]), float(second["p_value"]))
-    else:
+    # The intersection-union p-value exists whenever both components could
+    # be tested; it is the larger component p. Which rows enter the
+    # false-discovery-rate family is decided by all_flip_tests.
+    if verdict in (VERDICT_UNTESTABLE, VERDICT_BIMODAL):
         p_flip = float("nan")
+    else:
+        p_flip = max(float(first["p_value"]), float(second["p_value"]))
 
     return {
         "model_a": model_a,
@@ -460,12 +487,17 @@ def all_flip_tests(
     models: Sequence[str] | None = None,
     datasets: Sequence[str] | None = None,
     min_test_groups: int = MIN_TEST_GROUPS,
+    fdr_family: str = FDR_FAMILY_TESTABLE,
 ) -> pd.DataFrame:
     """Run a flip test for every model pair shared by every dataset pair.
 
     Only models present on both datasets of a pair are compared, because
     models that failed to converge were omitted from some datasets. The
-    exploratory grid is adjusted with Benjamini-Yekutieli.
+    exploratory grid is adjusted with Benjamini-Yekutieli over the family
+    chosen by ``fdr_family``: every testable comparison (the default, so that
+    the family does not depend on the outcomes), or only the comparisons
+    whose verdict is supported, suggestive or contradicted (the historical
+    behaviour, whose family size depends on the verdicts).
 
     Args:
         runs: Long frame of per-run metric values.
@@ -475,10 +507,17 @@ def all_flip_tests(
         models: Restrict to these models.
         datasets: Restrict to these datasets.
         min_test_groups: Fewest independent test units that can support a test.
+        fdr_family: FDR_FAMILY_TESTABLE or FDR_FAMILY_SIGNIFICANT.
 
     Returns:
-        One row per tested combination, with raw and adjusted p-values.
+        One row per tested combination, with raw and adjusted p-values and
+        the family definition in ``fdr_family``.
+
+    Raises:
+        ValueError: If fdr_family is unknown.
     """
+    if fdr_family not in (FDR_FAMILY_TESTABLE, FDR_FAMILY_SIGNIFICANT):
+        raise ValueError(f"Unknown fdr_family: {fdr_family}")
     selected = _metric_slice(runs, metric)
     if models is not None:
         selected = selected[selected["model"].isin(list(models))]
@@ -510,7 +549,19 @@ def all_flip_tests(
     frame = pd.DataFrame(rows)
     if frame.empty:
         return frame
-    frame["p_adjusted"] = benjamini_yekutieli_adjust(frame["p_flip"].tolist())
+    in_family = np.isfinite(frame["p_flip"].to_numpy(dtype=float))
+    if fdr_family == FDR_FAMILY_SIGNIFICANT:
+        in_family &= (
+            frame["verdict"]
+            .isin([VERDICT_SUPPORTED, VERDICT_SUGGESTIVE, VERDICT_CONTRADICTED])
+            .to_numpy()
+        )
+    family_p = [
+        p if keep else float("nan") for p, keep in zip(frame["p_flip"], in_family, strict=False)
+    ]
+    frame["p_adjusted"] = benjamini_yekutieli_adjust(family_p)
+    frame["fdr_family"] = fdr_family
+    frame["fdr_family_size"] = int(in_family.sum())
     return frame.sort_values(["dataset_1", "dataset_2", "p_flip"], na_position="last").reset_index(
         drop=True
     )
@@ -569,6 +620,18 @@ def evaluate_rank_claim(
         )
         result.pop("difference_1", None)
         result.pop("difference_2", None)
+        # The flip test is symmetric in the direction of the reversal. A claim
+        # is not: the model must lead on dataset_best and trail on
+        # dataset_worst. A supported reversal the other way round contradicts
+        # the claim and is relabelled, with the reason recorded.
+        leads_best = float(result["mean_1"]) > 0
+        trails_worst = float(result["mean_2"]) < 0
+        result["claimed_direction"] = bool(leads_best and trails_worst)
+        if result["verdict"] in (VERDICT_SUPPORTED, VERDICT_SUGGESTIVE) and not (
+            leads_best and trails_worst
+        ):
+            result["verdict"] = VERDICT_CONTRADICTED
+            result["reason"] = "the ordering reverses, but opposite to the claimed direction"
         components.append(result)
 
     verdicts = [component["verdict"] for component in components]
@@ -594,6 +657,9 @@ def evaluate_rank_claim(
         "components": components,
         "n_components": len(components),
         "n_supported": sum(1 for v in verdicts if v == VERDICT_SUPPORTED),
+        "n_supported_in_direction": sum(
+            1 for c in components if c["verdict"] == VERDICT_SUPPORTED and c["claimed_direction"]
+        ),
         "n_untestable": sum(1 for v in verdicts if v in (VERDICT_UNTESTABLE, VERDICT_BIMODAL)),
         "verdict": overall,
         "p_claim": max(finite) if finite else float("nan"),

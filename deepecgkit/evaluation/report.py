@@ -149,6 +149,7 @@ def save_single_label_evaluation(
             y_true,
             y_prob,
             class_names=class_names,
+            n_bins=n_bins,
             title=f"{model_name} on {dataset_name} - Calibration",
             save_dir=str(output_path),
         )
@@ -218,6 +219,8 @@ def save_single_label_evaluation(
                 "auroc": cls_metrics.get("auc", np.nan),
                 "mcc": cls_metrics.get("mcc", np.nan),
                 "average": averaging,
+                "n_test_classes": len(np.unique(y_true)),
+                "n_predicted_classes": len(np.unique(y_pred)),
                 **calibration,
             }
         ]

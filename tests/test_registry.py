@@ -19,7 +19,7 @@ from deepecgkit.registry import (
 class TestModelRegistry:
     def test_all_models_registered(self):
         names = get_model_names()
-        assert len(names) == 21
+        assert len(names) == 26
         expected = [
             "afmodel",
             "convnext-v2",
@@ -34,14 +34,19 @@ class TestModelRegistry:
             "lstm",
             "mamba",
             "medformer",
+            "mlp-wang",
             "resnet",
+            "resnet-hannun",
             "resnet-wang",
+            "rocket",
             "se-resnet",
             "simple-cnn",
+            "spectrogram-cnn",
             "tcn",
             "transformer",
             "xresnet",
             "xresnet1d-benchmark",
+            "xresnet1d101",
         ]
         assert names == expected
 

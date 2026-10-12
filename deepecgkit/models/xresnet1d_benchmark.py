@@ -111,6 +111,8 @@ class XResNet1dBenchmark(ECGModelBase):
         stem_channels: Tuple of stem layer channels
         dropout_rate: Dropout probability in head (default: 0.5)
         concat_pooling: Use avg+max concat pooling (default: True)
+        block_channels: Per-layer channel widths (before expansion); overrides
+            the fixed ``base_channels`` width when given
 
     Example:
         >>> model = XResNet1dBenchmark(input_channels=12, output_size=5)
@@ -136,11 +138,17 @@ class XResNet1dBenchmark(ECGModelBase):
         stem_channels: tuple[int, ...] = (32, 32, 64),
         dropout_rate: float = 0.5,
         concat_pooling: bool = True,
+        block_channels: tuple[int, ...] | None = None,
     ):
         super().__init__()
 
         if layers is None:
             layers = [2, 2, 2, 2]
+        if block_channels is not None and len(block_channels) != len(layers):
+            raise ValueError(
+                f"block_channels must have one entry per layer, got {len(block_channels)} "
+                f"for {len(layers)} layers"
+            )
 
         self.expansion = expansion
         self.concat_pooling = concat_pooling
@@ -156,7 +164,9 @@ class XResNet1dBenchmark(ECGModelBase):
         )
         self.stem_pool = nn.MaxPool1d(kernel_size=3, stride=2, padding=1)
 
-        block_szs = [64 // expansion, *([base_channels] * len(layers))]
+        if block_channels is None:
+            block_channels = tuple([base_channels] * len(layers))
+        block_szs = [64 // expansion, *block_channels]
 
         self.res_layers = nn.Sequential(
             *[

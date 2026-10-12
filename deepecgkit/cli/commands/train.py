@@ -31,6 +31,8 @@ from deepecgkit.evaluation.visualization import plot_training_curves
 from deepecgkit.models.pretrained import load_matching_weights
 from deepecgkit.registry import get_dataset_names, get_model_names
 from deepecgkit.training import ECGTrainer
+from deepecgkit.utils.device import resolve_device
+from deepecgkit.utils.provenance import dataset_fingerprint, environment_summary, git_commit
 from deepecgkit.utils.weights import load_pretrained_weights
 
 #: How many weight names a message about partly loaded weights spells out.
@@ -241,6 +243,10 @@ def train(
             "batch_size": batch_size,
             "learning_rate": learning_rate,
             "deepecgkit_version": _package_version(),
+            "git": git_commit(),
+            "environment": environment_summary(resolve_device(accelerator)),
+            "dataset_source": getattr(type(dataset), "DOWNLOAD_URL", None),
+            "dataset_files": dataset_fingerprint(getattr(dataset, "data_dir", None)),
         },
     )
 

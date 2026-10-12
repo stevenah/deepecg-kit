@@ -9,6 +9,7 @@ fails to compile.
 The tables need only the booktabs package, which the manuscript already loads.
 """
 
+import math
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -29,14 +30,58 @@ from deepecgkit.analysis.ranking import (
 MISSING_CELL = "--"
 DEFAULT_PRECISION = 3
 
+#: How every seed redraws the partition, for captions.
+SPLIT_DESCRIPTION = "grouped split (patients for PTB-XL, recordings otherwise)"
+
+
+def _percent(confidence_level: float) -> str:
+    """Render a confidence level as a LaTeX percentage."""
+    value = 100.0 * float(confidence_level)
+    text = f"{value:.0f}" if abs(value - round(value)) < 1e-9 else f"{value:g}"
+    return text + "\\%"
+
+
+def _tau_floor_notes(taus: pd.DataFrame | None) -> list[str]:
+    """Note the smallest attainable permutation p for the model counts in a tau frame."""
+    if taus is None or "n_models" not in taus.columns:
+        return []
+    floors = sorted({int(m) for m in taus["n_models"].dropna().tolist() if int(m) >= 2})
+    if not floors:
+        return []
+    rendered = []
+    for count in floors:
+        floor = min(1.0, 2.0 / math.factorial(count))
+        rendered.append(f"$|M|={count}$: $p_{{\\min}}={floor:.3g}$")
+    return ["Smallest attainable two-sided $p$ per model count: " + "; ".join(rendered) + "."]
+
+
 MODEL_DISPLAY_NAMES = {
-    "resnet": "ResNet1D",
-    "se-resnet": "SE-ResNet1D",
-    "inception-time": "InceptionTime",
+    "afmodel": "AFModel",
     "convnext-v2": "ConvNeXt-V2",
     "crnn": "CRNN",
-    "medformer": "Medformer",
+    "deep-res-cnn": "DeepResCNN",
+    "dualnet": "DualNet",
+    "fcn-wang": "FCN",
+    "gru": "GRU",
+    "inception-time": "InceptionTime",
+    "kanres": "KanRes",
+    "kanres-deep": "KanRes-Deep",
+    "lstm": "LSTM",
     "mamba": "Mamba",
+    "medformer": "Medformer",
+    "mlp-wang": "MLP",
+    "resnet": "ResNet1D",
+    "resnet-hannun": "ResNet-Hannun",
+    "resnet-wang": "ResNet-Wang",
+    "rocket": "ROCKET",
+    "se-resnet": "SE-ResNet1D",
+    "simple-cnn": "SimpleCNN",
+    "spectrogram-cnn": "SpectrogramCNN",
+    "tcn": "TCN",
+    "transformer": "Transformer",
+    "xresnet": "XResNet1D",
+    "xresnet1d-benchmark": "XResNet1D-Bench",
+    "xresnet1d101": "XResNet1D-101",
 }
 
 DATASET_DISPLAY_NAMES = {
@@ -272,6 +317,8 @@ def results_table(
     metrics: Sequence[str] = ("f1", "precision", "recall"),
     label: str | None = None,
     precision: int = DEFAULT_PRECISION,
+    confidence_level: float = 0.95,
+    split_description: str = SPLIT_DESCRIPTION,
 ) -> str:
     """Per-dataset mean and interval table, replacing a single-run table.
 
@@ -321,7 +368,7 @@ def results_table(
 
     notes = [
         "Intervals describe how much each model moves when the split and the initialisation",
-        r"are redrawn; they are not a pairwise test. See Table~\ref{tab:flip_survival}.",
+        "are redrawn; they are not a pairwise test.",
     ]
     if averagings:
         notes.append(f"Averaging: {', '.join(sorted(escape_latex(a) for a in averagings))}.")
@@ -330,9 +377,9 @@ def results_table(
 
     caption = (
         f"{display_dataset(dataset)} results, mean over $n$ random seeds. Each seed redraws the "
-        "patient-level split and reinitialises the weights, so brackets give two-sided 95\\% "
-        "Student-$t$ intervals over that combined variation. The interval is a within-corpus "
-        "statement and is not a generalisation interval."
+        f"{split_description} and reinitialises the weights, so brackets give two-sided "
+        f"{_percent(confidence_level)} Student-$t$ intervals over that combined variation. The "
+        "interval is a within-corpus statement and is not a generalisation interval."
     )
     return _wrap_table(body, "l" + "c" * (len(metrics) + 1), caption, label)
 
@@ -403,10 +450,7 @@ def rank_distribution_table(
         if rendered:
             joined = "; ".join(rendered)
             notes.append(r"Kendall $\bar\tau_b$ over all seed-pair rankings: " + joined + ".")
-            notes.append(
-                r"With $|M|\le 4$ models the smallest attainable two-sided $p$ is $2/|M|!=0.083$,"
-            )
-            notes.append("so no coefficient can be significant; these are descriptive only.")
+            notes.extend(_tau_floor_notes(taus))
     body.append(r"\midrule")
     body.extend(_note_rows(notes, n_columns))
 
@@ -424,6 +468,9 @@ def flip_survival_table(
     label: str = "tab:flip_survival",
     metric: str = "f1",
     exclusions: Sequence[str] | None = None,
+    confidence_level: float = 0.95,
+    correction: str = "nadeau-bengio",
+    split_description: str = SPLIT_DESCRIPTION,
 ) -> str:
     """The headline table: which cross-task reversals survive seed variance.
 
@@ -501,16 +548,33 @@ def flip_survival_table(
     body.append(r"\midrule")
     body.extend(_note_rows(notes, n_columns))
 
+    if correction == "nadeau-bengio":
+        se_text = (
+            "whose standard error carries the Nadeau--Bengio correction for the training-set "
+            "overlap between seeds"
+        )
+    else:
+        se_text = "whose standard error is the uncorrected standard error of the mean"
+    family = str(flips["fdr_family"].iloc[0]) if "fdr_family" in flips.columns else "testable"
+    family_text = (
+        "every testable comparison"
+        if family == "testable"
+        else "the comparisons whose verdict is supported, suggestive or contradicted"
+    )
     caption = (
         "Cross-task ranking reversals under seed variance. Each row compares two architectures "
-        "on two datasets over $n$ shared random seeds; every seed redraws the patient-level split "
+        f"on two datasets over $n$ shared random seeds; every seed redraws the {split_description} "
         "and reinitialises the weights. $\\Delta_i$ is the mean paired per-seed difference in "
-        f"{display_metric(metric)} on dataset $D_i$, with a two-sided 95\\% Student-$t$ interval "
-        "whose standard error carries the Nadeau--Bengio correction for the training-set overlap "
-        "between seeds. $k/n$ counts the seeds in which $A$ led on $D_1$. A reversal is supported "
-        "only when both intervals exclude zero with opposite signs (an intersection--union test), "
-        "so $p_{\\mathrm{BY}}$ is the larger component $p$ and is an upper bound. All comparisons "
-        "are exploratory: they were selected by inspecting the single-seed tables."
+        f"{display_metric(metric)} on dataset $D_i$, with a two-sided {_percent(confidence_level)} "
+        f"Student-$t$ interval {se_text}. $k/n$ counts the seeds in which $A$ led on $D_1$. A "
+        "reversal is supported only when both intervals exclude zero with opposite signs (an "
+        "intersection--union test); $p$ is the larger component $p$ and is an upper bound, and "
+        f"$p_{{\\mathrm{{BY}}}}$ its Benjamini--Yekutieli adjustment over {family_text}. "
+        "Verdicts: supported, both intervals exclude zero with opposite signs over at least five "
+        "seeds; suggestive, the same with fewer seeds; unresolved, opposite signs but an interval "
+        "covers zero; not reproduced, the same sign; contradicted, the same sign with both "
+        "intervals excluding zero; untestable, too few test groups, seeds or a bimodal score. "
+        "All comparisons in this grid are exploratory."
     )
     return _wrap_table(body, "lccccl", caption, label)
 
@@ -576,8 +640,8 @@ def tau_table(taus: pd.DataFrame, label: str = "tab:kendall_tau") -> str:
         _note_rows(
             [
                 r"$p_{\min}=2/|M|!$ is the smallest two-sided $p$ the exact permutation null can",
-                "attain. No p-values are reported: at four models the floor is 0.083, so no",
-                "coefficient here can reach significance and these are descriptive only.",
+                "attain. No p-values are reported; the coefficients are descriptive only.",
+                *_tau_floor_notes(taus),
             ],
             n_columns,
         )

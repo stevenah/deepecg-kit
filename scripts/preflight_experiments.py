@@ -49,10 +49,10 @@ import yaml  # type: ignore[import-untyped]
 # (multi_label / binary_classification) rather than the registry's raw num_classes.
 DATASET_SHAPES: dict[str, tuple[int, int]] = {
     "ptbxl": (12, 5000),  # 500 Hz x 10 s
-    "af-classification": (1, 3000),  # 300 Hz x 10 s
-    "mitbih-afdb": (1, 3000),  # 300 Hz x 10 s
-    "ltafdb": (1, 3000),  # 300 Hz x 10 s
-    "unified-af": (1, 3000),  # 300 Hz x 10 s
+    "af-classification": (1, 5000),  # resampled to 500 Hz x 10 s
+    "mitbih-afdb": (1, 5000),  # first lead, resampled to 500 Hz x 10 s
+    "ltafdb": (1, 5000),  # first lead, resampled to 500 Hz x 10 s
+    "unified-af": (1, 5000),  # resampled to 500 Hz x 10 s
 }
 
 # Head size per dataset, keyed by whether the config asked for binary classification.

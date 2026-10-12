@@ -7,7 +7,12 @@ A run directory carries two JSON files next to its metrics:
   pipeline uses the recorded seed to group runs; evaluate uses the split
   protocol to rebuild the exact training partition. From schema version 2 the
   preprocessing fields hold the values that were in effect; version 1 stored
-  the flags as typed, including ones the dataset ignored.
+  the flags as typed, including ones the dataset ignored. From schema version
+  3 the file also records the provenance a reader cannot recover afterwards:
+  the git commit of the package checkout (``git``), the host, platform,
+  library versions and resolved device (``environment``), the dataset's
+  download URL (``dataset_source``) and a fingerprint of the dataset files
+  on disk (``dataset_files``).
 - ``split_info.json``: the realised split sizes and test groups, used to
   verify a rebuilt partition matches the one trained on.
 
@@ -23,7 +28,7 @@ from typing import Any
 from deepecgkit.analysis.aggregation import METADATA_FILENAME, SPLIT_INFO_FILENAME
 from deepecgkit.cli.logger import CLILogger
 
-RUN_METADATA_SCHEMA_VERSION = 2
+RUN_METADATA_SCHEMA_VERSION = 3
 
 CHECKPOINT_DIRNAME = "checkpoints"
 _VAL_LOSS_PATTERN = re.compile(r"val_loss=([0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)")

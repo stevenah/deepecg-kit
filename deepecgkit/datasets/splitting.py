@@ -164,6 +164,12 @@ class DataSplitter:
             )
             _, counts = np.unique(group_stratify, return_counts=True)
             if np.min(counts) < 2:
+                warnings.warn(
+                    "Grouped split is not stratified: a label is the majority label of fewer "
+                    "than two groups.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
                 group_stratify = None
 
         group_indices = np.arange(n_groups)
@@ -180,6 +186,12 @@ class DataSplitter:
                 if temp_stratify is not None:
                     _, tc = np.unique(temp_stratify, return_counts=True)
                     if np.min(tc) < 2:
+                        warnings.warn(
+                            "Validation/test split of the held-out groups is not stratified: "
+                            "a label is the majority label of fewer than two held-out groups.",
+                            RuntimeWarning,
+                            stacklevel=2,
+                        )
                         temp_stratify = None
                 val_gi, test_gi = train_test_split(
                     temp_gi,
@@ -193,8 +205,12 @@ class DataSplitter:
             else:
                 val_gi = temp_gi
                 test_gi = np.array([], dtype=int)
-        except ValueError:
-            # Stratification failed, split without it
+        except ValueError as error:
+            warnings.warn(
+                f"Grouped stratified split failed ({error}); splitting without stratification.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
             train_gi, temp_gi = train_test_split(
                 group_indices,
                 test_size=(val_n + test_n) / n_groups,

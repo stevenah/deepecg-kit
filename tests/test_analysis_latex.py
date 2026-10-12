@@ -188,8 +188,9 @@ class TestTables:
         assert "not a pairwise test" in tables["results"]
 
     def test_tau_table_states_the_significance_floor(self, tables):
-        """The reader is told no coefficient here can be significant."""
-        assert "0.083" in tables["kendall_tau"]
+        """The reader is told the smallest attainable p for the model count at hand."""
+        assert "Smallest attainable two-sided $p$" in tables["kendall_tau"]
+        assert "$p_{\\min}=" in tables["kendall_tau"]
 
     def test_write_tables_creates_files(self, tables, temp_dir):
         """Rendered tables land as .tex files named by their stem."""

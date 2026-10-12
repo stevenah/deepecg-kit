@@ -292,10 +292,21 @@ class TestPretrainedMixin:
         with pytest.raises(ValueError, match="Unknown weight"):
             KanResWideX.from_pretrained("no-such-weights")
 
-    def test_placeholder_url_is_reported(self):
+    def test_placeholder_url_is_reported(self, monkeypatch):
         """Unpublished registry entries fail with an explanation, not a 404."""
+        from deepecgkit.utils import weights as weights_module
+
+        monkeypatch.setitem(
+            weights_module.WEIGHTS_REGISTRY,
+            "demo-weights",
+            {
+                "url": "https://github.com/your-org/x/demo.pt",
+                "model_class": "KanResWideX",
+                "description": "test entry",
+            },
+        )
         with pytest.raises(RuntimeError, match="No public weights have been published"):
-            download_weights("kanres-af-30s")
+            download_weights("demo-weights")
 
     def test_checkpoint_without_weights(self, temp_dir):
         """A file holding no weights is reported clearly."""
@@ -304,10 +315,30 @@ class TestPretrainedMixin:
         with pytest.raises(ValueError, match="contains no weights"):
             KanResWideX.from_pretrained(str(path))
 
-    def test_model_name_for_weights(self):
+    def test_model_name_for_weights(self, monkeypatch):
         """Weight entries resolve to their registered model name."""
-        assert model_name_for_weights("kanres-af-30s") == "kanres"
-        assert model_name_for_weights("afmodel-30s") == "afmodel"
+        from deepecgkit.utils import weights as weights_module
+
+        monkeypatch.setitem(
+            weights_module.WEIGHTS_REGISTRY,
+            "demo-kanres",
+            {
+                "url": "https://example.org/demo.pt",
+                "model_class": "KanResWideX",
+                "description": "test entry",
+            },
+        )
+        monkeypatch.setitem(
+            weights_module.WEIGHTS_REGISTRY,
+            "demo-afmodel",
+            {
+                "url": "https://example.org/demo2.pt",
+                "model_class": "AFModel",
+                "description": "test entry",
+            },
+        )
+        assert model_name_for_weights("demo-kanres") == "kanres"
+        assert model_name_for_weights("demo-afmodel") == "afmodel"
         assert model_name_for_weights("no-such-weights") is None
 
     def test_module_level_from_pretrained(self, temp_dir):
