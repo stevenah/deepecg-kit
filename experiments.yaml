@@ -1,6 +1,7 @@
 # Training defaults come from deepecgkit/cli/defaults.py; override any of
 # them here (epochs, batch_size, learning_rate, val_split, test_split,
-# num_workers, accelerator, devices, early_stopping_patience, seed).
+# num_workers, accelerator, devices, early_stopping_patience, seed), and the
+# preprocessing (sampling_rate, segment_duration, normalization).
 #
 # THE FULL GRID: every registered architecture on every registered dataset.
 # 24 models x 5 datasets = 120 pairings x 5 seeds = 600 runs.
@@ -29,6 +30,11 @@
 
 defaults:
   seeds: [42, 43, 44, 45, 46]
+  # Every task is trained at 500 Hz, as the article states. Without this the AF
+  # datasets fall back to their own default of 300 Hz (3000 samples per window),
+  # and the probe, attribution and zero-shot stages, which run at 500 Hz, would
+  # no longer match the encoders.
+  sampling_rate: 500
 
 experiments:
   # --------------------------------------------------------------------------

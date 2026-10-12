@@ -48,6 +48,11 @@ nav:
       - Feature Extraction: user-guide/feature-extraction.md
       - Representation Quality: user-guide/representation-quality.md
       - Explainability: user-guide/explainability.md
+  - Benchmark:
+      - Overview: benchmark/index.md
+      - Architectures: benchmark/architectures.md
+      - Analysis Protocol: benchmark/protocol.md
+      - Runs and Known Limitations: benchmark/runs.md
   - Examples:
       - Basic Training: examples/train-basic.md
       - Advanced Training: examples/train-advanced.md
