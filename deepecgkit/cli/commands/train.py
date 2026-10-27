@@ -135,6 +135,8 @@ def train(
     binary_classification: bool = False,
     normalization: str | None = None,
     segment_duration: float | None = None,
+    label_rule: str | None = None,
+    seeded_split: bool = False,
     logger: CLILogger | None = None,
 ) -> int:
     """Train a model on a dataset."""
@@ -152,6 +154,8 @@ def train(
         sampling_rate=sampling_rate,
         normalization=normalization,
         segment_duration=segment_duration,
+        label_rule=label_rule,
+        seeded_split=seeded_split,
     )
     if code is not None:
         return code
@@ -186,6 +190,8 @@ def train(
                 sampling_rate=sampling_rate,
                 normalization=normalization,
                 segment_duration=segment_duration,
+                label_rule=label_rule,
+                recommended_folds=False if seeded_split else None,
             ),
             stage="fit",
             logger=logger,
@@ -229,8 +235,10 @@ def train(
             "model": model_name,
             "dataset": dataset_name,
             "seed": seed,
+            "split_protocol": data_module.split_protocol,
             "val_split": val_split,
             "test_split": test_split,
+            "dataset_options": data_config.get("dataset_options") or {},
             "multi_label": multi_label,
             "binary_classification": binary_classification,
             "sampling_rate": preprocessing.get("sampling_rate"),
@@ -579,6 +587,22 @@ def add_parser(subparsers: Any) -> Any:
         choices=["zscore", "minmax", "none"],
         help="Normalization method for ECG signals (default: the dataset's own, zscore)",
     )
+    parser.add_argument(
+        "--label-rule",
+        type=str,
+        default=None,
+        choices=["benchmark", "likelihood"],
+        help="How PTB-XL labels are derived: 'benchmark' counts every statement, as the "
+        "PTB-XL benchmark does; 'likelihood' requires a likelihood of at least 50 "
+        "(default: benchmark)",
+    )
+    parser.add_argument(
+        "--seeded-split",
+        action="store_true",
+        default=False,
+        help="Split PTB-XL by --seed, --val-split and --test-split instead of the "
+        "recommended folds (1-8 train, 9 validation, 10 test)",
+    )
     parser.set_defaults(handler="train", to_kwargs=_to_kwargs)
     return parser
 
@@ -606,4 +630,6 @@ def _to_kwargs(args: Any) -> dict[str, Any]:
         "binary_classification": args.binary_classification,
         "normalization": args.normalization,
         "segment_duration": args.segment_duration,
+        "label_rule": args.label_rule,
+        "seeded_split": args.seeded_split,
     }

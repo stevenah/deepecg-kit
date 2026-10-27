@@ -965,3 +965,28 @@ class TestVisualisation:
 
         with pytest.raises(ValueError, match="does not match a time axis"):
             plot_beat_profile(profile, np.arange(10))
+
+
+class TestMatchRPeaks:
+    """Detections are matched to reference beats one to one."""
+
+    def test_exact_and_shifted_matches(self):
+        from deepecgkit.explainability import match_r_peaks
+
+        assert match_r_peaks([100, 503, 900], [100, 500, 900], tolerance=5) == (3, 0, 0)
+
+    def test_misses_and_extra_detections_are_counted(self):
+        from deepecgkit.explainability import match_r_peaks
+
+        assert match_r_peaks([100, 300, 900], [100, 500, 900], tolerance=10) == (2, 1, 1)
+
+    def test_one_detection_cannot_match_two_beats(self):
+        from deepecgkit.explainability import match_r_peaks
+
+        assert match_r_peaks([500], [495, 505], tolerance=10) == (1, 0, 1)
+
+    def test_empty_inputs(self):
+        from deepecgkit.explainability import match_r_peaks
+
+        assert match_r_peaks([], [1, 2], tolerance=3) == (0, 0, 2)
+        assert match_r_peaks([1], [], tolerance=3) == (0, 1, 0)

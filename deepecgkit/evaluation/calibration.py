@@ -6,17 +6,26 @@ class is predicted, so accuracy, precision, recall, F1 and AUROC are all
 invariant under it; only the probabilities move. That is the point: it buys
 calibration without costing discrimination.
 
+One scalar shared by every output corrects only a global over- or
+underconfidence. Sigmoid outputs, one per label, can be miscalibrated in
+different directions: class-weighted training shifts each label's logits by
+its own amount. Per-label Platt scaling fits a positive scale and a bias for
+every sigmoid output, which removes such label-specific offsets. It keeps the
+ranking within each label, and hence AUROC, but moves the 0.5 threshold, so
+it is reported as a calibration result only.
+
 The temperature must be fitted on validation data and reported on test data.
 Fitting on test leaks the evaluation set into the model and reports an
 optimistic calibration error.
 """
 
+import json
 import logging
 import warnings
 from typing import Any
 
 import numpy as np
-from scipy.optimize import minimize_scalar
+from scipy.optimize import minimize, minimize_scalar
 from scipy.special import logsumexp
 
 from deepecgkit.evaluation.metrics import (
@@ -32,6 +41,8 @@ LOGIT_CLIP_EPS = 1e-7
 DEFAULT_TEMPERATURE_BOUNDS = (0.01, 100.0)
 NEUTRAL_TEMPERATURE = 1.0
 BOUND_TOLERANCE = 1e-3
+#: Smallest Platt scale allowed, which keeps every fitted map increasing.
+MIN_PLATT_SCALE = 1e-3
 
 
 def _softmax(logits: np.ndarray) -> np.ndarray:
@@ -331,6 +342,114 @@ class TemperatureScaler:
         return temperature_nll(logits, y_true, temperature=self.temperature, task=self.task)
 
 
+def _platt_columns(logits: np.ndarray, y_true: np.ndarray, task: str | None):
+    """Arrange sigmoid logits and targets as one column per output.
+
+    Returns:
+        Tuple of (logits, targets), both (n_samples, n_outputs), or None when
+        the outputs are a softmax, which Platt scaling does not apply to.
+    """
+    logits = np.asarray(logits, dtype=float)
+    targets = np.asarray(y_true, dtype=float)
+    if task == TASK_MULTILABEL:
+        return logits, targets
+    if _is_single_logit(logits):
+        return logits.reshape(-1, 1), targets.reshape(-1, 1)
+    return None
+
+
+def fit_platt(
+    logits: np.ndarray, y_true: np.ndarray, task: str | None = None
+) -> tuple[np.ndarray, np.ndarray]:
+    """Fit a scale and a bias per sigmoid output on the given split.
+
+    Each output's map p = sigmoid(scale * logit + bias) minimises the logistic
+    negative log-likelihood of its own targets. Pass the validation split. An
+    output whose fitting targets hold a single class has no finite optimum and
+    keeps the identity map, with a warning.
+
+    Args:
+        logits: Raw sigmoid outputs, (n_samples,), (n_samples, 1) or
+            (n_samples, n_labels) with task TASK_MULTILABEL
+        y_true: Binary targets of matching layout
+        task: Pass TASK_MULTILABEL for per-label sigmoid outputs
+
+    Returns:
+        Tuple of (scales, biases), one entry per output.
+
+    Raises:
+        ValueError: If the outputs are a softmax over classes.
+    """
+    columns = _platt_columns(logits, y_true, task)
+    if columns is None:
+        raise ValueError("Platt scaling applies to sigmoid outputs, not to a softmax.")
+    logits, targets = columns
+    n_outputs = logits.shape[1]
+    scales = np.ones(n_outputs)
+    biases = np.zeros(n_outputs)
+    for k in range(n_outputs):
+        z, y = logits[:, k], targets[:, k]
+        if y.size == 0 or y.min() == y.max():
+            warnings.warn(
+                f"Output {k} has a single class in the fitting split, so it keeps the identity "
+                "Platt map.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            continue
+        signs = 2.0 * y - 1.0
+
+        def objective(params: np.ndarray, z: np.ndarray = z, signs: np.ndarray = signs):
+            margin = signs * (params[0] * z + params[1])
+            nll = np.mean(np.logaddexp(0.0, -margin))
+            weight = -signs * np.exp(-np.logaddexp(0.0, margin))
+            return nll, np.array([np.mean(weight * z), np.mean(weight)])
+
+        result = minimize(
+            objective,
+            x0=np.array([1.0, 0.0]),
+            jac=True,
+            method="L-BFGS-B",
+            bounds=[(MIN_PLATT_SCALE, None), (None, None)],
+        )
+        if not result.success or not np.all(np.isfinite(result.x)):
+            warnings.warn(
+                f"Platt fit for output {k} did not converge; it keeps the identity map.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            continue
+        scales[k], biases[k] = result.x
+    return scales, biases
+
+
+def apply_platt(
+    logits: np.ndarray, scales: np.ndarray, biases: np.ndarray, task: str | None = None
+) -> np.ndarray:
+    """Map sigmoid logits through fitted Platt parameters.
+
+    The returned layout matches what ECGTrainer stores: a single logit per
+    sample comes back as the two columns [1 - p, p].
+
+    Args:
+        logits: Raw sigmoid outputs
+        scales: One scale per output, from fit_platt
+        biases: One bias per output, from fit_platt
+        task: Pass TASK_MULTILABEL for per-label sigmoid outputs
+
+    Returns:
+        Probabilities in the stored layout.
+    """
+    columns = _platt_columns(logits, np.zeros(np.shape(logits)), task)
+    if columns is None:
+        raise ValueError("Platt scaling applies to sigmoid outputs, not to a softmax.")
+    probabilities = _sigmoid(columns[0] * np.asarray(scales) + np.asarray(biases))
+    if task == TASK_MULTILABEL:
+        return probabilities
+    positive = probabilities[:, 0]
+    return np.column_stack([1.0 - positive, positive])
+
+
 def resolve_calibration_task(y_true: np.ndarray, y_prob: np.ndarray) -> str | None:
     """Task shape in the form the scaling helpers expect.
 
@@ -379,8 +498,12 @@ def calibration_report(
 
     Returns:
         Mapping with "ece", "adaptive_ece", "mce", "brier", their "_temp"
-        counterparts measured after scaling, the fitted "temperature", and
-        "calibration_bins" recording what produced the binned values.
+        counterparts measured after temperature scaling, the fitted
+        "temperature", their "_platt" counterparts measured after per-label
+        Platt scaling (sigmoid outputs only, NaN for a softmax),
+        "platt_parameters" holding the fitted scales and biases as JSON (empty
+        when not fitted), and "calibration_bins" recording what produced the
+        binned values.
     """
     task = resolve_calibration_task(y_true, y_prob)
     base = calculate_calibration_metrics(y_true, y_prob, n_bins=n_bins)
@@ -395,17 +518,23 @@ def calibration_report(
         "adaptive_ece_temp": np.nan,
         "mce_temp": np.nan,
         "brier_temp": np.nan,
+        "ece_platt": np.nan,
+        "adaptive_ece_platt": np.nan,
+        "mce_platt": np.nan,
+        "brier_platt": np.nan,
+        "platt_parameters": "",
         "calibration_bins": int(n_bins),
     }
 
     if fit_targets is None or fit_logits is None:
         return report
 
+    logits = eval_logits
+    if logits is None:
+        logits = probabilities_to_logits(y_prob, task=task)
+
     try:
         scaler = TemperatureScaler(task=task).fit(fit_logits, fit_targets)
-        logits = eval_logits
-        if logits is None:
-            logits = probabilities_to_logits(y_prob, task=task)
         scaled = scaler.transform(logits)
         after = calculate_calibration_metrics(y_true, scaled, n_bins=n_bins)
     except Exception as error:
@@ -417,4 +546,25 @@ def calibration_report(
     report["adaptive_ece_temp"] = after.get("adaptive_ece", np.nan)
     report["mce_temp"] = after.get("mce", np.nan)
     report["brier_temp"] = after.get("brier", np.nan)
+
+    if _platt_columns(fit_logits, fit_targets, task) is None:
+        return report
+    try:
+        scales, biases = fit_platt(fit_logits, fit_targets, task=task)
+        platt = apply_platt(logits, scales, biases, task=task)
+        after_platt = calculate_calibration_metrics(y_true, platt, n_bins=n_bins)
+    except Exception as error:
+        logger.warning(f"Could not apply Platt scaling: {error}")
+        return report
+
+    report["ece_platt"] = after_platt.get("ece", np.nan)
+    report["adaptive_ece_platt"] = after_platt.get("adaptive_ece", np.nan)
+    report["mce_platt"] = after_platt.get("mce", np.nan)
+    report["brier_platt"] = after_platt.get("brier", np.nan)
+    report["platt_parameters"] = json.dumps(
+        {
+            "scale": [round(float(v), 6) for v in scales],
+            "bias": [round(float(v), 6) for v in biases],
+        }
+    )
     return report

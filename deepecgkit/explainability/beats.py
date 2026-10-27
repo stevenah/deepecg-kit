@@ -113,6 +113,42 @@ def detect_r_peaks(
     return peaks.astype(np.int64)
 
 
+def match_r_peaks(
+    detected: np.ndarray,
+    reference: np.ndarray,
+    tolerance: int,
+) -> tuple[int, int, int]:
+    """Match detected R-peaks to reference beats one to one within a tolerance.
+
+    Each reference beat is matched to at most one detection and the other way
+    round, nearest pairs first, which is how QRS detectors are scored against
+    annotated databases (ANSI/AAMI EC57 uses a 150 ms tolerance).
+
+    Args:
+        detected: Sample indices of the detected peaks
+        reference: Sample indices of the reference beats
+        tolerance: Largest distance in samples that still counts as a match
+
+    Returns:
+        Tuple of (true positives, false positives, false negatives).
+    """
+    detected = np.sort(np.asarray(detected, dtype=np.int64))
+    reference = np.sort(np.asarray(reference, dtype=np.int64))
+    if detected.size == 0 or reference.size == 0:
+        return 0, int(detected.size), int(reference.size)
+    distance = np.abs(detected[:, None] - reference[None, :])
+    pairs = np.argwhere(distance <= tolerance)
+    order = np.argsort(distance[pairs[:, 0], pairs[:, 1]], kind="stable")
+    used_detected: set[int] = set()
+    used_reference: set[int] = set()
+    for i, j in pairs[order]:
+        if i not in used_detected and j not in used_reference:
+            used_detected.add(int(i))
+            used_reference.add(int(j))
+    matched = len(used_detected)
+    return matched, int(detected.size) - matched, int(reference.size) - matched
+
+
 def beat_aligned_attribution(
     values: np.ndarray,
     r_peaks: np.ndarray,

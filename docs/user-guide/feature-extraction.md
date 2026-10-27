@@ -175,8 +175,5 @@ trained classifier never saw the raw vector that `extract_features` returns.
 
 ## Known issues
 
-- `Medformer` constructs a `cross_channel_attn` block, 5.5% of its parameters, that `forward` never
-  invokes. It receives no gradient but is present in every checkpoint, and the model's description
-  advertises cross-channel behaviour the embedding does not have.
 - `AFModel.get_feature_size` returns the temporal length after the convolution stack, not the
   feature dimension its name suggests, and raises on any multi-lead model. Use `feature_dim`.

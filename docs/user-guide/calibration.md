@@ -2,7 +2,8 @@
 
 Accuracy and AUROC say whether a model ranks recordings correctly. They say nothing about whether a
 predicted probability of 0.9 means the model is right nine times out of ten. DeepECG-Kit measures
-that gap and corrects it with temperature scaling.
+that gap and corrects it with temperature scaling and, for sigmoid outputs, with per-label Platt
+scaling.
 
 ## Measuring calibration
 
@@ -96,6 +97,41 @@ val_logits = trainer.get_test_logits()
 Note that `validate` and `test` reuse one set of buffers, so copy the results out before running
 the next split.
 
+## Per-label scaling
+
+One temperature shared by every output corrects only a global over- or underconfidence. Sigmoid
+outputs, one per label, can be miscalibrated in different directions, and class-weighted training
+makes them so: a positive weight `w` on a label moves the logit that minimises the loss by
+`log(w)`, so every label of a PTB-XL model trained with positive weights carries its own offset,
+which no single temperature removes.
+
+Per-label Platt scaling fits a positive scale `a` and a bias `b` for every sigmoid output,
+mapping its logit `z` to `sigmoid(a * z + b)`, by minimising that label's logistic negative
+log-likelihood on the fitting split. The scale is kept positive, so the ranking within each label,
+and hence its AUROC, is unchanged. The bias moves the 0.5 threshold, so the decisions of the
+recalibrated model can differ: per-label scaling is reported as a calibration result only, and the
+discrimination metrics are always computed from the unscaled outputs.
+
+```python
+import numpy as np
+
+from deepecgkit.evaluation import apply_platt, fit_platt
+from deepecgkit.evaluation.metrics import TASK_MULTILABEL
+
+rng = np.random.default_rng(0)
+offsets = np.array([1.0, -0.5, 0.0])  # each label is off in its own direction
+fit_label_logits = rng.normal(0, 2, size=(2000, 3))
+fit_label_targets = (rng.random((2000, 3)) < 1 / (1 + np.exp(-(fit_label_logits - offsets)))).astype(float)
+
+scales, biases = fit_platt(fit_label_logits, fit_label_targets, task=TASK_MULTILABEL)
+recalibrated = apply_platt(rng.normal(0, 2, size=(500, 3)), scales, biases, task=TASK_MULTILABEL)
+```
+
+A single logit per sample (a binary head) is one output; pass no `task` and `apply_platt` returns
+the two columns `[1 - p, p]` that `ECGTrainer` stores. A softmax over classes is not a set of
+independent sigmoids, and `fit_platt` refuses it. An output whose fitting split holds a single
+class has no finite optimum and keeps the identity map, with a warning.
+
 If only probabilities survive, `probabilities_to_logits` reconstructs the logits. The
 reconstruction is exact in principle but float32 probabilities saturate to 1.0 once a logit passes
 about 16.6, so confidently wrong models lose precision. That is why logits are captured rather than
@@ -118,9 +154,12 @@ report = calibration_report(
 )
 ```
 
-Returns `ece`, `adaptive_ece`, `mce` and `brier`, their `_temp` counterparts measured after scaling,
-the fitted `temperature`, and `calibration_bins`. Without a fitting split the scaled entries are
-`NaN` and the rest is still populated.
+Returns `ece`, `adaptive_ece`, `mce` and `brier`, their `_temp` counterparts measured after
+temperature scaling, the fitted `temperature`, their `_platt` counterparts measured after per-label
+scaling, `platt_parameters` (the fitted scales and biases as JSON, for example
+`{"scale": [0.91, ...], "bias": [-1.17, ...]}`), and `calibration_bins`. The `_platt` entries are
+`NaN` and `platt_parameters` is empty for a softmax head. Without a fitting split every scaled
+entry is `NaN` and the rest is still populated.
 
 `ECGEvaluator` reports calibration in `generate_report` without being asked, and adds the
 temperature rows when given a validation split:
@@ -136,8 +175,11 @@ report = evaluator.generate_report(
 
 ## From the command line
 
-`deepecg train` runs a validation pass at the end of training, fits a temperature, and writes both
-the raw and rescaled figures into `classification_metrics.csv`.
+`deepecg train` runs a validation pass at the end of training, fits a temperature and, for sigmoid
+outputs (multi-label and binary heads), the per-label scales and biases, and writes the raw and
+recalibrated figures into `classification_metrics.csv`. The console table then has an `After P`
+column beside `After T`. The fitted scales and biases are stored in the `platt_parameters` column,
+so reliability diagrams after per-label scaling can be rebuilt from the stored probabilities.
 
 `deepecg evaluate` does the same for an existing checkpoint and prints the comparison:
 
@@ -162,7 +204,7 @@ Brier before and after scaling across models and datasets is one command:
 
 ```bash
 deepecg aggregate --runs-dir runs --output-dir analysis --emit-latex \
-  --metrics ece ece_temp brier brier_temp
+  --metrics ece ece_temp ece_platt brier brier_temp brier_platt
 ```
 
 (`python scripts/aggregate_results.py` remains as a shim for the same command.)

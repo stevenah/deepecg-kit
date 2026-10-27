@@ -61,6 +61,7 @@ __all__ = [
     "build_probe",
     "cross_dataset_transfer",
     "embed_2d",
+    "in_domain_probe",
     "linear_probe",
     "probe_encoder",
     "protocol_data_module",
@@ -90,6 +91,11 @@ PROBE_METRICS = (
     METRIC_F1_MACRO,
 )
 DEFAULT_PROBE_METRIC = METRIC_AUROC_MACRO
+#: Solver iteration ceiling. Standardised embeddings of thousands of samples
+#: can need more than scikit-learn's default of 100, and the 1000 used before
+#: release 1.0 left some probes unconverged.
+DEFAULT_PROBE_MAX_ITER = 5000
+TRAINED = "trained"
 
 EMBEDDING_METHODS = ("tsne", "pca")
 
@@ -174,7 +180,7 @@ class ProbeResult:
 
 def build_probe(
     c: float = 1.0,
-    max_iter: int = 1000,
+    max_iter: int = DEFAULT_PROBE_MAX_ITER,
     random_state: int = 42,
     multilabel: bool = False,
 ) -> Pipeline:
@@ -461,7 +467,7 @@ def linear_probe(
     notes: list[str] = []
     if not np.isfinite(result.score):
         notes.append(f"{metric} is undefined for this held-out split")
-    max_iter = int(probe_kwargs.get("max_iter", 1000))
+    max_iter = int(probe_kwargs.get("max_iter", DEFAULT_PROBE_MAX_ITER))
     if not _probe_converged(pipeline, max_iter):
         notes.append(f"probe did not converge within {max_iter} iterations")
     if not multilabel:
@@ -677,6 +683,52 @@ def protocol_data_module(
         verbose=verbose,
         dataset_kwargs=dataset_kwargs,
     )
+
+
+def in_domain_probe(
+    extractor: FeatureExtractor,
+    data_module: ECGDataModule,
+    random_extractor: FeatureExtractor | None = None,
+    dataset: str | None = None,
+    metric: str = DEFAULT_PROBE_METRIC,
+    **probe_kwargs: Any,
+) -> list[ProbeResult]:
+    """Probe a trained encoder on its own task, beside an untrained one.
+
+    The data module should be the one the encoder was trained on, rebuilt with
+    the recorded preprocessing and split, so the probe is fitted on training
+    records and scored on test records the encoder never saw. The untrained
+    encoder of the same architecture is probed on the same split; the
+    difference between the two is what training added to the linearly
+    decodable information, beyond what the architecture yields at random.
+
+    Args:
+        extractor: The trained, frozen encoder
+        data_module: The encoder's own data module, already set up
+        random_extractor: An untrained encoder of the same architecture, or
+            None to probe the trained one alone
+        dataset: Registered name of the dataset, recorded on the results
+        metric: Headline metric, one of PROBE_METRICS
+        **probe_kwargs: Forwarded to build_probe
+
+    Returns:
+        The trained encoder's result, followed by the untrained one's when
+        given; their source fields read TRAINED and RANDOM_INIT.
+    """
+    encoders = [(TRAINED, extractor)]
+    if random_extractor is not None:
+        encoders.append((RANDOM_INIT, random_extractor))
+    return [
+        probe_encoder(
+            encoder,
+            data_module,
+            metric=metric,
+            source=name,
+            target=dataset,
+            **probe_kwargs,
+        )
+        for name, encoder in encoders
+    ]
 
 
 def _random_init_extractor(

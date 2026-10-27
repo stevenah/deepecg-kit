@@ -2,6 +2,8 @@
 Tests for deepecgkit.evaluation module.
 """
 
+import json
+
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
@@ -1385,3 +1387,95 @@ class TestCrossValidation:
     def test_data_must_be_a_pair(self):
         with pytest.raises(ValueError, match=r"\(X, y\)"):
             ECGEvaluator(metrics=["accuracy"]).cross_validate(_LinearClassifier, np.zeros((4, 1)))
+
+
+class TestPlattScaling:
+    """Per-label Platt scaling removes offsets a single temperature cannot."""
+
+    @staticmethod
+    def _multilabel(n, offsets, seed):
+        rng = np.random.default_rng(seed)
+        true_logits = rng.normal(0.0, 2.0, size=(n, len(offsets)))
+        targets = (rng.random((n, len(offsets))) < 1 / (1 + np.exp(-true_logits))).astype(float)
+        return true_logits + np.asarray(offsets), targets
+
+    def test_label_specific_offsets_are_removed(self):
+        from deepecgkit.evaluation.calibration import calibration_report
+
+        offsets = [2.0, -1.5, 0.5]
+        val_logits, val_targets = self._multilabel(4000, offsets, seed=0)
+        test_logits, test_targets = self._multilabel(4000, offsets, seed=1)
+        test_prob = 1 / (1 + np.exp(-test_logits))
+        report = calibration_report(
+            test_targets,
+            test_prob,
+            fit_targets=val_targets,
+            fit_logits=val_logits,
+            eval_logits=test_logits,
+        )
+        assert report["ece_platt"] < 0.03
+        assert report["ece_platt"] < report["ece_temp"] < report["ece"] + 1e-9
+        parameters = json.loads(report["platt_parameters"])
+        assert len(parameters["scale"]) == 3
+        np.testing.assert_allclose(parameters["bias"], [-v for v in offsets], atol=0.25)
+
+    def test_softmax_outputs_get_no_platt_columns(self):
+        from deepecgkit.evaluation.calibration import calibration_report
+
+        rng = np.random.default_rng(0)
+        logits = rng.normal(size=(300, 4))
+        targets = rng.integers(0, 4, 300)
+        prob = np.exp(logits) / np.exp(logits).sum(axis=1, keepdims=True)
+        report = calibration_report(targets, prob, fit_targets=targets, fit_logits=logits)
+        assert np.isnan(report["ece_platt"])
+        assert report["platt_parameters"] == ""
+        assert not np.isnan(report["ece_temp"])
+
+    def test_a_single_logit_is_scaled_as_one_output(self):
+        from deepecgkit.evaluation.calibration import apply_platt, fit_platt
+
+        rng = np.random.default_rng(0)
+        logits = rng.normal(0.0, 2.0, size=(2000, 1))
+        targets = (rng.random(2000) < 1 / (1 + np.exp(-(logits[:, 0] - 1.0)))).astype(float)
+        scales, biases = fit_platt(logits, targets)
+        assert scales.shape == (1,)
+        assert biases[0] == pytest.approx(-1.0, abs=0.2)
+        probabilities = apply_platt(logits, scales, biases)
+        assert probabilities.shape == (2000, 2)
+        np.testing.assert_allclose(probabilities.sum(axis=1), 1.0)
+
+    def test_a_label_with_one_class_keeps_the_identity_map(self):
+        from deepecgkit.evaluation.calibration import fit_platt
+        from deepecgkit.evaluation.metrics import TASK_MULTILABEL
+
+        rng = np.random.default_rng(0)
+        logits = rng.normal(size=(200, 2))
+        targets = np.column_stack([rng.integers(0, 2, 200), np.zeros(200)])
+        with pytest.warns(RuntimeWarning, match="single class"):
+            scales, biases = fit_platt(logits, targets, task=TASK_MULTILABEL)
+        assert scales[1] == 1.0 and biases[1] == 0.0
+
+    def test_scales_stay_positive_so_rankings_are_kept(self):
+        from deepecgkit.evaluation.calibration import fit_platt
+
+        rng = np.random.default_rng(0)
+        logits = rng.normal(size=(500, 1))
+        targets = (logits[:, 0] < 0).astype(float)
+        scales, _ = fit_platt(logits, targets)
+        assert scales[0] > 0
+
+
+def test_prediction_histogram_survives_near_constant_probabilities(tmp_path):
+    """A collapsed model's float32 outputs once crashed numpy's automatic bin edges."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from deepecgkit.evaluation.visualization import plot_calibration_curve
+
+    value = np.float32(0.42257)
+    positive = np.full(50, value, dtype=np.float32)
+    positive[0] = np.nextafter(value, np.float32(1))
+    y_prob = np.column_stack([1 - positive, positive])
+    y_true = np.array([0, 1] * 25)
+    plot_calibration_curve(y_true, y_prob, save_dir=str(tmp_path))
+    assert (tmp_path / "prediction_distribution.png").exists()

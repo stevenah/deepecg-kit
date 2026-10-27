@@ -49,8 +49,13 @@ The first run downloads the dataset (about 100 MB) into `~/.deepecgkit/datasets`
 - **CLI & Python API** — Train, evaluate, and predict from the command line or code
 - **Registry system** — Decorator-based model/dataset registration; your own are usable from
   the CLI with `--import`
-- **Self-describing checkpoints** — Architecture, class names and preprocessing are recorded,
-  so evaluation and prediction need only the checkpoint
+- **Self-describing checkpoints** — Architecture, class names, preprocessing, labelling and split
+  are recorded, so evaluation and prediction need only the checkpoint
+- **Standardised splits** — PTB-XL follows its recommended folds and the labels of the PTB-XL
+  benchmark; the other datasets are split by recording or patient
+- **Evaluation beyond one score** — bootstrap intervals over test recordings, calibration before
+  and after temperature and per-label scaling, linear probes against untrained encoders, and
+  attribution summaries with a model-randomisation check
 
 ## Next Steps
 

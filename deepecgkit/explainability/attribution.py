@@ -40,7 +40,7 @@ from deepecgkit.explainability.beats import (
     pqrst_fractions,
 )
 from deepecgkit.explainability.constraints import fit_to_constraints, resolve_model_name
-from deepecgkit.models.factory import build_model_from_checkpoint
+from deepecgkit.models.factory import build_model, build_model_from_checkpoint
 from deepecgkit.utils.device import resolve_device as _resolve_device
 
 try:
@@ -618,6 +618,38 @@ class ECGExplainer:
             input_channels=input_channels,
             output_size=output_size,
         )
+        return cls(model, model_name=model_name, **kwargs)
+
+    @classmethod
+    def from_random_init(
+        cls,
+        model_name: str,
+        input_channels: int,
+        output_size: int,
+        seed: int,
+        **kwargs: Any,
+    ) -> "ECGExplainer":
+        """Build an explainer around an untrained model of a registered architecture.
+
+        This is the model-randomisation check of Adebayo et al. (2018): an
+        attribution summary that is much the same for the trained model and for
+        the same architecture with random weights reflects the input and the
+        architecture rather than anything the model learned. The model is built
+        exactly as the probe's untrained encoder is, under the given seed.
+
+        Args:
+            model_name: Registered model name
+            input_channels: Lead count of the trained model
+            output_size: Classifier width of the trained model, so the same
+                output index can be explained
+            seed: Seed drawn before construction
+            **kwargs: Forwarded to the constructor
+
+        Returns:
+            An explainer wrapping the untrained model.
+        """
+        torch.manual_seed(seed)
+        model = build_model(model_name, input_channels=input_channels, output_size=output_size)
         return cls(model, model_name=model_name, **kwargs)
 
     @classmethod

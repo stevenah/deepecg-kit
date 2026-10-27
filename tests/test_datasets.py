@@ -1242,6 +1242,8 @@ class TestSamplingRateResolution:
         assert description["input_channels"] == 1
         assert description["input_length"] == 3000
         assert description["split"] == {"seed": 7, "val_split": 0.2, "test_split": 0.1}
+        assert description["split_protocol"] == "seeded"
+        assert description["dataset_options"] == {}
 
     def test_describe_requires_setup(self):
         with pytest.raises(RuntimeError, match="setup"):

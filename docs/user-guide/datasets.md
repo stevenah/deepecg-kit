@@ -17,6 +17,38 @@ rate (300 Hz for PhysioNet 2017, 250 Hz for MIT-BIH AFDB, 128 Hz for LTAFDB) so 
 datasets share an input shape. Pass `sampling_rate` to change it. `deepecg list-datasets` prints
 the same table together with where each dataset is stored and whether it has been downloaded.
 
+## PTB-XL: labels and split
+
+PTB-XL follows the protocol of the PTB-XL benchmark (Strodthoff et al., 2021) by default, in its
+labels and in its split.
+
+**Labels.** With `label_rule="benchmark"`, the default, a diagnostic superclass is positive when
+the record carries any statement that maps to it, whatever likelihood the statement is given, and
+records with no superclass of the task are left out. `label_rule="likelihood"` keeps the rule of
+releases before 1.0: a statement counts only at a likelihood of at least 50, and records without a
+superclass stay in the dataset with every label negative. The rule applies to multi-label targets
+only. On PTB-XL 1.0.3 the benchmark rule leaves out 411 records and keeps 21,388.
+
+**Split.** With `use_recommended_folds=True`, the default, the dataset assigns every record to the
+partition its stratified fold recommends: folds 1 to 8 for training, fold 9 for validation and
+fold 10 for testing. The folds were drawn per patient, so the split is patient-level, and it is the
+same for every seed and every architecture; the seed still sets the initialisation and the data
+order. On PTB-XL 1.0.3 the partitions hold 17,084, 2,146 and 2,158 records.
+`use_recommended_folds=False` hands the split back to `ECGDataModule`, which then draws its seeded,
+patient-grouped split with `val_split` and `test_split`. From the command line:
+
+```bash
+deepecg train -m resnet -d ptbxl --multi-label                  # recommended folds, benchmark labels
+deepecg train -m resnet -d ptbxl --multi-label --seeded-split   # seeded 70/20/10 split by patient
+deepecg train -m resnet -d ptbxl --multi-label --label-rule likelihood
+```
+
+Checkpoints record both options (see [Checkpointing](training.md#checkpointing)), and the commands
+that start from a checkpoint rebuild PTB-XL with them. A checkpoint written before these options
+existed is rebuilt the way it was trained: likelihood rule and seeded split.
+
+## Long-term AF datasets
+
 In their four-class mode MIT-BIH AFDB and LTAFDB label segments Normal, AF, AFL or J from the
 rhythm annotations, and every other annotated rhythm (ventricular tachycardia, bigeminy and the
 rest, which LTAFDB has many of) counts as Normal. With `binary_classification` the two classes are
@@ -73,9 +105,16 @@ data_module = ECGDataModule(
 | `sampling_rate` | None | Sampling rate to resample to (Hz); None keeps the dataset's own default |
 | `dataset_kwargs` | None | Extra keyword arguments for the dataset class |
 
-After `setup()`, `data_module.sampling_rate` holds the rate in effect and
-`data_module.describe()` returns everything a checkpoint records about the data: dataset name,
-preprocessing, class names, sample shape and split protocol.
+A dataset that names a recommended partition for every sample (`predefined_partition()`, as
+PTB-XL does by default) is split that way, and `val_split`, `test_split` and `stratify` are then
+unused. Otherwise the split is drawn from `seed`, grouped by recording or patient and stratified by
+label.
+
+After `setup()`, `data_module.sampling_rate` holds the rate in effect, `data_module.split_protocol`
+says which split was used (`"predefined"` or `"seeded"`), and `data_module.describe()` returns
+everything a checkpoint records about the data: dataset name, preprocessing, class names, sample
+shape, labelling mode, the dataset options that decide labels and split (`dataset_options`), the
+split protocol (`split_protocol`) and the split settings (`split`).
 
 `num_workers` defaults to 0 because the built-in datasets keep their signals in memory, which
 makes worker processes pure overhead. If you raise it in a script on macOS or Windows, guard the
@@ -132,6 +171,10 @@ All datasets inherit from `BaseECGDataset`, which extends `torch.utils.data.Data
 - `get_class_distribution()` → sample count per class
 - `group_ids` → one identifier per sample, used to keep a recording or patient inside one split
 - `get_preprocessing()` → sampling rate, segment length and normalisation of the samples
+- `predefined_partition()` → `"train"`, `"val"` or `"test"` per sample for a dataset distributed
+  with a recommended split, or `None` (the default) to leave the split to `ECGDataModule`
+- `get_dataset_options()` → the constructor options that decide labels or split, which
+  checkpoints record (empty by default)
 
 ## Preprocessing Utilities
 
@@ -213,6 +256,10 @@ segments of one recording from landing in both train and test. Implement `_downl
 data_dir, verbose)` if the data can be fetched automatically. Constructor arguments named
 `sampling_rate`, `normalization`, `segment_duration_seconds`, `binary_classification` or
 `multi_label` are picked up by the matching CLI flags.
+
+A dataset distributed with a fixed split can override `predefined_partition()` to return the
+partition of every sample, and `get_dataset_options()` to name the constructor options that
+produced its labels and split, so that a checkpoint rebuilds it the same way.
 
 The class works with `ECGDataModule(dataset_class=MyDataset, data_dir=...)` straight away, and
 with the CLI through [`--import`](cli.md#using-your-own-models-and-datasets).

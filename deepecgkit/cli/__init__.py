@@ -27,7 +27,7 @@ from deepecgkit.cli.logger import CLILogger
 from deepecgkit.cli.main import main
 
 if TYPE_CHECKING:
-    from deepecgkit.cli.commands.analysis import aggregate, rank
+    from deepecgkit.cli.commands.analysis import aggregate, bootstrap, rank
     from deepecgkit.cli.commands.evaluate import evaluate
     from deepecgkit.cli.commands.explain import explain
     from deepecgkit.cli.commands.extract import extract_features
@@ -55,6 +55,7 @@ __all__ = [
     "CLILogger",
     "ECGTrainer",
     "aggregate",
+    "bootstrap",
     "evaluate",
     "explain",
     "extract_features",
@@ -75,6 +76,7 @@ __all__ = [
 _LAZY = {
     "aggregate": "deepecgkit.cli.commands.analysis",
     "rank": "deepecgkit.cli.commands.analysis",
+    "bootstrap": "deepecgkit.cli.commands.analysis",
     "evaluate": "deepecgkit.cli.commands.evaluate",
     "explain": "deepecgkit.cli.commands.explain",
     "extract_features": "deepecgkit.cli.commands.extract",

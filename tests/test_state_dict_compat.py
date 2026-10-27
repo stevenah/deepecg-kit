@@ -63,3 +63,26 @@ def test_trainer_checkpoint_round_trip(model_name, tmp_path):
     assert sorted(restored.state_dict().keys()) == sorted(model.state_dict().keys())
     for key, tensor in model.state_dict().items():
         assert torch.equal(tensor, restored.state_dict()[key])
+
+
+def test_medformer_loads_checkpoints_holding_the_unused_cross_channel_module():
+    """Releases before 1.0 saved a never-called module; its weights are dropped on load."""
+    model = get_model("medformer")(input_channels=1, output_size=4)
+    legacy = dict(model.state_dict())
+    for name, shape in (
+        ("attn.in_proj_weight", (384, 128)),
+        ("attn.in_proj_bias", (384,)),
+        ("attn.out_proj.weight", (128, 128)),
+        ("attn.out_proj.bias", (128,)),
+        ("norm.weight", (128,)),
+        ("norm.bias", (128,)),
+    ):
+        legacy[f"cross_channel_attn.{name}"] = torch.randn(shape)
+
+    restored = get_model("medformer")(input_channels=1, output_size=4)
+    restored.load_state_dict(legacy, strict=True)
+    restored.eval()
+    model.eval()
+    x = torch.randn(2, 1, 1000)
+    with torch.no_grad():
+        assert torch.equal(model(x), restored(x))

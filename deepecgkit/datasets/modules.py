@@ -9,12 +9,18 @@ from typing import Any
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, Subset
 
 from deepecgkit.datasets.base import BaseECGDataset
 from deepecgkit.datasets.splitting import DataSplitter
 
 logger = logging.getLogger(__name__)
+
+#: How the partitions were formed: the dataset's own recommended assignment,
+#: or ECGDataModule's seeded, grouped and stratified split.
+SPLIT_PREDEFINED = "predefined"
+SPLIT_SEEDED = "seeded"
+PARTITIONS = ("train", "val", "test")
 
 
 class ECGDataModule:
@@ -92,6 +98,7 @@ class ECGDataModule:
         self.train_dataset = None
         self.val_dataset = None
         self.test_dataset = None
+        self.split_protocol: str | None = None
         self._split_settings: tuple | None = None
 
     def setup(self, stage: str | None = None) -> None:
@@ -100,6 +107,11 @@ class ECGDataModule:
         The dataset is loaded and split on the first call. Later calls, which
         the trainer makes for every stage, return at once unless the dataset or
         a split setting has changed since.
+
+        A dataset that names a recommended partition for every sample (see
+        BaseECGDataset.predefined_partition) is split that way, and the split
+        fractions are then unused; the seed still sets initialisation and
+        shuffling in the trainer.
 
         Args:
             stage: Current stage ('fit', 'validate', 'test', or 'predict')
@@ -144,6 +156,21 @@ class ECGDataModule:
         if self.train_dataset is not None and split_settings == self._split_settings:
             return
         self._split_settings = split_settings
+
+        partition = self._predefined_partition()
+        if partition is not None:
+            self.split_protocol = SPLIT_PREDEFINED
+            self.train_dataset, self.val_dataset, self.test_dataset = (
+                Subset(self.dataset, np.flatnonzero(partition == name).tolist())
+                for name in PARTITIONS
+            )
+            if self.verbose:
+                logger.info("Using the dataset's recommended split")
+                logger.info(f"Training set size: {len(self.train_dataset)}")
+                logger.info(f"Validation set size: {len(self.val_dataset)}")
+                logger.info(f"Test set size: {len(self.test_dataset)}")
+            return
+        self.split_protocol = SPLIT_SEEDED
 
         stratify_labels = None
         if (
@@ -219,6 +246,24 @@ class ECGDataModule:
             logger.info(f"Validation set size: {len(self.val_dataset)}")
             logger.info(f"Test set size: {len(self.test_dataset)}")
 
+    def _predefined_partition(self) -> np.ndarray | None:
+        """Read the dataset's recommended partition, if it defines one.
+
+        Raises:
+            ValueError: If the partition does not name one known partition per sample.
+        """
+        getter = getattr(self.dataset, "predefined_partition", None)
+        partition = getter() if callable(getter) else None
+        if partition is None:
+            return None
+        partition = np.asarray(partition)
+        if len(partition) != len(self.dataset) or not np.isin(partition, PARTITIONS).all():
+            raise ValueError(
+                f"{type(self.dataset).__name__}.predefined_partition() must name one of "
+                f"{PARTITIONS} for each of its {len(self.dataset)} samples."
+            )
+        return partition
+
     def _collect_labels(self) -> np.ndarray:
         """Collect every sample's label, for stratifying the split.
 
@@ -277,7 +322,8 @@ class ECGDataModule:
         Returns:
             Mapping with the registered dataset name, its preprocessing
             (sampling rate, segment length, normalisation), the class names,
-            the sample shape, the labelling mode, and the split protocol.
+            the sample shape, the labelling mode, the options that decide labels
+            and split, and the split protocol.
         """
         if self.dataset is None:
             raise RuntimeError("Call setup() before describing the data module")
@@ -290,6 +336,7 @@ class ECGDataModule:
                 input_channels, input_length = int(sample.shape[0]), int(sample.shape[-1])
 
         get_preprocessing = getattr(dataset, "get_preprocessing", None)
+        get_options = getattr(dataset, "get_dataset_options", None)
         class_names = getattr(dataset, "class_names", None)
         return {
             "dataset": getattr(type(dataset), "_registry_name", None),
@@ -299,6 +346,8 @@ class ECGDataModule:
             "input_length": input_length,
             "multi_label": bool(getattr(dataset, "multi_label", False)),
             "binary_classification": bool(getattr(dataset, "binary_classification", False)),
+            "dataset_options": get_options() if callable(get_options) else {},
+            "split_protocol": self.split_protocol,
             "split": {
                 "seed": self.seed,
                 "val_split": self.val_split,

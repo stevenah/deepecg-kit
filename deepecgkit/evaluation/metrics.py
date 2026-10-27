@@ -38,8 +38,10 @@ DEFAULT_CALIBRATION_BINS = 15
 CALIBRATION_METRIC_NAMES = ("ece", "adaptive_ece", "mce", "brier")
 
 #: Keys emitted by calibration_report: the four binned metrics, the fitted
-#: temperature, and the rescaled variants. The evaluator's report rows and the
-#: analysis pipeline's expected columns both derive from this.
+#: temperature, the variants after temperature scaling ("_temp"), and those
+#: after per-label Platt scaling ("_platt", sigmoid outputs only). The
+#: evaluator's report rows and the analysis pipeline's expected columns both
+#: derive from this.
 CALIBRATION_REPORT_KEYS = (
     "ece",
     "adaptive_ece",
@@ -50,6 +52,10 @@ CALIBRATION_REPORT_KEYS = (
     "adaptive_ece_temp",
     "mce_temp",
     "brier_temp",
+    "ece_platt",
+    "adaptive_ece_platt",
+    "mce_platt",
+    "brier_platt",
 )
 
 

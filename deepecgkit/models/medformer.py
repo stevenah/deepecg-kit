@@ -24,29 +24,6 @@ class PatchEmbedding1D(nn.Module):
         return x.transpose(1, 2)
 
 
-class CrossChannelAttention(nn.Module):
-    """
-    Cross-channel attention for multi-lead ECG signals.
-
-    For single-lead ECG this acts as an identity-like operation.
-
-    Args:
-        d_model: Embedding dimension
-        nhead: Number of attention heads (default: 4)
-        dropout: Dropout probability (default: 0.1)
-    """
-
-    def __init__(self, d_model: int, nhead: int = 4, dropout: float = 0.1):
-        super().__init__()
-        self.attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
-        self.norm = nn.LayerNorm(d_model)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        residual = x
-        x, _ = self.attn(x, x, x)
-        return self.norm(x + residual)
-
-
 class IntraGranularityBlock(nn.Module):
     """
     Self-attention within patches of one granularity level.
@@ -118,6 +95,21 @@ class InterGranularityAttention(nn.Module):
         return updated
 
 
+#: Prefix of the never-called module that releases before 1.0 saved.
+_LEGACY_CROSS_CHANNEL_PREFIX = "cross_channel_attn."
+
+
+def _drop_unused_cross_channel_weights(state_dict, prefix, *args, **kwargs) -> None:
+    """Remove the legacy cross-channel attention weights before a state dict loads.
+
+    The module was built but never called, so its weights influenced no output
+    and can be discarded.
+    """
+    legacy = prefix + _LEGACY_CROSS_CHANNEL_PREFIX
+    for key in [key for key in state_dict if key.startswith(legacy)]:
+        del state_dict[key]
+
+
 @register_model(
     name="medformer",
     description="Multi-granularity patching Transformer for medical time series (NeurIPS 2024)",
@@ -130,7 +122,12 @@ class Medformer(ECGModelBase):
 
     Uses multiple patch sizes to capture fine, medium, and coarse temporal
     patterns, with intra-granularity self-attention and inter-granularity
-    cross-attention for information fusion.
+    cross-attention for information fusion. Each patch embedding spans all
+    leads, which is how the original design mixes channels.
+
+    Releases before 1.0 also built a cross-channel attention module that the
+    forward pass never called. Checkpoints that hold its weights still load:
+    they are dropped on loading, which changes no output.
 
     Args:
         input_channels: Number of input channels (default: 1 for single-lead ECG)
@@ -179,12 +176,6 @@ class Medformer(ECGModelBase):
             [nn.Parameter(torch.randn(1, max_patches, d_model) * 0.02) for _ in patch_sizes]
         )
 
-        self.cross_channel_attn = CrossChannelAttention(
-            d_model,
-            nhead=min(4, nhead),
-            dropout=dropout_rate,
-        )
-
         self.intra_blocks = nn.ModuleList()
         self.inter_blocks = nn.ModuleList()
         for _ in range(num_encoder_layers):
@@ -204,6 +195,7 @@ class Medformer(ECGModelBase):
         self._feature_dim = d_model * num_granularities
 
         self.classifier = nn.Linear(self._feature_dim, output_size)
+        self._register_load_state_dict_pre_hook(_drop_unused_cross_channel_weights)
 
     def extract_features(self, x: torch.Tensor) -> torch.Tensor:
         granularity_features = []

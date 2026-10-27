@@ -94,8 +94,8 @@ windows are averaged. Detection runs on the **signal**, never on the attribution
 is a property of the recording, so anchoring to the attribution would make the window positions
 depend on the method under test.
 
-The default beat window runs from 250 ms before the R-peak to 500 ms after it, and the regions are
-those a cardiologist would name:
+The default beat window runs from 300 ms before the R-peak to 500 ms after it, 800 ms in all, and
+the regions are those a cardiologist would name:
 
 | Region | Window relative to R | Share of the beat window |
 |---|---|---|
@@ -127,6 +127,61 @@ the P-wave region at roughly 40% of chance.
         recording puts the QRS window where the T wave is and every fraction it reports will be
         wrong. The `deepecg explain` command takes the rate from the checkpoint and the dataset
         instead.
+
+### How well the R-peaks are found
+
+The detector is a filtered-derivative energy detector: a zero-phase 5–15 Hz band-pass, the squared
+derivative averaged over 150 ms, and peaks above the mean plus one standard deviation that are at
+least 300 ms apart, without adaptive thresholds or search-back. It was checked against the
+reference beat annotations of the 48 records of the MIT-BIH Arrhythmia Database, run as attribution
+runs it: on z-scored 10-second windows resampled to 500 Hz, on the MLII lead (the first lead for the
+two records without one), counting a detection within 150 ms of an annotated beat as a match.
+Over 109,150 annotated beats it found 92.4% (sensitivity 0.924) with a positive predictive value
+of 0.998; the per-record medians were 0.980 and 0.999. Sensitivity was lowest on records dominated
+by paced or ventricular ectopic beats (records 104, 203, 208 and 228), where the fixed threshold and
+the 300 ms refractory period miss beats. A detected peak is almost always a real beat, so the beat
+profile rests on true beats, but ectopic beats are under-represented in it.
+
+`match_r_peaks(detected, reference, tolerance)` scores detections against annotations the same way,
+one to one and nearest pairs first, and returns the true positives, false positives and false
+negatives:
+
+```python
+from deepecgkit.explainability import detect_r_peaks, match_r_peaks
+
+peaks = detect_r_peaks(signals[0, 0].numpy(), sampling_rate=300.0)
+annotated_beats = peaks + 6  # stand-in for reference beat positions, in samples
+# 150 ms at 300 Hz is 45 samples
+true_positives, false_positives, false_negatives = match_r_peaks(peaks, annotated_beats, tolerance=45)
+```
+
+## Model-randomisation check
+
+Attribution methods can produce plausible maps for a model that has learned nothing (Adebayo et
+al., 2018). The check is to explain the same inputs, with the same method and the same target
+classes, through a model of the same architecture whose weights were never trained. A summary that
+changes little under randomisation reflects the input signal and the architecture rather than
+what the model learned; one that changes is at least sensitive to the training. Passing the check
+does not make an attribution faithful.
+
+```python
+untrained = ECGExplainer.from_random_init(
+    "kanres", input_channels=1, output_size=4, seed=42, sampling_rate=500.0
+)
+randomized = untrained.explain(signals)
+result.pqrst_enrichment, randomized.pqrst_enrichment
+```
+
+`from_random_init` builds the model exactly as the untrained encoder of
+[in-domain probing](representation-quality.md#in-domain-probing) is built, under the given seed.
+Give it the trained model's lead count and output size, so the same output index can be
+explained. From the command line, add `--randomize-weights` to the `deepecg explain` call you
+compare against: the checkpoint still decides the data, the preprocessing and the output size,
+and `summary.json` records `"weights": "randomized"` and the `randomization_seed`.
+
+!!! note "Architectures whose untrained attribution is degenerate"
+    An untrained `xresnet` attributes only through its identity path (see the known issues below),
+    so its randomised summaries describe that path rather than a random network.
 
 ## Visualisation
 
@@ -211,10 +266,12 @@ sequence — roughly 4000 sequential autograd nodes at its maximum length. Integ
 - The zero baseline is a modelling assumption, not a neutral fact. It is the right choice for
   z-scored input, where zero is the per-lead mean, and a poor one for raw millivolts, where blanking
   to zero injects a step the model reacts to.
-- R-peak detection is a filtered-derivative threshold detector, not a clinically validated one, and
-  it has not been checked against an annotated database. On noisy or low-amplitude leads it misses
-  beats, and the profile is then an average over fewer beats than you assume. `beat_count` reports
-  how many survived.
+- R-peak detection is a filtered-derivative threshold detector, not a clinically validated one. On
+  the MIT-BIH Arrhythmia Database it finds 92.4% of the annotated beats with a positive predictive
+  value of 0.998 ([How well the R-peaks are found](#how-well-the-r-peaks-are-found)), and it misses
+  most beats on records dominated by paced or ventricular ectopic beats. On noisy or low-amplitude
+  leads it misses beats too, and the profile is then an average over fewer beats than you assume.
+  `beat_count` reports how many survived.
 - Atrial fibrillation is the case where detection is hardest and the claim matters most: RR
   intervals are irregular and a false peak on a T wave misaligns every window. Check `beat_count`
   against the recording length before quoting a P-wave fraction.
@@ -225,6 +282,3 @@ sequence — roughly 4000 sequential autograd nodes at its maximum length. Integ
   are degenerate rather than merely uninformative.
 - Values are not comparable across methods or across architectures. Never put a saliency map and an
   occlusion map on the same colour scale.
-- `Medformer` builds a `cross_channel_attn` block that `forward` never invokes, so 5.5% of its
-  parameters receive no gradient and contribute to no attribution. This is the same defect noted in
-  [Feature Extraction](feature-extraction.md).

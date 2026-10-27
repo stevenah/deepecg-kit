@@ -1,4 +1,4 @@
-"""Aggregate and rank commands: multi-seed analysis over run directories.
+"""Aggregate, rank and bootstrap commands: analysis over run directories.
 
 These wrap deepecgkit.analysis for the run directories that `deepecg train`
 and scripts/run_experiments.py produce. The tabular results are printed to
@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from deepecgkit.analysis.aggregation import (
@@ -21,6 +22,14 @@ from deepecgkit.analysis.aggregation import (
     discover_runs,
     reconcile_averaging,
     runs_to_frame,
+)
+from deepecgkit.analysis.bootstrap import (
+    BOOTSTRAP_METRICS,
+    DEFAULT_BOOTSTRAP_SEED,
+    DEFAULT_RESAMPLES,
+    bootstrap_intervals,
+    paired_bootstrap_difference,
+    read_predictions,
 )
 from deepecgkit.analysis.latex import (
     flip_survival_table,
@@ -195,6 +204,135 @@ def aggregate(
         for name in written:
             print(f"  {name}")
 
+    return 0
+
+
+def bootstrap(
+    runs_dir: list[str],
+    output_dir: str | None = None,
+    recursive: bool = False,
+    include_legacy: bool = False,
+    on_duplicate: str = ON_DUPLICATE_NEWEST,
+    models: list[str] | None = None,
+    datasets: list[str] | None = None,
+    metrics: list[str] | None = None,
+    n_resamples: int = DEFAULT_RESAMPLES,
+    bootstrap_seed: int = DEFAULT_BOOTSTRAP_SEED,
+    confidence_level: float = CONFIDENCE_LEVEL,
+    emit_latex: bool = False,
+) -> int:
+    """Bootstrap the test recordings of every run, from its stored predictions.
+
+    Writes a percentile interval for each run and metric, and, per dataset
+    and seed, the paired difference between every architecture and the one
+    with the highest score on the first metric, computed on identical
+    resamples. Nothing is retrained.
+
+    Returns:
+        Zero on success, one on failure.
+    """
+    metrics = list(metrics) if metrics else ["f1", "auroc"]
+    unknown = sorted(set(metrics) - set(BOOTSTRAP_METRICS))
+    if unknown:
+        print(
+            f"Unknown metric(s): {', '.join(unknown)}. Choose from {', '.join(BOOTSTRAP_METRICS)}.",
+            file=sys.stderr,
+        )
+        return 1
+    discovered = _discover_frame(
+        runs_dir, recursive, include_legacy, on_duplicate, models, datasets
+    )
+    if discovered is None:
+        return 1
+    records, frame, _ = discovered
+    kept = set(zip(frame["dataset"], frame["model"], frame["seed"], strict=True))
+    options = {
+        "n_resamples": n_resamples,
+        "seed": bootstrap_seed,
+        "confidence_level": confidence_level,
+    }
+
+    predictions: dict[tuple[str, int | None], dict[str, object]] = {}
+    interval_rows: list[dict[str, object]] = []
+    for record in records:
+        if (record.dataset, record.model, record.seed) not in kept:
+            continue
+        try:
+            stored = read_predictions(record.run_dir)
+        except (FileNotFoundError, ValueError) as error:
+            print(f"  skipped {record.run_dir.name}: {error}", file=sys.stderr)
+            continue
+        predictions.setdefault((record.dataset, record.seed), {})[record.model] = stored
+        for metric, interval in bootstrap_intervals(stored, metrics, **options).items():
+            interval_rows.append(
+                {
+                    "dataset": record.dataset,
+                    "model": record.model,
+                    "seed": record.seed,
+                    "metric": metric,
+                    "estimate": interval.estimate,
+                    "lower": interval.lower,
+                    "upper": interval.upper,
+                    "n_recordings": len(np.unique(stored.groups)),
+                }
+            )
+    if not interval_rows:
+        print("No run stored predictions to resample.", file=sys.stderr)
+        return 1
+    intervals = pd.DataFrame(interval_rows)
+
+    difference_rows: list[dict[str, object]] = []
+    lead = metrics[0]
+    for (dataset, seed), by_model in sorted(predictions.items(), key=lambda item: str(item[0])):
+        scores = intervals[
+            (intervals["dataset"] == dataset)
+            & (intervals["seed"] == seed)
+            & (intervals["metric"] == lead)
+        ].set_index("model")["estimate"]
+        if scores.dropna().empty:
+            continue
+        reference = str(scores.idxmax())
+        for model, stored in sorted(by_model.items()):
+            if model == reference:
+                continue
+            try:
+                differences = paired_bootstrap_difference(
+                    by_model[reference], stored, metrics, **options
+                )
+            except ValueError as error:
+                print(f"  {dataset} {model}: {error}", file=sys.stderr)
+                continue
+            for metric, interval in differences.items():
+                difference_rows.append(
+                    {
+                        "dataset": dataset,
+                        "seed": seed,
+                        "metric": metric,
+                        "reference": reference,
+                        "model": model,
+                        "difference": interval.estimate,
+                        "lower": interval.lower,
+                        "upper": interval.upper,
+                        "excludes_zero": bool(interval.lower > 0 or interval.upper < 0),
+                    }
+                )
+    differences_frame = pd.DataFrame(difference_rows)
+
+    print(
+        f"\nBootstrap over test recordings: {n_resamples} resamples, "
+        f"{confidence_level:.0%} percentile intervals\n"
+    )
+    print(intervals.to_string(index=False))
+    if not differences_frame.empty:
+        print(f"\nPaired differences from the highest {lead} per dataset:\n")
+        print(differences_frame.to_string(index=False))
+
+    if output_dir:
+        target = Path(output_dir)
+        target.mkdir(parents=True, exist_ok=True)
+        intervals.to_csv(target / "bootstrap_intervals.csv", index=False)
+        differences_frame.to_csv(target / "bootstrap_differences.csv", index=False)
+        print(f"\nWrote bootstrap_intervals.csv and bootstrap_differences.csv to {target}")
     return 0
 
 
@@ -395,6 +533,33 @@ def add_parser(subparsers: Any) -> Any:
         help="Evaluate a 'best here, worst there' claim",
     )
     rank_parser.set_defaults(handler="rank", to_kwargs=_rank_kwargs, pass_logger=False)
+
+    bootstrap_parser = subparsers.add_parser(
+        "bootstrap", help="Bootstrap test recordings from stored predictions"
+    )
+    add_discovery_arguments(bootstrap_parser)
+    bootstrap_parser.add_argument(
+        "--metrics",
+        nargs="+",
+        default=["f1", "auroc"],
+        help="Metrics to resample; the first picks the reference architecture "
+        f"(choices: {', '.join(BOOTSTRAP_METRICS)}; default: f1 auroc)",
+    )
+    bootstrap_parser.add_argument(
+        "--n-resamples",
+        type=int,
+        default=DEFAULT_RESAMPLES,
+        help=f"Resamples of the test recordings (default: {DEFAULT_RESAMPLES})",
+    )
+    bootstrap_parser.add_argument(
+        "--bootstrap-seed",
+        type=int,
+        default=DEFAULT_BOOTSTRAP_SEED,
+        help=f"Seed of the resampling (default: {DEFAULT_BOOTSTRAP_SEED})",
+    )
+    bootstrap_parser.set_defaults(
+        handler="bootstrap", to_kwargs=_bootstrap_kwargs, pass_logger=False
+    )
     return aggregate_parser
 
 
@@ -414,6 +579,15 @@ def _discovery_kwargs(args: Any) -> dict[str, Any]:
 
 def _aggregate_kwargs(args: Any) -> dict[str, Any]:
     return {**_discovery_kwargs(args), "metrics": args.metrics}
+
+
+def _bootstrap_kwargs(args: Any) -> dict[str, Any]:
+    return {
+        **_discovery_kwargs(args),
+        "metrics": args.metrics,
+        "n_resamples": args.n_resamples,
+        "bootstrap_seed": args.bootstrap_seed,
+    }
 
 
 def _rank_kwargs(args: Any) -> dict[str, Any]:

@@ -69,9 +69,15 @@ def explain(
     input_channels: int | None = None,
     force_download: bool = False,
     preprocess: bool = True,
+    randomize_weights: bool = False,
     logger: CLILogger | None = None,
 ) -> int:
     """Attribute a model's predictions back to the ECG and write them to disk.
+
+    With randomize_weights, the checkpoint still decides the data, the
+    preprocessing and the output being explained, but the attribution is
+    computed for an untrained model of the same architecture and shape, built
+    under seed: the model-randomisation check of Adebayo et al. (2018).
 
     Data is prepared the way the checkpoint was trained, so the attribution
     describes inputs the model would actually see. sampling_rate names the
@@ -97,6 +103,10 @@ def explain(
     ):
         if code is not None:
             return code
+
+    if randomize_weights and checkpoint is None:
+        logger.error("--randomize-weights needs --checkpoint, which fixes the model's shape.")
+        return 1
 
     if method not in METHODS:
         logger.error(f"Unknown method: {method}")
@@ -182,7 +192,25 @@ def explain(
             "progress": not logger.quiet,
         }
 
-        if checkpoint is not None:
+        if checkpoint is not None and randomize_weights:
+            output_size = (stored.get("model_config") or {}).get("output_size")
+            if output_size is None:
+                output_size = len(data_config.get("class_names") or []) or None
+            if output_size is None:
+                logger.error(
+                    "The checkpoint records no output size, so the untrained model cannot be "
+                    "built with the same shape."
+                )
+                return 1
+            logger.info(f"Building an untrained {model_name} under seed {seed}...")
+            explainer = ECGExplainer.from_random_init(
+                model_name,
+                input_channels=int(input_channels),
+                output_size=int(output_size),
+                seed=seed,
+                **explainer_kwargs,
+            )
+        elif checkpoint is not None:
             logger.info(f"Loading model from {checkpoint}...")
             explainer = ECGExplainer.from_checkpoint(
                 checkpoint, model_name, input_channels=input_channels, **explainer_kwargs
@@ -211,6 +239,9 @@ def explain(
         summary["input"] = input_path
         summary["split"] = split if dataset_name is not None else None
         summary["target_class"] = "all" if explain_all else target_class or "predicted"
+        summary["weights"] = "randomized" if randomize_weights else "trained"
+        if randomize_weights:
+            summary["randomization_seed"] = seed
         (output_path / SUMMARY_FILE).write_text(json.dumps(summary, indent=2))
         logger.info(f"Summary saved to {output_path / SUMMARY_FILE}")
 
@@ -646,6 +677,12 @@ def add_parser(subparsers: Any) -> Any:
         action="store_true",
         help="Force re-download the dataset",
     )
+    parser.add_argument(
+        "--randomize-weights",
+        action="store_true",
+        help="Explain an untrained model of the checkpoint's architecture and shape, built "
+        "under --seed, on the same data: the model-randomisation check",
+    )
     parser.set_defaults(handler="explain", to_kwargs=_to_kwargs)
     return parser
 
@@ -678,4 +715,5 @@ def _to_kwargs(args: Any) -> dict[str, Any]:
         "input_channels": args.input_channels,
         "force_download": args.force_download,
         "preprocess": not args.no_preprocess,
+        "randomize_weights": args.randomize_weights,
     }

@@ -76,6 +76,9 @@ def main():
     dataset_kwargs = {}
     if data_config.get("binary_classification"):
         dataset_kwargs["binary_classification"] = True
+    if dataset_name == data_config.get("dataset"):
+        # Options that decide labels and split, such as PTB-XL's folds.
+        dataset_kwargs.update(data_config.get("dataset_options") or {})
     data_module = ECGDataModule(
         dataset_class=get_dataset(dataset_name),
         sampling_rate=preprocessing.get("sampling_rate"),

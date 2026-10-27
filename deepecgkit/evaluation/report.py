@@ -92,19 +92,24 @@ def _calibration_columns(
     )
 
     scaled = not np.isnan(report["temperature"])
+    platt = not np.isnan(report.get("ece_platt", np.nan))
     logger.info("")
     logger.info(f"  Calibration ({n_bins} bins):")
     if scaled:
-        logger.info(f"  {'Metric':<16} {'Before':>10} {'After T':>10}")
-        logger.info(f"  {'-' * 38}")
+        header = f"  {'Metric':<16} {'Before':>10} {'After T':>10}"
+        logger.info(header + (f" {'After P':>10}" if platt else ""))
+        logger.info(f"  {'-' * (49 if platt else 38)}")
         for name, label in (
             ("ece", "ECE"),
             ("adaptive_ece", "Adaptive ECE"),
             ("mce", "MCE"),
             ("brier", "Brier"),
         ):
-            logger.info(f"  {label:<16} {report[name]:>10.4f} {report[name + '_temp']:>10.4f}")
+            line = f"  {label:<16} {report[name]:>10.4f} {report[name + '_temp']:>10.4f}"
+            logger.info(line + (f" {report[name + '_platt']:>10.4f}" if platt else ""))
         logger.info(f"  {'Temperature':<16} {report['temperature']:>21.4f}")
+        if platt:
+            logger.info("  After P: per-label Platt scaling (a scale and a bias per output)")
     else:
         for name, label in (
             ("ece", "ECE"),

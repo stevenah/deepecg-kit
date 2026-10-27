@@ -43,6 +43,10 @@ LOWER_IS_BETTER: frozenset[str] = frozenset(
         "adaptive_ece_temp",
         "mce_temp",
         "brier_temp",
+        "ece_platt",
+        "adaptive_ece_platt",
+        "mce_platt",
+        "brier_platt",
     }
 )
 

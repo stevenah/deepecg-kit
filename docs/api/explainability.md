@@ -30,6 +30,8 @@ importing the package does not pull matplotlib into the path of every command.
 
 ::: deepecgkit.explainability.beats.detect_r_peaks
 
+::: deepecgkit.explainability.beats.match_r_peaks
+
 ::: deepecgkit.explainability.beats.beat_aligned_attribution
 
 ::: deepecgkit.explainability.beats.pqrst_fractions

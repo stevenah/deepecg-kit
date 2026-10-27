@@ -28,7 +28,11 @@ record:
 - `--model` is optional. It is only needed for checkpoints written by earlier releases, and a
   value that contradicts the checkpoint is reported as such.
 - Datasets are rebuilt with the recorded preprocessing, so the model is evaluated on inputs
-  shaped like its training data.
+  shaped like its training data. On the dataset the model was trained on, the options that decide
+  labels and split are restored too (for PTB-XL, the label rule and whether the recommended folds
+  were used), so the test split is the one the model was evaluated on. Checkpoints written before
+  these options were recorded get those of earlier releases: the likelihood rule and the seeded
+  split.
 - Recording files given with `--input` are resampled, segmented and normalised to match.
 
 A checkpoint from before this was recorded is assumed to have been trained at 500 Hz, the rate
@@ -67,12 +71,19 @@ deepecg train -m kanres -d af-classification --epochs 50
 | `--normalization` | the dataset's own (`zscore`) | Normalization method: `zscore`, `minmax`, `none` |
 | `--multi-label` | false | Multi-label classification with BCE loss (`ptbxl`) |
 | `--binary-classification` | false | Collapse labels to AF vs Non-AF (`mitbih-afdb`, `ltafdb`, `unified-af`) |
+| `--label-rule` | `benchmark` | How PTB-XL labels are derived: `benchmark` (every statement counts) or `likelihood` (likelihood at least 50) |
+| `--seeded-split` | false | Split PTB-XL by `--seed`, `--val-split` and `--test-split` instead of the recommended folds |
 
 Each dataset is used at its own sampling rate unless `--sampling-rate` is given: 300 Hz for the
 AF datasets, 500 Hz for PTB-XL. A flag the chosen dataset cannot honour, such as
 `--binary-classification` with `af-classification` or `--segment-duration` with `ptbxl`, is an
 error rather than being ignored; `deepecg list-datasets` shows which options each dataset
 takes.
+
+PTB-XL is split along its recommended folds (1 to 8 for training, 9 for validation, 10 for
+testing) and labelled with the rule of the PTB-XL benchmark unless `--seeded-split` or
+`--label-rule likelihood` is given; with the recommended folds, `--val-split` and `--test-split`
+have no effect. See [Datasets](datasets.md#ptb-xl-labels-and-split).
 
 Before training starts the command checks that the model can take the dataset's signal length
 and stops with the flag to change if it cannot. `afmodel`, for instance, needs 30-second
@@ -84,8 +95,8 @@ existing scripts, has no effect, and will be removed.
 
 Every run directory receives, alongside its metrics: `checkpoints/` with the best checkpoints by
 validation loss, named like `epoch=07-val_loss=0.4123.pt`; `run_metadata.json` recording what
-produced the run (model, dataset, seed, split fractions, labelling mode, hyperparameters, the
-final returncode and the best checkpoint); and `split_info.json` with the realised split sizes.
+produced the run (model, dataset, seed, split protocol, split fractions, dataset options,
+labelling mode, hyperparameters, the final returncode and the best checkpoint); and `split_info.json` with the realised split sizes.
 The preprocessing fields in `run_metadata.json` (`sampling_rate`, `normalization`,
 `segment_duration_seconds`, `input_length`) hold the values that were in effect, whether or not
 a flag set them. `deepecg evaluate` and the [analysis commands](#deepecg-aggregate) read these
@@ -124,7 +135,9 @@ checkpoint lives inside a run directory written by `deepecg train`, the values r
 run's `run_metadata.json` are adopted automatically for whichever of the three flags were left at
 their defaults; an explicit flag that contradicts the recording is kept but produces a warning,
 because the rebuilt split will then not match the one the model was trained on. The rebuilt split
-sizes are also verified against the run's `split_info.json`, again with a warning on mismatch.
+sizes are also verified against the run's `split_info.json`, again with a warning on mismatch. A
+PTB-XL checkpoint trained on the recommended folds is evaluated on fold 10 whatever these flags
+say.
 
 Accuracy, macro precision, recall and F1, AUROC, the per-class table and the calibration block
 are always printed. With `--output`, the full artifact set is also written into the directory:
@@ -254,6 +267,7 @@ directory rather than a file.
 | `--accelerator` | auto | Device: `auto`, `cpu`, `gpu`, `mps` |
 | `--input-channels` | auto | Lead count, for models whose weights do not encode it |
 | `--force-download` | false | Force re-download the dataset |
+| `--randomize-weights` | false | Explain an untrained model of the checkpoint's architecture and shape, built under `--seed` |
 
 The beat windows are placed at the sampling rate of the signals the model actually sees. For a
 dataset that is the rate it is resampled to, which comes from the checkpoint. For a file it is
@@ -266,6 +280,14 @@ distribution and the beat profile), `summary.json` (the run's provenance and hea
 unless `--no-plots` is given, `signal_attribution.png`, `lead_importance.png` and
 `beat_profile.png`. The beat figure is skipped with a warning when no complete beats were detected.
 
+`--randomize-weights` is the model-randomisation check of Adebayo et al. (2018). The checkpoint
+still decides the data, its preprocessing and the output size, but the attribution is computed for
+an untrained model of the same architecture built under `--seed`. Run it next to the trained model
+on the same inputs and compare the two `summary.json` files: a summary that changes little under
+randomisation reflects the input and the architecture rather than anything the model learned. The
+summary records `"weights": "trained"` or `"randomized"`, and the seed as `randomization_seed`. See
+[Explainability](explainability.md#model-randomisation-check).
+
 `--max-samples` defaults to 8 because attribution is expensive: integrated gradients costs
 `--ig-steps` forward and backward passes per recording, and occlusion costs one forward pass per
 window per lead. `--target-class all` multiplies the whole run by the class count and stores the
@@ -273,7 +295,8 @@ result under an extra leading axis in `values_by_class`.
 
 ### `deepecg probe`
 
-Freeze encoders, fit linear probes and write the cross-dataset transfer matrix. See
+Freeze encoders, fit linear probes and write the cross-dataset transfer matrix, or, with
+`--in-domain`, probe each encoder on its own task beside an untrained one. See
 [Representation Quality](representation-quality.md) for what the numbers mean and why
 standardisation is part of the protocol rather than a preprocessing detail.
 
@@ -308,7 +331,8 @@ records another rate, or records none.
 | `--embedding-plots` | `diagonal` | `none`, `diagonal`, or `all` |
 | `--perplexity` | 30 | t-SNE perplexity, clamped to what the split supports |
 | `--probe-c` | 1.0 | Inverse regularisation strength for the probe |
-| `--max-iter` | 1000 | Solver iteration ceiling for the probe |
+| `--max-iter` | 5000 | Solver iteration ceiling for the probe |
+| `--in-domain` | false | Probe each encoder on its own task, with the preprocessing, leads and split recorded in its checkpoint, beside an untrained encoder |
 | `--val-split` | 0.2 | Validation split fraction |
 | `--test-split` | 0.1 | Held-out split the probe reports on |
 | `--seed` | 42 | Seed for the splits, the random encoder and the projection |
@@ -323,6 +347,29 @@ and one `embedding_<source>_<target>.png` per retained cell.
 
 Pass `--input-channels` explicitly for `deep-res-cnn`, `gru`, `lstm` and `transformer`, whose lead
 count cannot be read back from their weights.
+
+#### In-domain probing
+
+```bash
+deepecg probe -m resnet --in-domain -o probe/resnet \
+    --source-checkpoint ptbxl=runs/resnet-ptbxl-seed42 \
+    --source-checkpoint af-classification=runs/resnet-af-classification-seed42
+```
+
+With `--in-domain`, each `--source-checkpoint DATASET=PATH` names the dataset the encoder was
+trained on, and that dataset is rebuilt the way `deepecg evaluate` rebuilds it: with the
+checkpoint's preprocessing, leads, labels and recorded split. The probe is fitted on the training
+partition and scored on the test partition, so no test recording was seen in training, and a
+12-lead PTB-XL encoder is probed on 12 leads. An untrained encoder of the same architecture, built
+under `--seed`, is probed on the same split; `--no-random-init` drops it. `--target`,
+`--input-channels` and `--sampling-rate` do not apply. The output directory receives
+`in_domain.json` (every metric, the note of every fit, the protocol) and `in_domain.csv` (one row
+per dataset and encoder, `trained` or `random-init`).
+
+The probe is a scikit-learn logistic regression, whose solver uses every core the BLAS library
+finds. When other jobs share the machine, that oversubscribes the CPU and can make a fit several
+times slower: on one 18,884 × 512 fit, capping the threads with `OMP_NUM_THREADS=4
+OPENBLAS_NUM_THREADS=4` took about 17 s, against 92 s with 16 threads beside a training run.
 
 ### `deepecg aggregate`
 
@@ -372,6 +419,36 @@ deepecg rank --claim kanres:af-classification:ptbxl
 Both commands are also reachable as `python scripts/aggregate_results.py` and
 `python scripts/ranking_stability.py`, thin shims kept for existing invocations. See the
 [analysis API reference](../api/analysis.md) for the underlying functions.
+
+### `deepecg bootstrap`
+
+Estimate the sampling variation of the test set from the predictions every run stores, without
+retraining. The test recordings are resampled with replacement, every window of a drawn recording
+is kept with it, each metric is recomputed on every resample with the definitions of the stored
+test metrics, and the percentiles of the resampled values form the interval. Per dataset and seed,
+the architecture with the highest score on the first `--metrics` entry is the reference, and every
+other architecture's difference from it is bootstrapped on the same resampled recordings (a paired
+bootstrap).
+
+```bash
+deepecg bootstrap --runs-dir runs --output-dir analysis/bootstrap --metrics f1 auroc
+```
+
+`deepecg bootstrap` shares the run-discovery flags of `deepecg aggregate` and adds:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--metrics` | `f1 auroc` | Metrics to resample, from `f1`, `auroc`, `precision`, `recall`, `mcc`, `accuracy`; the first picks the reference architecture |
+| `--n-resamples` | 1000 | Resamples of the test recordings |
+| `--bootstrap-seed` | 0 | Seed of the resampling |
+
+`--confidence-level` sets the coverage of the percentile intervals (default 0.95). With
+`--output-dir`, the command writes `bootstrap_intervals.csv` (dataset, model, seed, metric,
+estimate, lower and upper bound, number of test recordings) and `bootstrap_differences.csv`
+(dataset, seed, metric, reference, model, difference, bounds, and whether the interval excludes
+zero). Two runs are compared only when they were evaluated on the same test samples in the same
+order, which holds for runs of one dataset with the same split. The intervals describe the test
+set, not the variation between training runs, which only repeated seeds measure.
 
 ### `deepecg info`
 

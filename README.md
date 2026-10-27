@@ -175,16 +175,19 @@ physionet.org, and resume if interrupted.
 
 ## Experiments
 
-Experiment sweeps are defined in `experiments.yaml` and run via
-`python scripts/run_experiments.py`. Each experiment trains every configured model on every
-dataset across multiple seeds (default `seeds: [42, 43, 44, 45, 46]` — 5 runs per
-model/dataset pair), saving to `runs/{model}-{dataset}-seed{seed}/`.
+Experiment sweeps are defined in YAML files and run via
+`python scripts/run_experiments.py --config <file>`, one run per architecture, dataset and seed,
+saved to `runs/{model}-{dataset}-seed{seed}/`. `experiments.yaml` holds the benchmark of the
+journal article: 24 architectures on PTB-XL and PhysioNet 2017 with seed 42 (48 runs);
+`experiments-longterm.yaml` holds the long-term AF tasks for the benchmark website. A `seeds:`
+list in either file, or `--seeds` at launch, repeats every pairing.
 
 Aggregate and analyse finished runs with:
 
 ```bash
 deepecg aggregate --runs-dir runs --output-dir analysis --emit-latex
-deepecg rank --runs-dir runs --metric f1
+deepecg bootstrap --runs-dir runs --output-dir analysis/bootstrap   # test-set intervals
+deepecg rank --runs-dir runs --metric f1                             # needs several seeds
 ```
 
 ### Default Training Parameters

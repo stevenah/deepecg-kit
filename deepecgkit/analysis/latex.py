@@ -102,6 +102,10 @@ LOWER_IS_BETTER = frozenset(
         "adaptive_ece_temp",
         "mce_temp",
         "brier_temp",
+        "ece_platt",
+        "adaptive_ece_platt",
+        "mce_platt",
+        "brier_platt",
     }
 )
 
@@ -123,6 +127,10 @@ METRIC_DISPLAY_NAMES = {
     "adaptive_ece_temp": r"AECE$_T$",
     "mce_temp": r"MCE$_T$",
     "brier_temp": r"Brier$_T$",
+    "ece_platt": r"ECE$_P$",
+    "adaptive_ece_platt": r"AECE$_P$",
+    "mce_platt": r"MCE$_P$",
+    "brier_platt": r"Brier$_P$",
     "auroc_macro": "AUROC",
     "balanced_accuracy": "Bal. acc.",
     "f1_macro": "F1",

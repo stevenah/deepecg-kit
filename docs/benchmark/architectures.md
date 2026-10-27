@@ -67,7 +67,7 @@ Architectures are grouped by family and ordered within a family by 12-lead param
 | Architecture | Registry name | Operation | Depth (kernel) | Width | Norm | Dropout | Readout | Source |
 |---|---|---|---|---|---|---|---|---|
 | Transformer | `transformer` | Attention over samples | 4 enc. | 128 | LN | 0.1 | GAP | [19] |
-| Medformer | `medformer` | Attention over patches | 2 enc. per scale (patch 10, 25, 50) | 384 | LN | 0.1 | Per-scale mean, concat | [20] |
+| Medformer | `medformer` | Attention over patches spanning all leads | 2 enc. per scale (patch 10, 25, 50) | 384 | LN | 0.1 | Per-scale mean, concat | [20] |
 
 ### Reading the table
 

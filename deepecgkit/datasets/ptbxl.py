@@ -129,6 +129,14 @@ class PTBXLDataset(BaseECGDataset):
     SAMPLING_RATE_HR: ClassVar[int] = 500
     SAMPLING_RATE_LR: ClassVar[int] = 100
 
+    LABEL_RULES: ClassVar[tuple[str, ...]] = ("benchmark", "likelihood")
+    #: Recommended assignment of the stratified folds to the three partitions.
+    RECOMMENDED_FOLDS: ClassVar[dict[str, tuple[int, ...]]] = {
+        "train": (1, 2, 3, 4, 5, 6, 7, 8),
+        "val": (9,),
+        "test": (10,),
+    }
+
     def __init__(
         self,
         data_dir: str | Path | None = None,
@@ -139,6 +147,8 @@ class PTBXLDataset(BaseECGDataset):
         leads: list[str] | None = None,
         normalization: str = "zscore",
         multi_label: bool = True,
+        label_rule: str = "benchmark",
+        use_recommended_folds: bool = True,
         transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
         target_transform: Callable[[torch.Tensor], torch.Tensor] | None = None,
         download: bool = False,
@@ -161,6 +171,18 @@ class PTBXLDataset(BaseECGDataset):
             normalization: Normalization method - "zscore", "minmax", or "none"
             multi_label: If True, returns multi-hot encoded labels. If False, returns
                         single label (first/primary diagnosis)
+            label_rule: How multi-hot labels are derived from the SCP statements.
+                        "benchmark" follows the PTB-XL benchmark (Strodthoff et al.,
+                        2021): a label is positive when the record carries any
+                        statement mapping to it, whatever its likelihood, and records
+                        without any label of the task are left out. "likelihood"
+                        requires a likelihood of at least 50 and keeps records without
+                        a label as all-negative, as releases before 1.0 did. Only
+                        multi-label targets are affected.
+            use_recommended_folds: Split along the recommended stratified folds
+                        (1-8 training, 9 validation, 10 test), which ECGDataModule
+                        then uses in place of its seeded split. False leaves the split
+                        to ECGDataModule, grouped by patient.
             transform: Optional transform to be applied to the ECG signals
             target_transform: Optional transform to be applied to the labels
             download: Whether to download the dataset if it doesn't exist
@@ -169,11 +191,15 @@ class PTBXLDataset(BaseECGDataset):
         valid_tasks = ["superclass", "subclass", "diagnostic", "form", "rhythm", "all"]
         if task not in valid_tasks:
             raise ValueError(f"task must be one of {valid_tasks}, got '{task}'")
+        if label_rule not in self.LABEL_RULES:
+            raise ValueError(f"label_rule must be one of {self.LABEL_RULES}, got '{label_rule}'")
 
         self.task = task
         self.use_high_resolution = use_high_resolution
         self.folds = folds
         self.multi_label = multi_label
+        self.label_rule = label_rule
+        self.use_recommended_folds = use_recommended_folds
         self.strict = strict
         self.verbose = verbose
         self._leads = leads
@@ -193,6 +219,8 @@ class PTBXLDataset(BaseECGDataset):
         self.labels: list[np.ndarray] = []
         self.record_names: list[str] = []
         self.patient_ids: list[str] = []
+        self.strat_folds: list[int] = []
+        self.unlabelled_records = 0
         self.metadata_df: pd.DataFrame | None = None
         self.scp_statements: pd.DataFrame | None = None
         self.source_sampling_rate = source_sampling_rate
@@ -339,21 +367,29 @@ class PTBXLDataset(BaseECGDataset):
                 signal = self.standardizer.normalize(signal)
 
                 labels = self._extract_labels(row.scp_codes, label_columns)
+                if self.multi_label and self.label_rule == "benchmark" and not labels.any():
+                    self.unlabelled_records += 1
+                    continue
 
                 self.signals.append(signal.astype(np.float32))
                 self.labels.append(labels)
                 self.record_names.append(str(ecg_id))
                 self.patient_ids.append(str(row.patient_id))
+                self.strat_folds.append(int(row.strat_fold))
                 loaded_records += 1
 
             except self.RECORD_ERRORS as e:
                 self._record_load_error(str(ecg_id), e)
                 continue
 
-        self._finish_load(loaded_records, attempted_records)
+        self._finish_load(loaded_records + self.unlabelled_records, attempted_records)
 
         if self.verbose:
             logger.info(f"Successfully loaded {len(self.signals)} records")
+            if self.unlabelled_records:
+                logger.info(
+                    f"Left out {self.unlabelled_records} records without a {self.task} label"
+                )
             self._print_class_distribution()
 
     def _get_label_columns(self) -> list[str]:
@@ -389,10 +425,13 @@ class PTBXLDataset(BaseECGDataset):
     def _extract_labels(self, scp_codes: dict[str, float], label_columns: list[str]) -> np.ndarray:
         """Extract labels from SCP codes."""
         if self.multi_label:
+            # The benchmark counts every statement; the likelihood rule only
+            # those stated with a likelihood of at least 50.
+            threshold = 0.0 if self.label_rule == "benchmark" else 50.0
             labels = np.zeros(len(label_columns), dtype=np.float32)
             if self.task == "superclass" and self.scp_statements is not None:
                 for code, likelihood in scp_codes.items():
-                    if likelihood >= 50.0 and code in self.scp_statements.index:
+                    if likelihood >= threshold and code in self.scp_statements.index:
                         stmt = self.scp_statements.loc[code]
                         if pd.notna(stmt.diagnostic_class):
                             superclass = stmt.diagnostic_class
@@ -403,7 +442,7 @@ class PTBXLDataset(BaseECGDataset):
                 for code, likelihood in scp_codes.items():
                     if code in label_columns:
                         idx = label_columns.index(code)
-                        labels[idx] = 1.0 if likelihood >= 50.0 else 0.0
+                        labels[idx] = 1.0 if likelihood >= threshold else 0.0
             return labels
         else:
             if self.task == "superclass" and self.scp_statements is not None:
@@ -500,6 +539,32 @@ class PTBXLDataset(BaseECGDataset):
         """
         return list(self.patient_ids)
 
+    def predefined_partition(self) -> np.ndarray | None:
+        """Assign every record to its recommended partition.
+
+        ECGDataModule uses this assignment instead of its own seeded split,
+        so the test set is fold 10 for every seed and every architecture, as
+        in the PTB-XL benchmark. The folds are drawn per patient, so the
+        partition is patient-level.
+
+        Returns:
+            "train", "val" or "test" for each loaded record, or None when the
+            recommended folds are switched off.
+        """
+        if not self.use_recommended_folds:
+            return None
+        fold_to_partition = {
+            fold: name for name, folds in self.RECOMMENDED_FOLDS.items() for fold in folds
+        }
+        return np.array([fold_to_partition[fold] for fold in self.strat_folds])
+
+    def get_dataset_options(self) -> dict:
+        """Name the options that decide the labels and the split, for checkpoints to record."""
+        return {
+            "label_rule": self.label_rule,
+            "use_recommended_folds": self.use_recommended_folds,
+        }
+
     def get_record_info(self, idx: int) -> dict:
         """Get record information for a specific sample.
 
@@ -578,6 +643,8 @@ class PTBXLDataset(BaseECGDataset):
             "leads": self._leads,
             "normalization": self.standardizer.normalization,
             "multi_label": self.multi_label,
+            "label_rule": self.label_rule,
+            "use_recommended_folds": self.use_recommended_folds,
             "transform": self.transform,
             "target_transform": self.target_transform,
             "download": False,

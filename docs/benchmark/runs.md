@@ -2,8 +2,8 @@
 
 This page describes what a training run stores, how settings are resolved, how grids of runs are
 launched, and which behaviours are known to bear on how a reported value should be read. The
-analysis commands (`deepecg aggregate`, `deepecg rank`) read nothing but the run directories
-described here.
+analysis commands (`deepecg aggregate`, `deepecg rank`, `deepecg bootstrap`) read nothing but the
+run directories described here.
 
 ## Environment
 
@@ -18,12 +18,15 @@ Each command wraps a function that is also importable from Python, so the termin
 paths run the same code. Training, evaluation, feature extraction and attribution build their data
 modules through one shared routine.
 
-Evaluation, feature extraction and attribution rebuild the dataset in the labelling mode and with
-the preprocessing recorded in the checkpoint, so their label-stratified partitions match those of
-the training run. Probing builds its own data modules.
+Evaluation, feature extraction, attribution and in-domain probing rebuild the dataset in the
+labelling mode and with the preprocessing recorded in the checkpoint, and with the options that
+decide labels and split (for PTB-XL, the label rule and the recommended folds), so their partitions
+match those of the training run. Checkpoints that predate these options are rebuilt with the
+likelihood rule and the seeded split, as earlier releases trained them. The cross-dataset probe
+builds its own data modules.
 
 Given a checkpoint in a run directory, evaluation adopts the recorded seed and split fractions in
-place of its own defaults; a value set explicitly is kept instead, with a warning. It also warns
+place of its own defaults (they decide nothing for PTB-XL on its recommended folds); a value set explicitly is kept instead, with a warning. It also warns
 when the rebuilt partition sizes differ from those recorded for the run. The identities of the
 groups themselves are not compared, so a rebuilt partition of the right size need not hold the
 same recordings.
@@ -36,8 +39,10 @@ precedence over file values, and both take precedence over the built-in defaults
 
 Every training invocation writes one self-contained run directory. It records:
 
-- the run identity (architecture, dataset and seed), the validation and test split fractions, the
-  labelling flags (multi-label and binary classification), the preprocessing in effect (sampling
+- the run identity (architecture, dataset and seed), the split protocol (`predefined` for a
+  dataset's recommended partition, `seeded` otherwise), the validation and test split fractions,
+  the dataset options that decide labels and split, the labelling flags (multi-label and binary
+  classification), the preprocessing in effect (sampling
   rate, normalisation and segment length), the training settings (epochs, batch size and learning
   rate) and a schema version, currently 3;
 - the realised split: the seed, the training, validation and test window counts, whether the
@@ -47,7 +52,10 @@ Every training invocation writes one self-contained run directory. It records:
   positive weights) and the model configuration;
 - the per-epoch loss and accuracy;
 - one row of test discrimination and calibration metrics, which for single-label tasks also
-  states whether those metrics were averaged in positive-class or macro mode;
+  states whether those metrics were averaged in positive-class or macro mode, and which holds the
+  calibration metrics before recalibration, after temperature scaling and, for sigmoid outputs,
+  after per-label Platt scaling, with the fitted temperature and the per-label scales and biases
+  (`platt_parameters`);
 - the true label, the prediction and the probabilities of every test window;
 - training-curve, confusion-matrix and reliability plots;
 - the package version, the git commit of the checkout and whether it was clean, the host,
@@ -91,7 +99,14 @@ These behaviours remain in the current code and bear on how a reported value sho
   target can still mix classes.
 - **Bimodality gap.** The gap of 0.10 that marks a comparison as bimodal is a global default
   without task-specific calibration.
-- **Probe cells.** Each cell of a transfer matrix is a single fit without an interval.
+- **Probe cells.** Each probe, in-domain or a cell of a transfer matrix, is a single fit without
+  an interval.
+- **Probe solver threads.** The probe's solver uses every core its BLAS library finds, which slows
+  it down markedly when other jobs share the CPU; limit the threads (for example
+  `OMP_NUM_THREADS=4`) on a shared machine.
+- **R-peak detection.** The beat summaries' detector misses beats on records dominated by paced or
+  ventricular ectopic beats (see
+  [Explainability](../user-guide/explainability.md#how-well-the-r-peaks-are-found)).
 
 The guides for [explainability](../user-guide/explainability.md#known-issues) and
 [feature extraction](../user-guide/feature-extraction.md#known-issues) list further limitations

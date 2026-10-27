@@ -567,3 +567,47 @@ class TestRepresentationVisualization:
         (features, labels), _ = probe_features
         with pytest.raises(ValueError, match="rows"):
             plot_embedding(embed_2d(features[:60]), labels[:10])
+
+
+class TestInDomainProbe:
+    """An encoder is probed on its own split, beside an untrained one."""
+
+    def test_trained_and_untrained_encoders_share_the_split(self, toy_modules):
+        from deepecgkit.evaluation.representation import TRAINED, in_domain_probe
+
+        torch.manual_seed(0)
+        trained = FeatureExtractor(
+            build_model(MODEL_NAME, input_channels=1, output_size=TOY_CLASSES),
+            model_name=MODEL_NAME,
+            device="cpu",
+            batch_size=16,
+        )
+        torch.manual_seed(1)
+        untrained = FeatureExtractor(
+            build_model(MODEL_NAME, input_channels=1, output_size=TOY_CLASSES),
+            model_name=MODEL_NAME,
+            device="cpu",
+            batch_size=16,
+        )
+        module = toy_modules["corpus-a"]
+        results = in_domain_probe(trained, module, random_extractor=untrained, dataset="corpus-a")
+        assert [result.source for result in results] == [TRAINED, RANDOM_INIT]
+        assert {result.target for result in results} == {"corpus-a"}
+        assert results[0].n_test == results[1].n_test == len(module.test_dataset)
+        assert results[0].n_train == len(module.train_dataset)
+
+    def test_the_untrained_encoder_is_optional(self, toy_modules):
+        from deepecgkit.evaluation.representation import in_domain_probe
+
+        extractor = FeatureExtractor(
+            build_model(MODEL_NAME, input_channels=1, output_size=TOY_CLASSES),
+            model_name=MODEL_NAME,
+            device="cpu",
+        )
+        results = in_domain_probe(extractor, toy_modules["corpus-a"])
+        assert len(results) == 1
+
+    def test_the_probe_runs_to_convergence_by_default(self):
+        from deepecgkit.evaluation.representation import DEFAULT_PROBE_MAX_ITER, build_probe
+
+        assert build_probe().named_steps["probe"].max_iter == DEFAULT_PROBE_MAX_ITER >= 5000

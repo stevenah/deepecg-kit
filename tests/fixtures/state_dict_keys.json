@@ -903,12 +903,6 @@
   "medformer": [
     "classifier.bias",
     "classifier.weight",
-    "cross_channel_attn.attn.in_proj_bias",
-    "cross_channel_attn.attn.in_proj_weight",
-    "cross_channel_attn.attn.out_proj.bias",
-    "cross_channel_attn.attn.out_proj.weight",
-    "cross_channel_attn.norm.bias",
-    "cross_channel_attn.norm.weight",
     "inter_blocks.0.attn.in_proj_bias",
     "inter_blocks.0.attn.in_proj_weight",
     "inter_blocks.0.attn.out_proj.bias",

@@ -381,6 +381,30 @@ class BaseECGDataset(Dataset, ABC):
         """
         return list(getattr(self, "record_names", []) or [])
 
+    def predefined_partition(self) -> np.ndarray | None:
+        """Name a fixed partition for every sample, when the dataset defines one.
+
+        A dataset distributed with a recommended split overrides this, and
+        ECGDataModule then uses that split instead of drawing its own.
+
+        Returns:
+            One of "train", "val" or "test" per sample, or None to leave the
+            split to ECGDataModule.
+        """
+        return None
+
+    def get_dataset_options(self) -> dict:
+        """Name the constructor options that decide labels or split.
+
+        Checkpoints record these so that evaluation rebuilds the dataset the
+        model was trained on, not the one the current defaults would build.
+
+        Returns:
+            Mapping of constructor option names to their values, empty when the
+            dataset has none.
+        """
+        return {}
+
     def get_record_info(self, idx: int) -> dict:
         """Describe one sample: source record, label, class name, and shape."""
         label = int(self.labels[idx])

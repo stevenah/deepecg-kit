@@ -6,6 +6,46 @@ versions follow [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- `deepecg bootstrap` and `deepecgkit.analysis.bootstrap` (`read_predictions`,
+  `bootstrap_intervals`, `paired_bootstrap_difference`): percentile intervals
+  of the test metrics from a run's stored `predictions.txt`, resampling whole
+  recordings (1,000 resamples by default), and paired differences of every
+  architecture from the one with the highest score on the first metric,
+  computed on identical resamples. Writes `bootstrap_intervals.csv` and
+  `bootstrap_differences.csv`. Nothing is retrained.
+- Per-label Platt scaling for sigmoid outputs (multi-label and binary heads):
+  `fit_platt` and `apply_platt` fit and apply a positive scale and a bias per
+  output on the validation logits. `calibration_report`, and so every
+  `classification_metrics.csv` written by `deepecg train` and
+  `deepecg evaluate`, adds `ece_platt`, `adaptive_ece_platt`, `mce_platt`,
+  `brier_platt` and `platt_parameters` (the scales and biases as JSON), and
+  the console table an `After P` column. Discrimination metrics are still
+  computed from the unscaled outputs.
+- `deepecg probe --in-domain` and `in_domain_probe`: each encoder is probed on
+  its own task, with the preprocessing, leads, labels and split recorded in
+  its checkpoint, beside an untrained encoder of the same architecture built
+  under `--seed`. Writes `in_domain.json` and `in_domain.csv`.
+- `deepecg explain --randomize-weights` and `ECGExplainer.from_random_init`:
+  the model-randomisation check (Adebayo et al., 2018), explaining an
+  untrained model of the checkpoint's architecture and shape on the same
+  inputs. `summary.json` records `weights` and `randomization_seed`.
+- `match_r_peaks` scores detected R-peaks against reference beats one to one
+  within a tolerance. Run on the MIT-BIH Arrhythmia Database (48 records,
+  z-scored 10 s windows at 500 Hz, 150 ms tolerance), the beat-summary
+  detector reached a sensitivity of 0.924 and a positive predictive value of
+  0.998 over 109,150 beats (per-record medians 0.980 and 0.999), lowest on
+  records dominated by paced or ventricular ectopic beats.
+- `BaseECGDataset.predefined_partition()` and `get_dataset_options()`: a
+  dataset can name a recommended partition for every sample, which
+  `ECGDataModule` then uses instead of its seeded split
+  (`data_module.split_protocol` is `"predefined"` or `"seeded"`), and the
+  options that decide its labels and split, which checkpoints record as
+  `data_config["dataset_options"]` together with `split_protocol` (also in
+  `run_metadata.json`).
+- `deepecg train --label-rule {benchmark,likelihood}` and `--seeded-split`
+  for PTB-XL.
+- `experiments-longterm.yaml` holds the long-term AF tasks (MIT-BIH AFDB,
+  LTAFDB, Unified AF; 72 runs) for the benchmark website.
 - Feature extraction (`deepecg extract-features`, `FeatureExtractor`).
 - Explainability: attribution methods, beat-level analysis, visualizations
   (`deepecg explain`, `ECGExplainer`).
@@ -125,6 +165,31 @@ versions follow [SemVer](https://semver.org/).
   documentation on a synthetic dataset.
 
 ### Changed
+- **Breaking: PTB-XL uses its recommended folds by default.**
+  `PTBXLDataset(use_recommended_folds=True)` assigns folds 1-8 to training,
+  9 to validation and 10 to testing, the same for every seed; the split is
+  patient-level. `--seeded-split` (Python: `use_recommended_folds=False`)
+  restores the seeded, patient-grouped 70/20/10 split.
+- **Breaking: PTB-XL is labelled with the rule of the PTB-XL benchmark by
+  default.** `label_rule="benchmark"` counts every diagnostic statement,
+  whatever its likelihood, and leaves out records without a superclass of the
+  task (411 of 21,799 in PTB-XL 1.0.3); `label_rule="likelihood"` (CLI:
+  `--label-rule likelihood`) restores the earlier rule of a likelihood of at
+  least 50 with unlabelled records kept as all-negative. Checkpoints from
+  earlier releases record neither option and are rebuilt with the likelihood
+  rule and the seeded split, as they were trained.
+- **Medformer no longer builds its unused cross-channel attention module**,
+  which `forward` never called; the patch embeddings already span all leads,
+  as in the original design. Its state dict loses the `cross_channel_attn.*`
+  keys and its parameter count falls to 1.252 M (12 leads, 5 outputs) and
+  1.132 M (1 lead, 4 outputs). Checkpoints that hold those keys still load;
+  the keys are dropped on loading, which changes no output. A model built
+  under a given seed is initialised differently than before, because the
+  module no longer draws from the random number generator.
+- `deepecg probe --max-iter` defaults to 5000 (`DEFAULT_PROBE_MAX_ITER`),
+  up from 1000, which left some probes unconverged.
+- `experiments.yaml` is the benchmark of the journal article: the 24
+  architectures on PTB-XL and PhysioNet 2017, seed 42 (48 runs).
 - **Datasets are used at their own sampling rate.** `ECGDataModule` no longer
   defaults `sampling_rate` to 500, which silently resampled every dataset
   that passed through it (and so every CLI run): the AF datasets now train
@@ -203,6 +268,11 @@ versions follow [SemVer](https://semver.org/).
   irreproducible and frozen into the cache.
 
 ### Fixed
+- The prediction-distribution plot that `deepecg train` and
+  `deepecg evaluate` write bins probabilities on fixed edges over [0, 1].
+  Edges fitted to the data raised "Too many bins for data range" when a
+  collapsed model gave (nearly) the same float32 probability for every
+  sample, which ended such a run without metrics.
 - The pretrained-weight registry no longer advertises two placeholder entries
   (`kanres-af-30s`, `afmodel-30s`) whose URLs never existed; it is empty until
   weights are published.

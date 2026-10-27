@@ -42,6 +42,14 @@ _OPTION_FLAGS = {
     "sampling_rate": "--sampling-rate",
     "normalization": "--normalization",
     "segment_duration_seconds": "--segment-duration",
+    "label_rule": "--label-rule",
+    "use_recommended_folds": "--seeded-split",
+}
+
+#: Label and split options of checkpoints that predate dataset_options. PTB-XL
+#: was labelled at likelihood 50 and split by the seeded grouped split until 1.0.
+LEGACY_DATASET_OPTIONS: dict[str, dict[str, Any]] = {
+    "ptbxl": {"label_rule": "likelihood", "use_recommended_folds": False},
 }
 
 
@@ -194,6 +202,8 @@ def check_dataset_options(
     sampling_rate: int | None = None,
     normalization: str | None = None,
     segment_duration: float | None = None,
+    label_rule: str | None = None,
+    seeded_split: bool = False,
 ) -> int | None:
     """Fail when a flag was given that the dataset cannot honour.
 
@@ -208,6 +218,8 @@ def check_dataset_options(
         sampling_rate: The --sampling-rate value, if any
         normalization: The --normalization value, if any
         segment_duration: The --segment-duration value, if any
+        label_rule: The --label-rule value, if any
+        seeded_split: Whether --seeded-split was given
 
     Returns:
         An exit code when a flag does not apply, or None when all of them do.
@@ -218,6 +230,8 @@ def check_dataset_options(
         "sampling_rate": sampling_rate is not None,
         "normalization": normalization is not None,
         "segment_duration_seconds": segment_duration is not None,
+        "label_rule": label_rule is not None,
+        "use_recommended_folds": seeded_split,
     }
     for option, was_given in given.items():
         if not was_given or dataset_accepts(dataset_name, option):
@@ -247,6 +261,8 @@ def dataset_kwargs_for(
     sampling_rate: int | None = None,
     normalization: str | None = None,
     segment_duration: float | None = None,
+    label_rule: str | None = None,
+    recommended_folds: bool | None = None,
 ) -> dict[str, Any]:
     """Build the per-dataset constructor kwargs the commands previously restated.
 
@@ -263,6 +279,8 @@ def dataset_kwargs_for(
         sampling_rate: Target sampling rate override
         normalization: Normalization method override
         segment_duration: Segment length override, in seconds
+        label_rule: How multi-label targets are derived (PTB-XL)
+        recommended_folds: Use the dataset's recommended split (PTB-XL)
 
     Raises:
         ValueError: If an option is set that the dataset does not accept.
@@ -281,6 +299,8 @@ def dataset_kwargs_for(
         "sampling_rate": sampling_rate,
         "normalization": normalization,
         "segment_duration_seconds": segment_duration,
+        "label_rule": label_rule,
+        "use_recommended_folds": recommended_folds,
     }
     for option, value in requested.items():
         if value is None:
@@ -316,7 +336,11 @@ def checkpoint_dataset_kwargs(
 
     The labelling mode and the preprocessing both come from the checkpoint:
     a model trained on z-scored 300 Hz segments must be evaluated on z-scored
-    300 Hz segments, whichever dataset they are drawn from.
+    300 Hz segments, whichever dataset they are drawn from. On the dataset it
+    was trained on, the options that decide labels and split (PTB-XL's label
+    rule and recommended folds) are restored too, so the test split is the one
+    the model was evaluated on; checkpoints that predate them get the options
+    earlier releases used.
 
     Checkpoints from before preprocessing was recorded were all trained by a
     CLI that resampled to 500 Hz, so that rate is assumed for them and the
@@ -382,7 +406,32 @@ def checkpoint_dataset_kwargs(
         and dataset_accepts(dataset_name, "binary_classification"),
         **accepted,
     )
+    kwargs.update(_recorded_dataset_options(dataset_name, data_config))
     return kwargs, multi_label
+
+
+def _recorded_dataset_options(dataset_name: str, data_config: dict[str, Any]) -> dict[str, Any]:
+    """Recover the label and split options a checkpoint was trained under.
+
+    They apply only when the dataset is the one the model was trained on; a
+    model applied to another dataset gets that dataset's defaults.
+
+    Args:
+        dataset_name: Registered dataset name being rebuilt
+        data_config: The checkpoint's data_config, possibly empty
+
+    Returns:
+        Constructor kwargs for the options the dataset accepts.
+    """
+    trained_on = data_config.get("dataset")
+    if trained_on not in (None, dataset_name):
+        return {}
+    recorded = data_config.get("dataset_options")
+    if not isinstance(recorded, dict):
+        recorded = LEGACY_DATASET_OPTIONS.get(dataset_name, {})
+    return {
+        option: value for option, value in recorded.items() if dataset_accepts(dataset_name, option)
+    }
 
 
 def build_data_module(

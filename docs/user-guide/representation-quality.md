@@ -2,9 +2,57 @@
 
 A model's headline accuracy conflates two things: how good its representation is, and how good the
 head fitted on top of it is. Freezing the encoder and fitting nothing but a logistic regression
-separates them. Running that probe on a corpus the encoder never saw asks the question the
-embeddings exist to answer — whether an architecture learns transferable ECG structure, or a
-shortcut peculiar to one dataset.
+separates them. Two questions can then be asked. Probing an encoder on its own task, beside an
+untrained encoder of the same architecture, asks how much of what a linear head can read from the
+embedding training put there ([in-domain probing](#in-domain-probing)). Running the probe on a
+corpus the encoder never saw asks whether an architecture learns transferable ECG structure, or a
+shortcut peculiar to one dataset ([the transfer matrix](#the-cross-dataset-transfer-matrix)).
+
+## In-domain probing
+
+```python
+import torch
+
+from deepecgkit import FeatureExtractor
+from deepecgkit.evaluation.representation import in_domain_probe
+from deepecgkit.models import build_model
+
+trained = FeatureExtractor.from_checkpoint("runs/af/best.pt", model_name="kanres")
+torch.manual_seed(42)
+untrained = FeatureExtractor(build_model("kanres", input_channels=1, output_size=4), model_name="kanres")
+results = in_domain_probe(trained, data_module, random_extractor=untrained,
+                          dataset="af-classification")
+[(result.source, result.score) for result in results]   # [("trained", ...), ("random-init", ...)]
+```
+
+```bash
+deepecg probe -m kanres --in-domain -o probe/kanres \
+    --source-checkpoint af-classification=runs/af/best.pt
+```
+
+`data_module` must be the encoder's own data, rebuilt with the preprocessing and the split it was
+trained on, so that the probe is fitted on training records and scored on test records the encoder
+never saw. The command does that rebuild for you, the way `deepecg evaluate` does: the checkpoint's
+sampling rate, segment length, normalisation, leads, labelling mode and split are restored, and
+the rebuilt partition sizes are checked against the run's `split_info.json`. A 12-lead PTB-XL
+encoder is therefore probed on 12 leads at its training rate, unlike in the transfer matrix below.
+
+The untrained encoder is built by `build_model` under the seed (`--seed`, default 42) and probed on
+the same split. The gain of the trained encoder over it is what training added to the linearly
+decodable information; the untrained score itself is what the architecture yields at random. The
+command writes `in_domain.json`, with every metric, the note of every fit and the protocol, and
+`in_domain.csv`, one row per dataset and encoder.
+
+The probe runs at most `max_iter` solver iterations, 5000 by default, and records in each result's
+`note` when it stopped before converging. Standardised embeddings of tens of thousands of windows
+can need about a thousand iterations, more than the 1000 that releases before 1.0 allowed.
+
+!!! note "Limit the solver's threads on a shared machine"
+    scikit-learn's solver uses every core its BLAS library finds. Beside another job, such as a
+    training run, that oversubscribes the CPU: one 18,884 × 512 fit took about 92 s with 16
+    threads and about 17 s with `OMP_NUM_THREADS=4 OPENBLAS_NUM_THREADS=4`.
+
+## Probing across datasets
 
 ```python
 from deepecgkit.evaluation import cross_dataset_transfer

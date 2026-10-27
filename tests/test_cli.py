@@ -2327,3 +2327,94 @@ class TestListDatasetsDetail:
         assert "not downloaded (about 100 MB)" in output
         assert str(temp_dir / "datasets" / "afclassificationdataset") in output
         assert "Options: --binary-classification, --segment-duration" in output
+
+
+class TestModelRandomisationAndInDomainProbe:
+    """The randomisation check and the in-domain probe work from a finished run."""
+
+    def _recording(self, trained_run):
+        import scipy.io
+
+        path = trained_run["data"] / "training2017" / "A00001.mat"
+        return scipy.io.loadmat(str(path))["val"].ravel()
+
+    def _explain(self, trained_run, recording, output, *extra):
+        return main(
+            [
+                "explain",
+                "--checkpoint",
+                str(trained_run["run"]),
+                "-i",
+                str(recording),
+                "-o",
+                str(output),
+                "--accelerator",
+                "cpu",
+                "--no-plots",
+                "--quiet",
+                *extra,
+            ]
+        )
+
+    def test_randomized_weights_are_explained_and_recorded(self, trained_run, temp_dir):
+        recording = temp_dir / "raw.npy"
+        np.save(str(recording), self._recording(trained_run))
+        trained_dir, random_dir = temp_dir / "trained", temp_dir / "random"
+
+        assert self._explain(trained_run, recording, trained_dir) == 0
+        assert self._explain(trained_run, recording, random_dir, "--randomize-weights") == 0
+
+        trained = json.loads((trained_dir / "summary.json").read_text())
+        randomized = json.loads((random_dir / "summary.json").read_text())
+        assert trained["weights"] == "trained"
+        assert randomized["weights"] == "randomized"
+        assert randomized["randomization_seed"] == 42
+        assert randomized["timesteps"] == trained["timesteps"]
+        arrays = [np.load(str(d / "attribution.npz"))["values"] for d in (trained_dir, random_dir)]
+        assert not np.allclose(arrays[0], arrays[1])
+
+    def test_randomize_weights_needs_a_checkpoint(self, temp_dir):
+        recording = temp_dir / "raw.npy"
+        np.save(str(recording), np.zeros(3000, dtype=np.float32))
+        result = main(
+            [
+                "explain",
+                "--weights",
+                "x",
+                "-m",
+                "kanres",
+                "-i",
+                str(recording),
+                "-o",
+                str(temp_dir / "out"),
+                "--randomize-weights",
+                "--quiet",
+            ]
+        )
+        assert result == 1
+
+    def test_in_domain_probe_reports_trained_and_untrained_encoders(self, trained_run, temp_dir):
+        output = temp_dir / "probe"
+        result = main(
+            [
+                "probe",
+                "-m",
+                "simple-cnn",
+                "--in-domain",
+                "--source-checkpoint",
+                f"af-classification={trained_run['run']}",
+                "--data-dir",
+                str(trained_run["data"]),
+                "-o",
+                str(output),
+                "--accelerator",
+                "cpu",
+                "--quiet",
+            ]
+        )
+        assert result == 0
+        payload = json.loads((output / "in_domain.json").read_text())
+        assert payload["protocol"]["mode"] == "in-domain"
+        assert [row["encoder"] for row in payload["results"]] == ["trained", "random-init"]
+        assert {row["dataset"] for row in payload["results"]} == {"af-classification"}
+        assert (output / "in_domain.csv").exists()

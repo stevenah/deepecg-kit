@@ -44,6 +44,7 @@ _COMMANDS = {
     "probe": ("probe", "Probe frozen encoders across datasets and build a transfer matrix"),
     "aggregate": ("analysis", "Aggregate per-run test metrics across random seeds"),
     "rank": ("analysis", "Report how stable architecture rankings are across seeds"),
+    "bootstrap": ("analysis", "Bootstrap test recordings from stored predictions"),
     "info": ("info", "Show model information"),
     "list-models": ("info", "List all available models"),
     "list-datasets": ("info", "List all available datasets"),

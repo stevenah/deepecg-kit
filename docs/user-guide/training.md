@@ -80,6 +80,8 @@ deleted), and `trainer.best_checkpoint_path` names the best one. The checkpoint 
         "input_length": 3000,
         "multi_label": False,
         "binary_classification": False,
+        "dataset_options": {},
+        "split_protocol": "seeded",
         "split": {"seed": 42, "val_split": 0.2, "test_split": 0.1},
     },
     "deepecgkit_version": str,
@@ -88,7 +90,9 @@ deleted), and `trainer.best_checkpoint_path` names the best one. The checkpoint 
 
 `model_config` and `data_config` are what make a checkpoint usable on its own: the first says
 which architecture to rebuild, the second which preprocessing new inputs need and what the
-outputs mean. `fit()` fills both in from the model and the data module; set
+outputs mean. `dataset_options` and `split_protocol` say how the labels and the partitions were
+formed; for PTB-XL they read `{"label_rule": "benchmark", "use_recommended_folds": True}` and
+`"predefined"` by default (see [Datasets](datasets.md#ptb-xl-labels-and-split)). `fit()` fills both in from the model and the data module; set
 `trainer.model_config` or `trainer.data_config` beforehand to record something else.
 
 ### Loading Checkpoints

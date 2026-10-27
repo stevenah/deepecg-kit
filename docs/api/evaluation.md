@@ -18,8 +18,9 @@ Model evaluation, metrics computation, and visualization tools.
 
 ## Calibration
 
-Calibration measures whether predicted probabilities match observed frequencies, and temperature
-scaling corrects them without changing which class is predicted.
+Calibration measures whether predicted probabilities match observed frequencies. Temperature
+scaling corrects them without changing which class is predicted, and per-label Platt scaling
+corrects label-specific offsets of sigmoid outputs.
 
 ::: deepecgkit.evaluation.metrics.calculate_calibration_metrics
 
@@ -43,6 +44,10 @@ scaling corrects them without changing which class is predicted.
 
 ::: deepecgkit.evaluation.calibration.temperature_nll
 
+::: deepecgkit.evaluation.calibration.fit_platt
+
+::: deepecgkit.evaluation.calibration.apply_platt
+
 ::: deepecgkit.evaluation.calibration.probabilities_to_logits
 
 ::: deepecgkit.evaluation.calibration.calibration_report
@@ -52,6 +57,8 @@ scaling corrects them without changing which class is predicted.
 ::: deepecgkit.evaluation.representation.linear_probe
 
 ::: deepecgkit.evaluation.representation.probe_encoder
+
+::: deepecgkit.evaluation.representation.in_domain_probe
 
 ::: deepecgkit.evaluation.representation.build_probe
 

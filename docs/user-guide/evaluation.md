@@ -48,6 +48,35 @@ macro averages otherwise. Multi-hot targets make the problem multi-label: `accur
 share of individual labels predicted correctly, `exact_match_accuracy` the share of samples with
 every label right, and the other metrics are macro averages over the labels.
 
+`bootstrap_evaluate` resamples individual test samples. When several samples are windows cut from
+one recording, they are not independent, and an interval over windows comes out too narrow; use the
+recording-level bootstrap below for such data.
+
+### Intervals from a finished run
+
+Every run stores the true label, the probabilities and the recording of each test window in
+`predictions.txt`, so test-set intervals can be computed afterwards without retraining.
+`deepecg bootstrap` resamples whole recordings and also compares architectures on identical
+resamples (see the [CLI reference](cli.md#deepecg-bootstrap)); the same functions are available
+from Python:
+
+```python
+import numpy as np
+
+from deepecgkit.analysis.bootstrap import Predictions, bootstrap_intervals
+
+recording_of_each_window = np.arange(len(y_true)) // 2  # from predictions.txt in a real run
+stored = Predictions(y_true, y_prob, recording_of_each_window.astype(str))
+intervals = bootstrap_intervals(stored, metrics=["f1", "auroc"], n_resamples=200)
+intervals["f1"]   # Interval(estimate=..., lower=..., upper=...)
+```
+
+`read_predictions(run_dir)` builds `Predictions` from a run directory, and
+`paired_bootstrap_difference(reference, other)` bootstraps the difference between two runs on the
+same resampled recordings. Scores are recomputed with `calculate_classification_metrics`, the
+function behind the stored test metrics, so the estimate on the full test set reproduces the stored
+value up to the six-decimal rounding of the stored probabilities.
+
 `cross_validate` builds and fits a fresh model for every fold and scores it on the fold held out.
 A torch model is trained with `ECGTrainer`; pass `groups` (the recording or patient each sample
 comes from) so that segments of one recording never land on both sides:

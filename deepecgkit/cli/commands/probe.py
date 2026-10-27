@@ -1,18 +1,29 @@
 """Representation-quality probing command."""
 
+import json
 import traceback
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from deepecgkit.analysis.latex import transfer_matrix_table
 from deepecgkit.cli import defaults
-from deepecgkit.cli._common import LEGACY_SAMPLING_RATE, read_checkpoint, require_model
+from deepecgkit.cli._common import (
+    LEGACY_SAMPLING_RATE,
+    build_data_module,
+    checkpoint_dataset_kwargs,
+    infer_input_channels_from,
+    read_checkpoint,
+    report_data_error,
+    require_model,
+)
 from deepecgkit.cli.logger import CLILogger
-from deepecgkit.cli.run_dir import resolve_checkpoint
+from deepecgkit.cli.run_dir import load_run_context, resolve_checkpoint, verify_split
 from deepecgkit.evaluation.representation import (
+    DEFAULT_PROBE_MAX_ITER,
     DEFAULT_PROBE_METRIC,
     KEEP_DIAGONAL,
     KEEP_EMBEDDINGS_MODES,
@@ -24,16 +35,21 @@ from deepecgkit.evaluation.representation import (
     RANDOM_INIT,
     TRANSFER_KEY_SEPARATOR,
     TransferMatrix,
+    _random_init_extractor,
     cross_dataset_transfer,
     embed_2d,
+    in_domain_probe,
 )
 from deepecgkit.evaluation.visualization import plot_embedding, plot_transfer_matrix
+from deepecgkit.features import FeatureExtractor
 from deepecgkit.registry import get_dataset_names, get_model_names
 
 MATRIX_JSON = "transfer_matrix.json"
 MATRIX_CSV = "transfer_matrix.csv"
 MATRIX_PLOT = "transfer_matrix.png"
 MATRIX_TABLE = "transfer_matrix.tex"
+IN_DOMAIN_JSON = "in_domain.json"
+IN_DOMAIN_CSV = "in_domain.csv"
 EMBEDDING_PLOT_TEMPLATE = "embedding_{source}_{target}.png"
 
 SOURCE_SEPARATOR = "="
@@ -264,7 +280,7 @@ def probe(
     embedding_plots: str = KEEP_DIAGONAL,
     perplexity: float = 30.0,
     probe_c: float = 1.0,
-    max_iter: int = 1000,
+    max_iter: int = DEFAULT_PROBE_MAX_ITER,
     val_split: float = 0.2,
     test_split: float = 0.1,
     seed: int = 42,
@@ -272,9 +288,15 @@ def probe(
     num_workers: int = defaults.NUM_WORKERS,
     accelerator: str = "auto",
     force_download: bool = False,
+    in_domain: bool = False,
     logger: CLILogger | None = None,
 ) -> int:
     """Probe frozen encoders across datasets and write the transfer matrix.
+
+    With in_domain, each encoder is instead probed on its own task, with the
+    preprocessing, leads and split recorded in its checkpoint, beside an
+    untrained encoder of the same architecture; targets, input_channels and
+    sampling_rate then do not apply.
 
     Args:
         output_dir: Directory to write the matrix, plots and table into
@@ -299,6 +321,7 @@ def probe(
         num_workers: Data loading workers
         accelerator: Accelerator to use
         force_download: Force re-download of the datasets
+        in_domain: Probe each encoder on its own task rather than across datasets
         logger: Where to report progress
 
     Returns:
@@ -311,6 +334,24 @@ def probe(
     except ValueError as error:
         logger.error(str(error))
         return 1
+
+    if in_domain:
+        return probe_in_domain(
+            output_dir,
+            model_name,
+            sources,
+            data_dir=data_dir,
+            metric=metric,
+            random_init=random_init,
+            probe_c=probe_c,
+            max_iter=max_iter,
+            seed=seed,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            accelerator=accelerator,
+            force_download=force_download,
+            logger=logger,
+        )
 
     resolved_targets = list(targets) if targets else list(PROBE_DATASETS)
     failure = _validate(model_name, sources, resolved_targets, metric, embedding_plots, logger)
@@ -419,6 +460,157 @@ def probe(
         return 1
 
 
+def probe_in_domain(
+    output_dir: str,
+    model_name: str,
+    sources: dict[str, str],
+    data_dir: str | None = None,
+    metric: str = DEFAULT_PROBE_METRIC,
+    random_init: bool = True,
+    probe_c: float = 1.0,
+    max_iter: int = DEFAULT_PROBE_MAX_ITER,
+    seed: int = defaults.SEED,
+    batch_size: int = defaults.BATCH_SIZE,
+    num_workers: int = defaults.NUM_WORKERS,
+    accelerator: str = "auto",
+    force_download: bool = False,
+    logger: CLILogger | None = None,
+) -> int:
+    """Probe each encoder on its own task, beside an untrained encoder.
+
+    Each dataset is rebuilt the way the checkpoint was trained (preprocessing,
+    leads, labels and split, as evaluate does), so the probe is fitted on the
+    training records and scored on test records the encoder never saw. The
+    untrained encoder is built under the seed and probed on the same split.
+
+    Args:
+        output_dir: Directory for in_domain.json and in_domain.csv
+        model_name: Registered model name matching every checkpoint
+        sources: Dataset name mapped to the checkpoint trained on it
+        data_dir: Directory holding the datasets
+        metric: Headline metric
+        random_init: Also probe an untrained encoder of the same architecture
+        probe_c: Inverse regularisation strength for the probe
+        max_iter: Solver iteration ceiling for the probe
+        seed: Seed drawn before building the untrained encoder and for the solver
+        batch_size: Batch size for embedding extraction
+        num_workers: Data loading workers
+        accelerator: Accelerator to use
+        force_download: Force re-download of the datasets
+        logger: Where to report progress
+
+    Returns:
+        Zero on success, one on any handled failure.
+    """
+    logger = logger or CLILogger()
+    if (code := require_model(model_name, logger)) is not None:
+        return code
+    if metric not in PROBE_METRICS:
+        logger.error(f"Unknown metric '{metric}'. Choose one of {', '.join(PROBE_METRICS)}.")
+        return 1
+    if not sources:
+        logger.error("In-domain probing needs at least one --source-checkpoint DATASET=PATH.")
+        return 1
+    unknown = sorted(set(sources) - set(get_dataset_names()))
+    if unknown:
+        logger.error(f"Unknown dataset(s): {', '.join(unknown)}.")
+        return 1
+    resolved = _resolve_sources(sources, logger)
+    if resolved is None:
+        return 1
+
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    rows: list[dict[str, Any]] = []
+    for dataset_name, checkpoint in resolved.items():
+        try:
+            stored = read_checkpoint(checkpoint)
+        except Exception as error:
+            logger.error(f"Could not read {checkpoint}: {error}")
+            return 1
+        context = load_run_context(checkpoint)
+        dataset_kwargs, _ = checkpoint_dataset_kwargs(
+            dataset_name, stored, logger, force_download=force_download, data_dir=data_dir
+        )
+        try:
+            data_module = build_data_module(
+                dataset_name,
+                batch_size=batch_size,
+                num_workers=num_workers,
+                val_split=context.val_split or defaults.VAL_SPLIT,
+                test_split=context.test_split or defaults.TEST_SPLIT,
+                seed=context.seed if context.seed is not None else defaults.SEED,
+                dataset_kwargs=dataset_kwargs,
+                logger=logger,
+            )
+        except Exception as error:
+            return report_data_error(error, dataset_name, logger, data_dir)
+        if context.run_dir is not None:
+            verify_split(data_module, context.run_dir, logger)
+
+        input_channels = (stored.get("model_config") or {}).get("input_channels")
+        if input_channels is None:
+            input_channels = infer_input_channels_from(data_module)
+        extractor_kwargs = {
+            "batch_size": batch_size,
+            "device": accelerator,
+            "progress": not logger.quiet,
+        }
+        try:
+            logger.info(f"Probing {model_name} on {dataset_name} (in-domain)...")
+            extractor = FeatureExtractor.from_checkpoint(
+                checkpoint, model_name, input_channels=input_channels, **extractor_kwargs
+            )
+            random_extractor = (
+                _random_init_extractor(model_name, int(input_channels), seed, **extractor_kwargs)
+                if random_init
+                else None
+            )
+            results = in_domain_probe(
+                extractor,
+                data_module,
+                random_extractor=random_extractor,
+                dataset=dataset_name,
+                metric=metric,
+                c=probe_c,
+                max_iter=max_iter,
+                random_state=seed,
+            )
+        except Exception as error:
+            logger.error(f"In-domain probing of {dataset_name} failed: {error}")
+            logger.debug(traceback.format_exc())
+            return 1
+        for result in results:
+            row = result.to_dict()
+            row["encoder"] = row.pop("source")
+            row["dataset"] = row.pop("target")
+            row["checkpoint"] = checkpoint if row["encoder"] != RANDOM_INIT else None
+            rows.append(row)
+            note = f" ({result.note})" if result.note else ""
+            logger.info(f"  {row['encoder']:<12} {metric} = {result.score:.4f}{note}")
+
+    payload = {
+        "model": model_name,
+        "metric": metric,
+        "protocol": {
+            "mode": "in-domain",
+            "probe_c": probe_c,
+            "max_iter": max_iter,
+            "seed": seed,
+            "random_init": random_init,
+        },
+        "results": rows,
+    }
+    (output_path / IN_DOMAIN_JSON).write_text(json.dumps(payload, indent=2) + "\n")
+    flat = [
+        {key: value for key, value in row.items() if key != "metrics"} | row["metrics"]
+        for row in rows
+    ]
+    pd.DataFrame(flat).to_csv(output_path / IN_DOMAIN_CSV, index=False)
+    logger.info(f"Results saved to {output_path / IN_DOMAIN_JSON}")
+    return 0
+
+
 def add_parser(subparsers: Any) -> Any:
     """Register the probe subcommand's arguments."""
     parser = subparsers.add_parser(
@@ -521,8 +713,14 @@ def add_parser(subparsers: Any) -> Any:
     parser.add_argument(
         "--max-iter",
         type=int,
-        default=1000,
-        help="Solver iteration ceiling for the probe (default: 1000)",
+        default=DEFAULT_PROBE_MAX_ITER,
+        help=f"Solver iteration ceiling for the probe (default: {DEFAULT_PROBE_MAX_ITER})",
+    )
+    parser.add_argument(
+        "--in-domain",
+        action="store_true",
+        help="Probe each encoder on its own task, with the preprocessing, leads and split "
+        "recorded in its checkpoint, beside an untrained encoder of the same architecture",
     )
     parser.add_argument(
         "--val-split",
@@ -597,4 +795,5 @@ def _to_kwargs(args: Any) -> dict[str, Any]:
         "num_workers": args.num_workers,
         "accelerator": args.accelerator,
         "force_download": args.force_download,
+        "in_domain": args.in_domain,
     }

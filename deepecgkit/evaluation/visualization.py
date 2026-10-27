@@ -303,9 +303,12 @@ def plot_calibration_curve(
     else:
         plt.show()
 
+    # Fixed edges on [0, 1]: edges fitted to the data cannot be drawn when a
+    # collapsed model outputs (nearly) one probability for every sample.
+    edges = np.linspace(0.0, 1.0, n_bins + 1)
     plt.figure(figsize=(8, 6))
     for i in range(num_classes):
-        plt.hist(y_prob[:, i], bins=n_bins, alpha=0.5, label=class_names[i])
+        plt.hist(np.asarray(y_prob[:, i], dtype=float), bins=edges, alpha=0.5, label=class_names[i])
     plt.xlabel("Predicted Probability")
     plt.ylabel("Count")
     plt.title("Prediction Distribution")
