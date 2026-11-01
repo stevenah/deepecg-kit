@@ -11,10 +11,8 @@ Usage:
 import argparse
 from pathlib import Path
 
+from deepecgkit import ECGDataModule, ECGTrainer, build_model
 from deepecgkit.cli import defaults
-from deepecgkit.datasets import ECGDataModule
-from deepecgkit.registry import get_dataset, get_dataset_info, get_model
-from deepecgkit.training import ECGTrainer
 
 
 def parse_args():
@@ -38,32 +36,19 @@ def main():
     args = parse_args()
     ECGTrainer.seed_everything(args.seed)
 
-    dataset_info = get_dataset_info(args.dataset)
-    input_channels = dataset_info["input_channels"]
-    num_classes = dataset_info["num_classes"]
-
-    dataset_class = get_dataset(args.dataset)
     data_module = ECGDataModule(
-        dataset_class=dataset_class,
+        args.dataset,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         val_split=args.val_split,
         test_split=args.test_split,
         seed=args.seed,
-        stratify=True,
         download=args.download,
     )
     data_module.setup(stage="fit")
     data_module.print_metadata()
 
-    model_class = get_model(args.model)
-    model = model_class(input_channels=input_channels, output_size=num_classes)
-
-    train_config = {
-        "learning_rate": args.lr,
-        "scheduler": {"factor": 0.5, "patience": 5},
-        "task_type": "classification",
-    }
+    model = build_model(args.model, data_module.input_channels, data_module.num_classes)
 
     if args.output_dir is None:
         output_path = Path("runs") / f"{args.model}-{args.dataset}"
@@ -71,7 +56,7 @@ def main():
         output_path = Path(args.output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
 
-    trainer = ECGTrainer(model=model, train_config=train_config, device=args.device)
+    trainer = ECGTrainer(model, train_config={"learning_rate": args.lr}, device=args.device)
     trainer.fit(
         data_module,
         epochs=args.epochs,

@@ -32,6 +32,7 @@ from deepecgkit.explainability import (
     region_duration_fractions,
     saliency,
 )
+from deepecgkit.explainability.attribution import _GRADIENT_METHODS, METHODS, _needs_generic_rnn
 from deepecgkit.models.factory import build_model
 from deepecgkit.registry import get_model_names
 
@@ -611,6 +612,25 @@ class TestConstraints:
 
         assert result.values.shape[-1] == LENGTH_CEILINGS["medformer"]
         assert result.crop_offset == (15000 - LENGTH_CEILINGS["medformer"]) // 2
+
+
+class TestRecurrentModelsOnCuda:
+    """cuDNN is turned off only where a backward pass needs it."""
+
+    @pytest.mark.parametrize(
+        "name,gradients,expected",
+        [("lstm", True, True), ("lstm", False, False), ("kanres", True, False)],
+    )
+    def test_the_generic_path_is_kept_for_gradients_through_recurrent_layers(
+        self, name, gradients, expected
+    ):
+        model = build_model(name, input_channels=1, output_size=4)
+        cuda = torch.device("cuda")
+        assert _needs_generic_rnn(model, cuda, gradients) is expected
+        assert _needs_generic_rnn(model, torch.device("cpu"), gradients) is False
+
+    def test_only_occlusion_goes_without_gradients(self):
+        assert set(METHODS) - _GRADIENT_METHODS == {"occlusion"}
 
 
 class TestExplainerBehaviour:

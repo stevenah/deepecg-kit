@@ -574,3 +574,84 @@ class TestMetricsAreAveragedOverSamples:
         )
 
         assert trainer.best_val_loss == pytest.approx(expected_loss)
+
+
+class _Labelled(torch.utils.data.Dataset):
+    """Forty random single-lead samples whose labels take the form a task gives them."""
+
+    def __init__(self, labels, multi_label=False, binary_classification=False):
+        self.labels = labels
+        self.multi_label = multi_label
+        self.binary_classification = binary_classification
+        self.signals = torch.randn(len(labels), 1, 500, generator=torch.Generator().manual_seed(0))
+        self.group_ids = [str(index) for index in range(len(labels))]
+
+    def __len__(self):
+        return len(self.labels)
+
+    def __getitem__(self, index):
+        return self.signals[index], self.labels[index]
+
+
+def _multi_hot():
+    return _Labelled(
+        (torch.rand(40, 3, generator=torch.Generator().manual_seed(1)) > 0.5).float(),
+        multi_label=True,
+    )
+
+
+def _binary():
+    return _Labelled(torch.arange(40) % 2, binary_classification=True)
+
+
+class TestTaskFromData:
+    """Left unstated, the task is read from the data instead of defaulting to cross-entropy."""
+
+    def test_multi_hot_labels_train_with_a_sigmoid_per_class(self, temp_dir):
+        """Cross-entropy used to stop this with a dtype error from deep inside PyTorch."""
+        data = ECGDataModule(_multi_hot(), batch_size=8, stratify=False, verbose=False)
+        trainer = ECGTrainer(SimpleCNN(1, 3), device="cpu")
+
+        trainer.fit(data, epochs=1, checkpoint_dir=temp_dir, progress_bar=False)
+
+        assert isinstance(trainer.criterion, torch.nn.BCEWithLogitsLoss)
+        assert trainer.multi_label
+        assert set(trainer.test(data)) == {"test_loss", "test_acc"}
+
+    def test_the_task_found_is_recorded_in_the_checkpoint(self, temp_dir):
+        """Prediction reads the head by it, so a multi-label model gets sigmoids, not a softmax."""
+        data = ECGDataModule(_multi_hot(), batch_size=8, stratify=False, verbose=False)
+        trainer = ECGTrainer(SimpleCNN(1, 3), device="cpu")
+
+        trainer.fit(data, epochs=1, checkpoint_dir=temp_dir, progress_bar=False)
+
+        stored = torch.load(trainer.best_checkpoint_path, weights_only=True)["train_config"]
+        assert stored["multi_label"] is True
+        assert stored["binary_classification"] is False
+
+    def test_a_binary_dataset_feeding_one_logit_gets_a_sigmoid(self):
+        """Cross-entropy over a single output cannot take the label 1."""
+        data = ECGDataModule(_binary(), batch_size=8, verbose=False)
+        trainer = ECGTrainer(SimpleCNN(1, 1), device="cpu")
+
+        result = trainer.test(data)
+
+        assert isinstance(trainer.criterion, torch.nn.BCEWithLogitsLoss)
+        assert result["test_loss"] > 0
+
+    def test_a_binary_dataset_feeding_two_outputs_keeps_cross_entropy(self):
+        data = ECGDataModule(_binary(), batch_size=8, verbose=False)
+        trainer = ECGTrainer(SimpleCNN(1, 2), device="cpu")
+
+        trainer.test(data)
+
+        assert isinstance(trainer.criterion, torch.nn.CrossEntropyLoss)
+
+    def test_a_stated_task_is_left_alone(self):
+        data = ECGDataModule(_multi_hot(), batch_size=8, stratify=False, verbose=False)
+        trainer = ECGTrainer(SimpleCNN(1, 3), {"task_type": "regression"}, device="cpu")
+
+        trainer.test(data)
+
+        assert isinstance(trainer.criterion, torch.nn.MSELoss)
+        assert "multi_label" not in trainer.train_config

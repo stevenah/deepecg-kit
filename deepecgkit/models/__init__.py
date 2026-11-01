@@ -6,6 +6,7 @@ This module contains various neural network architectures optimized for ECG sign
 
 from deepecgkit.models.af_classifier import AFModel
 from deepecgkit.models.base import ECGModelBase
+from deepecgkit.models.cnn_acharya import CNNAcharya
 from deepecgkit.models.convnext_v2_1d import ConvNeXtV21D
 from deepecgkit.models.crnn import CRNN
 from deepecgkit.models.deep_res_cnn import DeepResCNN
@@ -28,8 +29,11 @@ from deepecgkit.models.mlp_wang import MLPWang
 from deepecgkit.models.pretrained import PretrainedMixin, from_pretrained, model_name_for_weights
 from deepecgkit.models.resnet1d import ResNet1D
 from deepecgkit.models.resnet1d_wang import ResNetWang
+from deepecgkit.models.resnet_attia import ResNetAttia
 from deepecgkit.models.resnet_hannun import ResNetHannun
+from deepecgkit.models.resnet_ribeiro import ResNetRibeiro
 from deepecgkit.models.rocket import ROCKET
+from deepecgkit.models.s4 import S4ECG
 from deepecgkit.models.se_resnet1d import SEResNet1D
 from deepecgkit.models.simple_cnn import SimpleCNN
 from deepecgkit.models.spectrogram_cnn import SpectrogramCNN
@@ -44,8 +48,10 @@ __all__ = [
     "GRUECG",
     "LSTMECG",
     "ROCKET",
+    "S4ECG",
     "TCN",
     "AFModel",
+    "CNNAcharya",
     "ConvNeXtV21D",
     "DeepResCNN",
     "ECGDualNet",
@@ -59,7 +65,9 @@ __all__ = [
     "Medformer",
     "PretrainedMixin",
     "ResNet1D",
+    "ResNetAttia",
     "ResNetHannun",
+    "ResNetRibeiro",
     "ResNetWang",
     "SEResNet1D",
     "SimpleCNN",

@@ -21,7 +21,7 @@ import torch
 from deepecgkit import FeatureExtractor
 from deepecgkit.datasets import ECGDataModule
 from deepecgkit.models.factory import build_model
-from deepecgkit.registry import get_dataset, get_model_info, get_model_names
+from deepecgkit.registry import get_model_info, get_model_names
 
 DEFAULT_MODEL = "kanres"
 
@@ -110,15 +110,14 @@ def linear_probe(args) -> None:
 
     dataset_kwargs = {"data_dir": args.data_dir} if args.data_dir else {}
     data_module = ECGDataModule(
-        dataset_class=get_dataset(args.dataset),
+        args.dataset,
         batch_size=args.batch_size,
         download=True,
         dataset_kwargs=dataset_kwargs,
     )
     data_module.setup()
 
-    sample_signal, _ = data_module.dataset[0]
-    input_channels = int(sample_signal.shape[0])
+    input_channels = data_module.input_channels
 
     if args.checkpoint:
         extractor = FeatureExtractor.from_checkpoint(

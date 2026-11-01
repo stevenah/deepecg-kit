@@ -292,6 +292,67 @@ class TestECGDataModule:
             assert datamodule.num_workers == config["num_workers"]
 
 
+class TestDataModuleByName:
+    """A registered name is all it takes to get data and the shapes a model needs."""
+
+    def test_a_registered_name_picks_the_dataset_class(self):
+        assert ECGDataModule("af-classification").dataset_class is AFClassificationDataset
+
+    def test_a_dataset_class_can_be_passed_the_same_way(self):
+        assert ECGDataModule(AFClassificationDataset).dataset_class is AFClassificationDataset
+
+    def test_an_unknown_name_lists_the_known_ones(self):
+        with pytest.raises(KeyError, match="Unknown dataset: no-such-data. Available: .*ptbxl"):
+            ECGDataModule("no-such-data")
+
+    def test_a_dataset_given_twice_is_refused(self):
+        with pytest.raises(ValueError, match="once"):
+            ECGDataModule("af-classification", dataset_class=AFClassificationDataset)
+
+    def test_no_dataset_at_all_says_what_to_pass(self):
+        with pytest.raises(ValueError, match="pass a dataset name"):
+            ECGDataModule().setup()
+
+    def test_the_model_shapes_are_read_off_the_data(self, af_dataset_dir):
+        data = ECGDataModule(
+            "af-classification",
+            data_dir=str(af_dataset_dir),
+            verbose=False,
+            dataset_kwargs={"verbose": False},
+        )
+
+        assert data.dataset is None
+        assert data.input_channels == 1
+        assert data.num_classes == 4
+        assert data.class_names == ["Normal", "AF", "Other", "Noisy"]
+        assert data.train_dataset is not None, "reading a shape loads and splits the data"
+
+    def test_the_lead_count_follows_the_samples(self):
+        class TwelveLeads(Dataset):
+            num_classes = 5
+
+            def __len__(self):
+                return 8
+
+            def __getitem__(self, index):
+                return torch.zeros(12, 1000), torch.tensor(index % 5)
+
+        data = ECGDataModule(TwelveLeads(), verbose=False, stratify=False)
+
+        assert (data.input_channels, data.num_classes, data.class_names) == (12, 5, None)
+
+    def test_a_dataset_without_classes_says_so(self):
+        class Unlabelled(Dataset):
+            def __len__(self):
+                return 1
+
+            def __getitem__(self, index):
+                return torch.zeros(1, 100), torch.tensor(0)
+
+        with pytest.raises(ValueError, match="number of classes is unknown"):
+            _ = ECGDataModule(Unlabelled(), verbose=False).num_classes
+
+
 class TestDatasetUtilities:
     """Test dataset utility functions."""
 

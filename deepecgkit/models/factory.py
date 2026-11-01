@@ -136,7 +136,8 @@ def build_model_from_checkpoint(
     Lightning checkpoints are all accepted.
 
     Args:
-        checkpoint_path: Path to a checkpoint written by ECGTrainer.save_checkpoint
+        checkpoint_path: Path to a checkpoint written by ECGTrainer.save_checkpoint,
+            or a run directory standing for its best checkpoint
         name: Registered model name; optional when the checkpoint records one
         input_channels: Overrides the recorded or inferred lead count
         output_size: Overrides the recorded or inferred output size

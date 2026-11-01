@@ -710,3 +710,40 @@ class TestCheckpointLoading:
         torch.save({"model_state_dict": {}, "extra": _NotPlainData()}, path)
 
         assert isinstance(load_checkpoint_file(path)["extra"], _NotPlainData)
+
+
+class TestRunDirectoryForACheckpoint:
+    """A run directory stands for its best checkpoint in the library, as on the command line."""
+
+    @pytest.fixture
+    def run(self, temp_dir):
+        folder = temp_dir / "run" / "checkpoints"
+        folder.mkdir(parents=True)
+        for epoch, loss in enumerate([0.93, 0.41, 0.57], 1):
+            torch.save({"epoch": epoch}, folder / f"epoch={epoch:02d}-val_loss={loss:.4f}.pt")
+        return temp_dir / "run"
+
+    def test_loading_a_run_directory_loads_its_lowest_validation_loss(self, run):
+        assert load_checkpoint_file(run)["epoch"] == 2
+        assert load_checkpoint_file(run / "checkpoints")["epoch"] == 2
+
+    def test_a_model_is_rebuilt_from_a_run_directory(self, temp_dir):
+        from deepecgkit.models import SimpleCNN, build_model_from_checkpoint
+
+        folder = temp_dir / "run" / "checkpoints"
+        folder.mkdir(parents=True)
+        torch.save(
+            {
+                "model_state_dict": SimpleCNN(1, 4).state_dict(),
+                "model_config": {"name": "simple-cnn", "input_channels": 1, "output_size": 4},
+            },
+            folder / "epoch=01-val_loss=0.5000.pt",
+        )
+
+        model, _ = build_model_from_checkpoint(temp_dir / "run")
+
+        assert isinstance(model, SimpleCNN)
+
+    def test_a_directory_without_checkpoints_is_reported(self, temp_dir):
+        with pytest.raises(FileNotFoundError, match="No checkpoint files"):
+            load_checkpoint_file(temp_dir)

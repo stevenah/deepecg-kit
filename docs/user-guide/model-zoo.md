@@ -1,6 +1,6 @@
 # Model Zoo
 
-DeepECG-Kit includes 26 model architectures for ECG signal classification. All models follow a consistent interface:
+DeepECG-Kit includes 30 model architectures for ECG signal classification. All models follow a consistent interface:
 
 ```python
 model = ModelClass(input_channels=1, output_size=4)
@@ -15,6 +15,8 @@ model = ModelClass(input_channels=1, output_size=4)
 | `kanres-deep` | `KanResDeepX` | CNN+Residual | Deep KAN-ResNet architecture |
 | `resnet` | `ResNet1D` | Residual CNN | 1D ResNet adapted for ECG |
 | `resnet-wang` | `ResNetWang` | Residual CNN | ResNet (Wang et al.) for time series |
+| `resnet-ribeiro` | `ResNetRibeiro` | Residual CNN | 12-lead diagnosis network (Ribeiro et al. 2020) |
+| `resnet-attia` | `ResNetAttia` | Residual CNN | AI-ECG atrial fibrillation network (Attia et al. 2019), per-lead blocks then a lead convolution |
 | `se-resnet` | `SEResNet1D` | Residual+Attention | ResNet with Squeeze-and-Excitation |
 | `xresnet` | `XResNet1D` | Residual CNN | XResNet with Mish activation and blur-pool |
 | `xresnet1d-benchmark` | `XResNet1dBenchmark` | Residual CNN | XResNet from PTB-XL benchmark |
@@ -23,6 +25,7 @@ model = ModelClass(input_channels=1, output_size=4)
 | `deep-res-cnn` | `DeepResCNN` | 2D Residual CNN | Deep Residual 2D CNN for multi-lead ECG |
 | `fcn-wang` | `FCNWang` | FCN | Fully Convolutional Network (Wang et al.) |
 | `simple-cnn` | `SimpleCNN` | Lightweight CNN | Lightweight CNN for fast inference |
+| `cnn-acharya` | `CNNAcharya` | Lightweight CNN | Nine-layer heartbeat CNN (Acharya et al. 2017) |
 | `crnn` | `CRNN` | CNN+LSTM | CNN-LSTM hybrid for temporal aggregation |
 | `gru` | `GRUECG` | Recurrent | GRU-based sequential ECG model |
 | `lstm` | `LSTMECG` | Recurrent | LSTM-based sequential ECG model |
@@ -31,6 +34,7 @@ model = ModelClass(input_channels=1, output_size=4)
 | `medformer` | `Medformer` | Transformer | Multi-granularity patching Transformer (NeurIPS 2024) |
 | `dualnet` | `ECGDualNet` | Hybrid | Dual-path CNN-LSTM + Transformer |
 | `mamba` | `Mamba1D` | State Space | Bidirectional Mamba with linear complexity |
+| `s4` | `S4ECG` | State Space | Bidirectional S4 classifier (Mehari & Strodthoff 2022) |
 | `mlp-wang` | `MLPWang` | MLP | Multilayer perceptron (Wang et al.) on the time-pooled, flattened signal |
 | `rocket` | `ROCKET` | Random kernels | Frozen random convolution kernels (PPV and max) with a linear head |
 | `resnet-hannun` | `ResNetHannun` | Residual CNN | 34-layer pre-activation ResNet (Hannun et al. 2019) |
@@ -53,11 +57,13 @@ model = ModelClass(input_channels=1, output_size=4)
 **Long sequences:**
 
 - `mamba` — Linear complexity, handles very long sequences efficiently
+- `s4` — Structured state space convolution over the whole signal
 - `tcn` — Dilated convolutions capture long-range dependencies
 
 **Multi-lead ECG (12-lead):**
 
 - `deep-res-cnn` — 2D convolutions across leads
+- `resnet-ribeiro`, `resnet-attia` — Networks built for 12-lead ECG
 - `xresnet1d-benchmark` — Designed for the PTB-XL benchmark
 - `xresnet1d101` — The PTB-XL benchmark's deep model
 - `resnet-hannun` — The 34-layer rhythm classifier of Hannun et al.
@@ -114,15 +120,15 @@ register_weights(
 ## Using the Registry
 
 ```python
-from deepecgkit.registry import get_model, get_model_names, get_model_info
+from deepecgkit import build_model, get_model_names
+from deepecgkit.registry import get_model_info
 
 print(get_model_names())
 
 info = get_model_info("kanres")
 print(info["description"])
 
-model_class = get_model("kanres")
-model = model_class(input_channels=1, output_size=4)
+model = build_model("kanres", input_channels=1, output_size=4)
 ```
 
 ## Adding Your Own Model

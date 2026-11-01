@@ -29,11 +29,10 @@ The script iterates over all registered models:
 ```python
 import torch
 
-from deepecgkit.registry import get_model, get_model_names
+from deepecgkit import build_model, get_model_names
 
 for model_name in get_model_names():
-    model_class = get_model(model_name)
-    model = model_class(input_channels=1, output_size=4)
+    model = build_model(model_name, input_channels=1, output_size=4)
     model.eval()
 
     x = torch.randn(1, 1, 3000)

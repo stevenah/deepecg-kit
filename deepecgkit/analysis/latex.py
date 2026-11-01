@@ -57,6 +57,7 @@ def _tau_floor_notes(taus: pd.DataFrame | None) -> list[str]:
 
 MODEL_DISPLAY_NAMES = {
     "afmodel": "AFModel",
+    "cnn-acharya": "CNN-Acharya",
     "convnext-v2": "ConvNeXt-V2",
     "crnn": "CRNN",
     "deep-res-cnn": "DeepResCNN",
@@ -71,9 +72,12 @@ MODEL_DISPLAY_NAMES = {
     "medformer": "Medformer",
     "mlp-wang": "MLP",
     "resnet": "ResNet1D",
+    "resnet-attia": "ResNet-Attia",
     "resnet-hannun": "ResNet-Hannun",
+    "resnet-ribeiro": "ResNet-Ribeiro",
     "resnet-wang": "ResNet-Wang",
     "rocket": "ROCKET",
+    "s4": "S4",
     "se-resnet": "SE-ResNet1D",
     "simple-cnn": "SimpleCNN",
     "spectrogram-cnn": "SpectrogramCNN",

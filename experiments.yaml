@@ -3,8 +3,8 @@
 # num_workers, accelerator, devices, early_stopping_patience, seed), and the
 # preprocessing (sampling_rate, segment_duration, normalization).
 #
-# THE ARTICLE GRID: the 24 benchmarked architectures on PTB-XL and PhysioNet
-# 2017, each pairing trained once with seed 42 = 48 runs. PTB-XL uses its
+# THE ARTICLE GRID: the 27 benchmarked architectures on PTB-XL and PhysioNet
+# 2017, each pairing trained once with seed 42 = 54 runs. PTB-XL uses its
 # recommended folds (1-8 train, 9 validation, 10 test) and the label rule of
 # the PTB-XL benchmark, both dataset defaults since 1.0. The long-term AF
 # tasks (MIT-BIH AFDB, LTAFDB, Unified AF) are in experiments-longterm.yaml;
@@ -12,6 +12,9 @@
 # restarting cheap.
 #
 # mamba is ABSENT DELIBERATELY: it was dropped from the journal benchmark.
+#
+# lstm is ABSENT DELIBERATELY: it was dropped from the journal benchmark on
+# 2026-10-29.
 #
 # afmodel is ABSENT DELIBERATELY. AFModel(recording_length=30) requires at
 # least 7971 samples per lead, and the CLI resamples every dataset to 500 Hz,
@@ -65,9 +68,6 @@ experiments:
   - model: kanres-deep
     dataset: ptbxl
     multi_label: true
-  - model: lstm
-    dataset: ptbxl
-    multi_label: true
   - model: medformer
     dataset: ptbxl
     multi_label: true
@@ -108,6 +108,18 @@ experiments:
     dataset: ptbxl
     multi_label: true
   - model: xresnet1d101
+    dataset: ptbxl
+    multi_label: true
+  - model: resnet-ribeiro
+    dataset: ptbxl
+    multi_label: true
+  - model: resnet-attia
+    dataset: ptbxl
+    multi_label: true
+  - model: s4
+    dataset: ptbxl
+    multi_label: true
+  - model: cnn-acharya
     dataset: ptbxl
     multi_label: true
 
@@ -133,8 +145,6 @@ experiments:
     dataset: af-classification
   - model: kanres-deep
     dataset: af-classification
-  - model: lstm
-    dataset: af-classification
   - model: medformer
     dataset: af-classification
   - model: resnet
@@ -162,5 +172,13 @@ experiments:
   - model: spectrogram-cnn
     dataset: af-classification
   - model: xresnet1d101
+    dataset: af-classification
+  - model: resnet-ribeiro
+    dataset: af-classification
+  - model: resnet-attia
+    dataset: af-classification
+  - model: s4
+    dataset: af-classification
+  - model: cnn-acharya
     dataset: af-classification
 

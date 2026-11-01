@@ -256,6 +256,42 @@ class TestBackwardsCompatibility:
         assert "--seed" in command
         assert "--output-dir" in command
 
+    def test_a_recipe_run_passes_only_the_settings_its_entry_sets(self, temp_dir):
+        """The package defaults would otherwise override the recipe's own settings."""
+        config = write_config(
+            temp_dir,
+            "experiments:\n"
+            "  - model: fcn-wang\n"
+            "    dataset: ptbxl\n"
+            "    recipe: ptbxl-benchmark\n"
+            "    epochs: 3\n",
+        )
+        command = build_command(expand_runs(load_experiments(config))[0])
+        assert command[command.index("--recipe") + 1] == "ptbxl-benchmark"
+        assert command[command.index("--epochs") + 1] == "3"
+        for flag in ("--batch-size", "--learning-rate", "--early-stopping-patience"):
+            assert flag not in command
+
+    def test_recipe_runs_get_their_own_directory_and_key(self, temp_dir):
+        """A recipe run beside the default run of the same pairing overwrites nothing."""
+        config = write_config(
+            temp_dir,
+            "experiments:\n"
+            "  - model: fcn-wang\n"
+            "    dataset: ptbxl\n"
+            "  - model: fcn-wang\n"
+            "    dataset: ptbxl\n"
+            "    recipe: ptbxl-benchmark\n",
+        )
+        default, recipe = expand_runs(load_experiments(config), runs_dir="runs")
+        assert default["output_dir"] == "runs/fcn-wang-ptbxl-seed42"
+        assert recipe["output_dir"] == "runs/fcn-wang-ptbxl-ptbxl-benchmark-seed42"
+        assert (default["key"], recipe["key"]) == (
+            "fcn-wang|ptbxl|42",
+            "fcn-wang|ptbxl|ptbxl-benchmark|42",
+        )
+        assert "--recipe" not in build_command(default)
+
 
 class TestStateRoundTrip:
     """Test the progress cache."""

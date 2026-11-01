@@ -56,9 +56,10 @@ deepecg train -m kanres -d af-classification --epochs 50
 | `--data-dir` | auto-detect | Directory containing the dataset |
 | `--output-dir`, `-o` | `runs/{timestamp}-{model}-{dataset}-seed{seed}` | Output directory |
 | `--weights`, `-w` | None | Weights to start from: a weights file, a checkpoint, a run directory, or a pretrained weight name |
-| `--epochs`, `-e` | 50 | Number of training epochs |
-| `--batch-size`, `-b` | 32 | Batch size |
-| `--learning-rate`, `--lr` | 0.001 | Learning rate |
+| `--recipe` | None | Train and evaluate under a named protocol: `ptbxl-benchmark` (see below) |
+| `--epochs`, `-e` | 50, or the recipe's | Number of training epochs |
+| `--batch-size`, `-b` | 32, or the recipe's | Batch size |
+| `--learning-rate`, `--lr` | 0.001, or the recipe's | Learning rate |
 | `--val-split` | 0.2 | Validation split ratio |
 | `--test-split` | 0.1 | Test split ratio |
 | `--num-workers` | 0 | Data loading workers |
@@ -68,7 +69,7 @@ deepecg train -m kanres -d af-classification --epochs 50
 | `--seed` | 42 | Random seed |
 | `--sampling-rate` | the dataset's own | Sampling rate in Hz the signals are resampled to |
 | `--segment-duration` | the dataset's own (10) | Length of each training segment in seconds |
-| `--normalization` | the dataset's own (`zscore`) | Normalization method: `zscore`, `minmax`, `none` |
+| `--normalization` | the dataset's own (`zscore`), or the recipe's | Normalization method: `zscore` or `minmax` per signal, `global` (one mean and standard deviation fitted on the training partition), `none` |
 | `--multi-label` | false | Multi-label classification with BCE loss (`ptbxl`) |
 | `--binary-classification` | false | Collapse labels to AF vs Non-AF (`mitbih-afdb`, `ltafdb`, `unified-af`) |
 | `--label-rule` | `benchmark` | How PTB-XL labels are derived: `benchmark` (every statement counts) or `likelihood` (likelihood at least 50) |
@@ -85,6 +86,22 @@ testing) and labelled with the rule of the PTB-XL benchmark unless `--seeded-spl
 `--label-rule likelihood` is given; with the recommended folds, `--val-split` and `--test-split`
 have no effect. See [Datasets](datasets.md#ptb-xl-labels-and-split).
 
+`--recipe ptbxl-benchmark` trains and evaluates under the protocol of the PTB-XL benchmark
+(Strodthoff et al., 2021), for comparing a model with that benchmark's published scores. It sets
+100 Hz input, global normalization, random 2.5 s training crops, AdamW (betas 0.9 and 0.99, weight
+decay 0.01) under a one-cycle schedule peaking at 0.01, batch size 128, 50 epochs with the final
+epoch kept and no early stopping, a loss without class weights, Kaiming-normal initialisation, and,
+at test time, the maximum of the outputs over 2.5 s windows at a 1.25 s stride. LSTM and GRU models
+train at 0.001 with gradients clipped at 0.25, as in the benchmark. `--multi-label` is implied.
+Flags given next to `--recipe` win and are recorded in `run_metadata.json` as
+`recipe_deviations`, next to the full `recipe`. The window travels in the checkpoint, so
+`deepecg evaluate` scores the run the same way. Without `--recipe`, every architecture and dataset
+shares the package's own settings in the table above.
+
+```bash
+deepecg train -m fcn-wang -d ptbxl --recipe ptbxl-benchmark
+```
+
 Before training starts the command checks that the model can take the dataset's signal length
 and stops with the flag to change if it cannot. `afmodel`, for instance, needs 30-second
 segments: `deepecg train -m afmodel -d af-classification --segment-duration 30`.
@@ -94,7 +111,8 @@ workers add start-up time without speeding up an epoch. `--devices` is still acc
 existing scripts, has no effect, and will be removed.
 
 Every run directory receives, alongside its metrics: `checkpoints/` with the best checkpoints by
-validation loss, named like `epoch=07-val_loss=0.4123.pt`; `run_metadata.json` recording what
+validation loss, named like `epoch=07-val_loss=0.4123.pt` (a recipe that keeps the final epoch
+saves that one alone, as `epoch=50-last.pt`); `run_metadata.json` recording what
 produced the run (model, dataset, seed, split protocol, split fractions, dataset options,
 labelling mode, hyperparameters, the final returncode and the best checkpoint); and `split_info.json` with the realised split sizes.
 The preprocessing fields in `run_metadata.json` (`sampling_rate`, `normalization`,

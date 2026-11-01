@@ -5,11 +5,9 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-import torch
-
 from deepecgkit.cli import defaults
 from deepecgkit.cli._common import (
+    read_checkpoint,
     report_shape_error,
     require_checkpoint,
     require_file,
@@ -18,64 +16,43 @@ from deepecgkit.cli._common import (
 )
 from deepecgkit.cli.commands.extract import UNPREPROCESSED_WARNING
 from deepecgkit.cli.logger import CLILogger
-from deepecgkit.datasets.io import SUPPORTED_ECG_SUFFIXES, load_recordings, prepare_recording
-from deepecgkit.models.factory import build_model_from_checkpoint, infer_input_channels
+from deepecgkit.datasets.io import SUPPORTED_ECG_SUFFIXES
+from deepecgkit.prediction import THRESHOLD, ECGPredictor, Prediction
 from deepecgkit.registry import get_model_names
-from deepecgkit.utils.checkpoints import load_checkpoint_file
-from deepecgkit.utils.device import resolve_device
 
 
-def _segment_probabilities(
-    model: torch.nn.Module,
-    segments: np.ndarray,
-    device: torch.device,
-    batch_size: int,
-    multi_label: bool,
-    binary_classification: bool,
-) -> np.ndarray:
-    """Run the model over one recording's segments.
+def _as_record(index: int, result: Prediction) -> dict[str, Any]:
+    """Lay one recording's prediction out the way the JSON output stores it.
 
     Args:
-        model: The loaded model, already on device and in eval mode
-        segments: Array of shape (num_segments, leads, samples)
-        device: Device the model lives on
-        batch_size: Segments per forward pass
-        multi_label: Whether the head is a set of independent sigmoids
-        binary_classification: Whether the head is a single AF-vs-rest logit
+        index: Position of the recording in the input
+        result: Its prediction
 
     Returns:
-        Probabilities of shape (num_segments, num_classes).
+        The class index (single-label) or multi-hot list (multi-label), the
+        label, the mean probabilities, and one row per segment.
     """
-    chunks: list[torch.Tensor] = []
-    step = max(int(batch_size), 1)
-    with torch.no_grad():
-        for start in range(0, len(segments), step):
-            batch = torch.as_tensor(segments[start : start + step], dtype=torch.float32)
-            outputs = model(batch.to(device))
-            if hasattr(outputs, "logits"):
-                outputs = outputs.logits
-
-            if multi_label:
-                probabilities = torch.sigmoid(outputs)
-            elif binary_classification and outputs.shape[-1] == 1:
-                positive = torch.sigmoid(outputs.squeeze(-1))
-                probabilities = torch.stack([1 - positive, positive], dim=-1)
-            else:
-                probabilities = torch.softmax(outputs, dim=-1)
-            chunks.append(probabilities.cpu())
-    return torch.cat(chunks, dim=0).numpy()
-
-
-def _label_for(prediction: Any, class_names: list[str] | None) -> str:
-    """Render a prediction as class names where they are known."""
-    if isinstance(prediction, list):
-        if class_names:
-            chosen = [class_names[i] for i, flag in enumerate(prediction) if flag]
-            return ", ".join(chosen) if chosen else "none"
-        return str(prediction)
-    if class_names and 0 <= prediction < len(class_names):
-        return str(class_names[prediction])
-    return f"class {prediction}"
+    per_segment = result.segment_probabilities
+    if result.multi_label:
+        prediction: Any = [int(p > THRESHOLD) for p in result.probabilities.values()]
+        segment_predictions: list[Any] = (per_segment > THRESHOLD).astype(int).tolist()
+    else:
+        prediction = int(per_segment.mean(axis=0).argmax())
+        segment_predictions = per_segment.argmax(axis=1).astype(int).tolist()
+    return {
+        "prediction": prediction,
+        "label": result.label,
+        "probabilities": list(result.probabilities.values()),
+        "segments": [
+            {
+                "recording": index,
+                "start_seconds": float(start),
+                "prediction": segment_predictions[row],
+                "probabilities": per_segment[row].tolist(),
+            }
+            for row, start in enumerate(result.segment_starts)
+        ],
+    }
 
 
 def predict(
@@ -134,113 +111,55 @@ def predict(
             return 1
 
         logger.info(f"Loading model from {checkpoint}...")
-        ckpt = load_checkpoint_file(checkpoint)
-        ckpt = ckpt if isinstance(ckpt, dict) else {}
-
-        model_name = resolve_model_name(ckpt, model_name, logger)
+        model_name = resolve_model_name(read_checkpoint(checkpoint), model_name, logger)
         if model_name is None:
             return 1
-
-        train_config = ckpt.get("train_config") or {}
-        multi_label = bool(train_config.get("multi_label", False))
-        binary_classification = bool(train_config.get("binary_classification", False))
-
-        data_config = ckpt.get("data_config") or {}
-        preprocessing = data_config.get("preprocessing") if preprocess else None
-        class_names = data_config.get("class_names")
-
-        recorded = ckpt.get("model_config") or {}
-        state_dict = ckpt.get("model_state_dict") or ckpt.get("state_dict") or ckpt
-        input_channels = recorded.get("input_channels") or infer_input_channels(state_dict)
-        model, _ = build_model_from_checkpoint(
-            checkpoint, name=model_name, input_channels=input_channels
+        predictor = ECGPredictor.from_checkpoint(
+            checkpoint,
+            model_name=model_name,
+            preprocess=preprocess,
+            device=accelerator,
+            batch_size=batch_size,
         )
-        model.eval()
+        if preprocess and not predictor.preprocessing:
+            logger.warning(UNPREPROCESSED_WARNING)
 
-        logger.info(f"Loading input data from {input_path}...")
+        logger.info(f"Running inference on {input_path}...")
         try:
-            recordings, file_rate, load_notes = load_recordings(input_file, input_channels)
+            results = predictor.predict_all(input_file, sampling_rate)
         except ValueError as shape_error:
             logger.error(str(shape_error))
             return 1
-        source_rate = sampling_rate if sampling_rate is not None else file_rate
 
-        if preprocess and not preprocessing:
-            logger.warning(UNPREPROCESSED_WARNING)
+        if results and results[0].notes:
+            logger.info(f"Preprocessing: {'; '.join(results[0].notes)}.")
 
-        logger.info("Running inference...")
-        device = resolve_device(accelerator)
-        model = model.to(device)
-
-        predictions: list[Any] = []
-        probabilities: list[list[float]] = []
-        segment_rows: list[dict[str, Any]] = []
-        notes: list[str] = []
-        segment_counts: list[int] = []
-        for index, recording in enumerate(recordings):
-            prepared = prepare_recording(recording, preprocessing, source_rate)
-            if index == 0:
-                notes = [*load_notes, *prepared.notes]
-            per_segment = _segment_probabilities(
-                model,
-                prepared.segments,
-                device,
-                batch_size,
-                multi_label,
-                binary_classification,
-            )
-            mean = per_segment.mean(axis=0)
-            if multi_label:
-                prediction: Any = (mean > 0.5).astype(int).tolist()
-                segment_predictions: list[Any] = (per_segment > 0.5).astype(int).tolist()
-            else:
-                prediction = int(mean.argmax())
-                segment_predictions = per_segment.argmax(axis=1).astype(int).tolist()
-
-            predictions.append(prediction)
-            probabilities.append(mean.tolist())
-            segment_counts.append(len(per_segment))
-            for row, start in enumerate(prepared.start_seconds):
-                segment_rows.append(
-                    {
-                        "recording": index,
-                        "start_seconds": float(start),
-                        "prediction": segment_predictions[row],
-                        "probabilities": per_segment[row].tolist(),
-                    }
-                )
-
-        if notes:
-            logger.info(f"Preprocessing: {'; '.join(notes)}.")
-
-        labels = [_label_for(prediction, class_names) for prediction in predictions]
-        results = {
+        records = [_as_record(index, result) for index, result in enumerate(results)]
+        payload = {
             "model": model_name,
-            "class_names": class_names,
-            "predictions": predictions,
-            "labels": labels,
-            "probabilities": probabilities,
-            "segments": segment_rows,
+            "class_names": predictor.class_names,
+            "predictions": [record["prediction"] for record in records],
+            "labels": [record["label"] for record in records],
+            "probabilities": [record["probabilities"] for record in records],
+            "segments": [row for record in records for row in record["segments"]],
         }
 
         if output_path:
             output_file = Path(output_path)
             output_file.parent.mkdir(parents=True, exist_ok=True)
             with open(output_file, "w") as f:
-                json.dump(results, f, indent=2)
+                json.dump(payload, f, indent=2)
             logger.info(f"Results saved to {output_path}")
         else:
             logger.info("\nPrediction Results:")
             logger.info("-" * 40)
-            for i, (label, prob, count) in enumerate(
-                zip(labels, probabilities, segment_counts, strict=False)
-            ):
-                detail = f"confidence={max(prob):.4f}"
-                if count > 1:
-                    detail += f", averaged over {count} segments"
-                logger.info(f"  Recording {i}: {label} ({detail})")
-            if class_names and not multi_label:
-                logger.info(f"  Classes: {', '.join(class_names)}")
+            for index, result in enumerate(results):
+                detail = f"confidence={result.confidence:.4f}"
+                if result.num_segments > 1:
+                    detail += f", averaged over {result.num_segments} segments"
+                logger.info(f"  Recording {index}: {result.label} ({detail})")
+            if predictor.class_names and not predictor.multi_label:
+                logger.info(f"  Classes: {', '.join(predictor.class_names)}")
 
         return 0
     except RuntimeError as e:

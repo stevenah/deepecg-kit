@@ -5,7 +5,7 @@ the main temporal operation, the depth and kernel sizes, the width of the featur
 normalisation and dropout used, how the feature vector is read out before the classification
 head, and the publications the implementation follows.
 
-The 24 architectures listed here are a starting point. Architectures are added to the package
+The 27 architectures listed here are a starting point. Architectures are added to the package
 continuously, and this page is extended with each addition; the
 [Model Zoo](../user-guide/model-zoo.md) lists everything that is currently registered, and
 `deepecg list-models` prints the same list from the installed version. Parameter counts and
@@ -31,16 +31,19 @@ Architectures are grouped by family and ordered within a family by 12-lead param
 
 | Architecture | Registry name | Operation | Depth (kernel) | Width | Norm | Dropout | Readout | Source |
 |---|---|---|---|---|---|---|---|---|
+| CNN-Acharya | `cnn-acharya` | Conv | 3 conv (3, 4, 4) | 20 | – | – | Averaged to 30 steps, 2 dense layers | [20] |
 | KanRes | `kanres` | Residual conv | 3 residual (3) | 64 | BN | – | GAP | [3] |
 | SimpleCNN | `simple-cnn` | Conv | 4 conv (7, 5, 3, 3) | 256 | BN | 0.3 | GAP | – |
+| ResNet-Attia | `resnet-attia` | Residual conv per lead, then across leads | 9 residual (7, 5, 3), 1 lead conv | 1280 | BN | 0.2 | Averaged to 10 steps | [21] |
 | FCN | `fcn-wang` | Conv | 3 conv (8, 5, 3) | 128 | BN | 0.3 | GAP | [2], [4] |
 | XResNet1D-Bench | `xresnet1d-benchmark` | Residual conv | 8 residual (5) | 128 | BN | 0.25 | Avg and max, concat | [5], [4] |
-| ResNet-Wang | `resnet-wang` | Residual conv | 3 residual (5) | 128 | BN | 0.3 | GAP | [2], [4] |
+| ResNet-Wang | `resnet-wang` | Residual conv | 3 residual (5; stride 1, 2, 2) | 128 | BN | 0.3 | GAP | [2], [4] |
 | InceptionTime | `inception-time` | Multi-scale conv | 6 Inception (5, 15, 41) | 128 | BN | 0.3 | GAP | [6], [7] |
 | DeepResCNN | `deep-res-cnn` | Residual 2-D conv | 4 residual (1×5) | 128 | BN | 0.1, 0.15 | GAP, 2 dense layers | [8] |
 | SpectrogramCNN | `spectrogram-cnn` | 2-D conv on spectrograms | 4 conv (3×3) | 256 | BN | 0.3 | GAP | – |
 | KanRes-Deep | `kanres-deep` | Residual conv | 8 residual (50) | 32 | BN | – | GAP | [3] |
 | TCN | `tcn` | Dilated causal conv | 6 residual (7) | 256 | WN, BN | 0.2 | GAP | [9] |
+| ResNet-Ribeiro | `resnet-ribeiro` | Residual conv | 4 residual (16) | 5120 | BN | 0.8 | Averaged to 16 steps | [22] |
 | ConvNeXt-V2 | `convnext-v2` | Depthwise conv, GRN | 12 ConvNeXt (7) | 512 | LN | 0.3 | GAP | [10] |
 | ResNet1D | `resnet` | Residual conv | 8 residual (7) | 512 | BN | 0.3 | GAP | [11] |
 | XResNet1D | `xresnet` | Residual conv, Mish, blur-pool | 8 residual (7) | 512 | BN | 0.3 | GAP | [5], [12], [13] |
@@ -52,22 +55,27 @@ Architectures are grouped by family and ordered within a family by 12-lead param
 
 | Architecture | Registry name | Operation | Depth (kernel) | Width | Norm | Dropout | Readout | Source |
 |---|---|---|---|---|---|---|---|---|
-| LSTM | `lstm` | BiLSTM | 2 layers | 256 | – | 0.3 | Final states | [16] |
-| GRU | `gru` | Unidirectional GRU | 2 layers | 768 | BN | 0.15 | Mean, max, last; concat | [17], [4] |
+| GRU | `gru` | Unidirectional GRU | 2 layers | 768 | BN | 0.15 | Mean, max, last; concat | [16], [4] |
 
 ### Hybrid
 
 | Architecture | Registry name | Operation | Depth (kernel) | Width | Norm | Dropout | Readout | Source |
 |---|---|---|---|---|---|---|---|---|
 | DualNet | `dualnet` | Conv–BiLSTM in parallel with Transformer | 3 conv (7, 5, 3), 1 LSTM, 2 enc. | 384 | BN, LN | 0.3 | Branches concat | – |
-| CRNN | `crnn` | Conv, then BiLSTM | 4 conv (7, 5, 3, 3), 2 LSTM | 256 | BN | 0.3 | Final states | [18] |
+| CRNN | `crnn` | Conv, then BiLSTM | 4 conv (7, 5, 3, 3), 2 LSTM | 256 | BN | 0.3 | Final states | [17] |
 
 ### Transformer
 
 | Architecture | Registry name | Operation | Depth (kernel) | Width | Norm | Dropout | Readout | Source |
 |---|---|---|---|---|---|---|---|---|
-| Transformer | `transformer` | Attention over samples | 4 enc. | 128 | LN | 0.1 | GAP | [19] |
-| Medformer | `medformer` | Attention over patches spanning all leads | 2 enc. per scale (patch 10, 25, 50) | 384 | LN | 0.1 | Per-scale mean, concat | [20] |
+| Transformer | `transformer` | Attention over samples | 4 enc. | 128 | LN | 0.1 | GAP | [18] |
+| Medformer | `medformer` | Attention over patches spanning all leads | 2 enc. per scale (patch 10, 25, 50) | 384 | LN | 0.1 | Per-scale mean, concat | [19] |
+
+### State space
+
+| Architecture | Registry name | Operation | Depth (kernel) | Width | Norm | Dropout | Readout | Source |
+|---|---|---|---|---|---|---|---|---|
+| S4 | `s4` | Bidirectional S4 convolution (LegS, frozen A, B and step) | 4 S4 layers (state 8) | 512 | LN | 0.2 | GAP | [23], [24] |
 
 ### Reading the table
 
@@ -79,6 +87,7 @@ Architectures are grouped by family and ordered within a family by 12-lead param
 - **Norm**: BN, LN and WN are batch, layer and weight normalisation.
 - **Readout**: GAP is global average pooling over time; final states are those of the last
   recurrent layer; concat is concatenation; PPV is the proportion of positive values.
+- S4, structured state space layer; LegS, the HiPPO Legendre initialization of its state matrix.
 - enc., Transformer encoder layers; conv, convolution; BiLSTM, bidirectional LSTM; GRN, global
   response normalisation; SE, squeeze-and-excitation; –, none or not applicable.
 - **Source** cites the publications followed, with the PTB-XL benchmark [4] where the variant
@@ -121,15 +130,26 @@ Architectures are grouped by family and ordered within a family by 12-lead param
 15. Hannun et al. Cardiologist-level arrhythmia detection and classification in ambulatory
     electrocardiograms using a deep neural network. *Nature Medicine* 25, 65–69 (2019).
     [doi:10.1038/s41591-018-0268-3](https://doi.org/10.1038/s41591-018-0268-3)
-16. Hochreiter and Schmidhuber. Long short-term memory. *Neural Computation* 9, 1735–1780
-    (1997). [doi:10.1162/neco.1997.9.8.1735](https://doi.org/10.1162/neco.1997.9.8.1735)
-17. Cho et al. Learning phrase representations using RNN encoder–decoder for statistical machine
+16. Cho et al. Learning phrase representations using RNN encoder–decoder for statistical machine
     translation. *EMNLP* (2014). [doi:10.3115/v1/D14-1179](https://doi.org/10.3115/v1/D14-1179)
-18. Zihlmann, Perekrestenko and Tschannen. Convolutional recurrent neural networks for
+17. Zihlmann, Perekrestenko and Tschannen. Convolutional recurrent neural networks for
     electrocardiogram classification. *Computing in Cardiology* 44 (2017).
     [doi:10.22489/CinC.2017.070-060](https://doi.org/10.22489/CinC.2017.070-060)
-19. Vaswani et al. Attention is all you need. *Advances in Neural Information Processing
+18. Vaswani et al. Attention is all you need. *Advances in Neural Information Processing
     Systems* 30 (2017).
-20. Wang, Huang, Li, Yan and Zhang. Medformer: a multi-granularity patching Transformer for
+19. Wang, Huang, Li, Yan and Zhang. Medformer: a multi-granularity patching Transformer for
     medical time-series classification. *Advances in Neural Information Processing Systems* 37
     (2024). [doi:10.52202/079017-1145](https://doi.org/10.52202/079017-1145)
+20. Acharya et al. A deep convolutional neural network model to classify heartbeats. *Computers
+    in Biology and Medicine* 89, 389–396 (2017).
+    [doi:10.1016/j.compbiomed.2017.08.022](https://doi.org/10.1016/j.compbiomed.2017.08.022)
+21. Attia et al. An artificial intelligence-enabled ECG algorithm for the identification of
+    patients with atrial fibrillation during sinus rhythm: a retrospective analysis of outcome
+    prediction. *The Lancet* 394, 861–867 (2019).
+    [doi:10.1016/S0140-6736(19)31721-0](https://doi.org/10.1016/S0140-6736(19)31721-0)
+22. Ribeiro et al. Automatic diagnosis of the 12-lead ECG using a deep neural network. *Nature
+    Communications* 11, 1760 (2020). [doi:10.1038/s41467-020-15432-4](https://doi.org/10.1038/s41467-020-15432-4)
+23. Mehari and Strodthoff. Advancing the state-of-the-art for ECG analysis through structured
+    state space models. *ML4H* (2022). [doi:10.48550/arXiv.2211.07579](https://doi.org/10.48550/arXiv.2211.07579)
+24. Gu, Goel and Ré. Efficiently modeling long sequences with structured state spaces. *ICLR*
+    (2022). [doi:10.48550/arXiv.2111.00396](https://doi.org/10.48550/arXiv.2111.00396)

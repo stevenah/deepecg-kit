@@ -33,7 +33,7 @@ jobs:
         uv run ruff format --check .
 
     - name: Run tests
-      run: uv run pytest
+      run: uv run pytest -n auto
 
     - name: Build the package
       run: uv build

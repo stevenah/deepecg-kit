@@ -86,3 +86,22 @@ def test_medformer_loads_checkpoints_holding_the_unused_cross_channel_module():
     x = torch.randn(2, 1, 1000)
     with torch.no_grad():
         assert torch.equal(model(x), restored(x))
+
+
+def test_resnet_wang_checkpoints_from_before_1_0_load_unchanged(tmp_path):
+    """Stages 2 and 3 gained the benchmark's stride in 1.0; older weights load into stride 1."""
+    old = get_model("resnet-wang")(input_channels=12, output_size=5, stage_stride=1).eval()
+    path = tmp_path / "model.pt"
+    torch.save(
+        {
+            "model_state_dict": old.state_dict(),
+            "model_config": {"name": "resnet-wang", "input_channels": 12, "output_size": 5},
+        },
+        path,
+    )
+    with pytest.warns(UserWarning, match="predates 1.0"):
+        model, _ = build_model_from_checkpoint(path)
+    model.eval()
+    x = torch.randn(2, 12, 1000)
+    assert model.stage_stride == 1
+    assert torch.allclose(model(x), old(x))

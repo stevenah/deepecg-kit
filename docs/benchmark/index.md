@@ -19,8 +19,8 @@ deposited results.
 
 ## The grids
 
-The article benchmark trains 24 architectures on two tasks, PTB-XL and PhysioNet 2017, each
-pairing once with seed 42: 48 runs. It is defined in `experiments.yaml` at the root of the
+The article benchmark trains 27 architectures on two tasks, PTB-XL and PhysioNet 2017, each
+pairing once with seed 42: 54 runs. It is defined in `experiments.yaml` at the root of the
 repository, and the stages that turn it into results are described in the
 [analysis protocol](protocol.md). Because each pairing is trained once, the benchmark reports test-set
 intervals from a bootstrap over test recordings, not the variation between training runs; the
@@ -28,15 +28,20 @@ package's repeated-run analysis (`deepecg aggregate` over several seeds, `deepec
 part of it.
 
 The three long-term AF tasks, MIT-BIH AFDB, LTAFDB and the pooled Unified AF, are trained for the
-benchmark website from a second file, `experiments-longterm.yaml`, with the same 24
-architectures and seed: 72 runs. They are not part of the article benchmark.
+benchmark website from a second file, `experiments-longterm.yaml`, with the first 24
+architectures and the same seed: 72 runs. They are not part of the article benchmark.
 
-The 24 architectures are a starting point, not a closed selection: architectures are added to the
+A third file, `experiments-ptbxl-benchmark.yaml`, trains the four architectures of the article
+grid that correspond to models of the PTB-XL benchmark (FCN, ResNet-Wang, XResNet1D-101 and
+InceptionTime) under that benchmark's own protocol (`--recipe ptbxl-benchmark`), to compare
+their scores with the published ones; see the [analysis protocol](protocol.md#reproduction-of-the-ptb-xl-benchmark).
+
+The 27 architectures are a starting point, not a closed selection: architectures are added to the
 package continuously, and the grids are extended as they are.
 
-Two registered architectures are outside the grid. `afmodel` is built for 30-second recordings and
+Three registered architectures are outside the grid. `afmodel` is built for 30-second recordings and
 needs at least 7971 samples per lead, more than the 5000 samples of a 10-second input at 500 Hz.
-`mamba` is not part of the journal benchmark.
+`mamba` and `lstm` are not part of the journal benchmark.
 
 ## Tasks
 

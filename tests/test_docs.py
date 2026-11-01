@@ -35,6 +35,7 @@ DOCS = Path(__file__).resolve().parent.parent / "docs"
 PYTHON_BLOCK = re.compile(r"```python\n(.*?)```", re.S)
 
 PAGES = [
+    "../README.md",  # the first page most readers see, on GitHub and PyPI
     "index.md",
     "getting-started/quickstart.md",
     "examples/train-basic.md",
@@ -52,6 +53,7 @@ PAGES = [
 #: Blocks that are not run, identified by a phrase they contain.
 LEFT_OUT = {
     "PTBXLDataset.download_to()": "would download PTB-XL",
+    'recipe = get_recipe("ptbxl-benchmark")': "trains on PTB-XL; tests/test_recipes.py runs the recipe",
     "ModelClass(": "a placeholder for any model class",
     "def forward(self, x):\n    x = self.extract_features(x)": "a method shown out of its class",
     "plot_roc_curve(y_true, y_prob,": "a two-class plot; the running example has four classes",

@@ -28,6 +28,16 @@ except ImportError:
 DEFAULT_LEARNING_RATE = 1e-3
 DEFAULT_SCHEDULER = {"factor": 0.5, "patience": 5}
 
+#: The train_config keys that state the task. A config that gives none of
+#: them leaves the trainer to read the task from the data it is first given.
+TASK_KEYS = ("multi_label", "binary_classification", "task_type")
+
+#: Optimizers and learning-rate schedules a train_config can name.
+OPTIMIZERS = ("adam", "adamw")
+SCHEDULERS = ("plateau", "one-cycle")
+#: Which weights fit() keeps: the lowest validation loss, or the final epoch's.
+KEEP_CHOICES = ("best", "last")
+
 
 def _package_version() -> str | None:
     try:
@@ -46,14 +56,28 @@ class ECGTrainer:
     Args:
         model: The ECG model to train (any nn.Module)
         train_config: Optional dictionary of training settings; every key has
-            a default, so ``ECGTrainer(model)`` trains a multi-class classifier:
-            - learning_rate: Learning rate for optimizer (default 1e-3)
-            - scheduler: Dict with 'factor' and 'patience' for
-              ReduceLROnPlateau (default factor 0.5, patience 5)
+            a default, so ``ECGTrainer(model)`` is enough:
+            - learning_rate: Learning rate for optimizer (default 1e-3); the
+              peak rate under a one-cycle schedule
+            - optimizer: Dict with 'name' ('adam', the default, or 'adamw'),
+              and optionally 'betas' and 'weight_decay' (decoupled for adamw)
+            - scheduler: Dict with 'name' ('plateau', the default, or
+              'one-cycle'). 'plateau' takes 'factor' and 'patience' for
+              ReduceLROnPlateau (default factor 0.5, patience 5) and steps once
+              per epoch; 'one-cycle' takes 'pct_start', 'div_factor',
+              'final_div_factor', 'base_momentum' and 'max_momentum' for
+              OneCycleLR and steps once per batch
+            - inference_window: Optional dict with 'length' and 'stride' in
+              samples and 'aggregate' ('max' or 'mean'): evaluation scores
+              overlapping windows and combines their outputs (see _infer)
             - binary_classification: Bool, if True uses BCE loss for binary tasks
             - multi_label: Bool, if True uses BCE loss for multi-label tasks
             - task_type: 'classification' (default) or 'regression'
             - pos_weight: Optional list of positive class weights for BCE loss
+            When none of multi_label, binary_classification and task_type is
+            given, the task is read from the data the trainer is first given:
+            multi-hot labels get BCE loss, as does a binary dataset feeding a
+            single-logit head.
         device: Device to train on ('auto', 'cpu', 'cuda', 'mps')
         use_plateau_scheduler: If True, uses ReduceLROnPlateau, else StepLR
 
@@ -80,25 +104,15 @@ class ECGTrainer:
         self.scheduler_factor = train_config["scheduler"]["factor"]
         self.scheduler_patience = train_config["scheduler"]["patience"]
         self.use_plateau_scheduler = use_plateau_scheduler
-        self.multi_label = train_config.get("multi_label", False)
-
-        if self.multi_label or train_config.get("binary_classification", False):
-            pos_weight = train_config.get("pos_weight")
-            if pos_weight is not None:
-                pos_weight = torch.tensor(pos_weight, dtype=torch.float32)
-            self.criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-        elif train_config.get("task_type", "classification") == "classification":
-            self.criterion = torch.nn.CrossEntropyLoss()
-        else:
-            self.criterion = torch.nn.MSELoss()
+        self._task_stated = any(key in train_config for key in TASK_KEYS)
 
         self.device = resolve_device(device)
-
         self.model.to(self.device)
-        self.criterion.to(self.device)
+        self._set_criterion()
 
         self.optimizer: torch.optim.Optimizer | None = None
         self.scheduler: Any = None
+        self._scheduler_per_batch = False
         self.test_predictions: list[torch.Tensor] = []
         self.test_targets: list[torch.Tensor] = []
         self.test_probabilities: list[torch.Tensor] = []
@@ -122,6 +136,52 @@ class ECGTrainer:
     def _is_classification(self) -> bool:
         return isinstance(self.criterion, torch.nn.CrossEntropyLoss | torch.nn.BCEWithLogitsLoss)
 
+    def _set_criterion(self) -> None:
+        """Choose the loss the train_config's task calls for."""
+        config = self.train_config
+        self.multi_label = bool(config.get("multi_label", False))
+        criterion: nn.Module
+        if self.multi_label or config.get("binary_classification", False):
+            pos_weight = config.get("pos_weight")
+            if pos_weight is not None:
+                pos_weight = torch.tensor(pos_weight, dtype=torch.float32)
+            criterion = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        elif config.get("task_type", "classification") == "classification":
+            criterion = torch.nn.CrossEntropyLoss()
+        else:
+            criterion = torch.nn.MSELoss()
+        self.criterion = criterion.to(self.device)
+
+    def _output_size(self) -> int | None:
+        """The width of the model's classifier head, read from its weights."""
+        from deepecgkit.models.factory import infer_output_size
+
+        return infer_output_size(self.model.state_dict(), getattr(self.model, "HEAD_ATTR", None))
+
+    def _adopt_task(self, data_module: Any) -> None:
+        """Take the task from the data when the train_config does not state it.
+
+        Multi-hot labels such as PTB-XL's need a sigmoid per class, which
+        cross-entropy cannot train, and a binary dataset feeding a single-logit
+        head needs one sigmoid, where cross-entropy over one output cannot
+        take the label 1. The task found is written into train_config, so
+        checkpoints record how their outputs are to be read.
+
+        Args:
+            data_module: The data module about to be trained or evaluated on
+        """
+        if self._task_stated:
+            return
+        self._task_stated = True
+        dataset = getattr(data_module, "dataset", None)
+        multi_label = bool(getattr(dataset, "multi_label", False))
+        binary = bool(getattr(dataset, "binary_classification", False)) and (
+            self._output_size() == 1
+        )
+        self.train_config.update(multi_label=multi_label, binary_classification=binary)
+        if multi_label or binary:
+            self._set_criterion()
+
     def _calculate_loss(self, y_hat: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         if self.multi_label:
             return self.criterion(y_hat, y.float())
@@ -141,9 +201,57 @@ class ECGTrainer:
                 return (preds == y.long()).float().mean().item()
             return (torch.argmax(y_hat, dim=1) == y.long()).float().mean().item()
 
-    def _setup_optimizer(self) -> None:
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
-        if self.use_plateau_scheduler:
+    def _setup_optimizer(self, total_steps: int | None = None) -> None:
+        """Build the optimizer and learning-rate schedule the train_config names.
+
+        Args:
+            total_steps: Optimizer steps in the whole run, which a one-cycle
+                schedule is laid out over
+
+        Raises:
+            ValueError: If the optimizer or schedule is unknown, or a one-cycle
+                schedule is not told how many steps it spans.
+        """
+        settings = dict(self.train_config.get("optimizer") or {})
+        name = settings.get("name", "adam")
+        if name not in OPTIMIZERS:
+            raise ValueError(f"Unknown optimizer '{name}'. Choose one of {', '.join(OPTIMIZERS)}.")
+        if name == "adamw":
+            self.optimizer = torch.optim.AdamW(
+                self.model.parameters(),
+                lr=self.learning_rate,
+                betas=tuple(settings.get("betas", (0.9, 0.999))),
+                weight_decay=settings.get("weight_decay", 1e-2),
+            )
+        else:
+            self.optimizer = torch.optim.Adam(
+                self.model.parameters(),
+                lr=self.learning_rate,
+                betas=tuple(settings.get("betas", (0.9, 0.999))),
+                weight_decay=settings.get("weight_decay", 0.0),
+            )
+
+        schedule = self.train_config["scheduler"]
+        schedule_name = schedule.get("name", "plateau")
+        if schedule_name not in SCHEDULERS:
+            raise ValueError(
+                f"Unknown scheduler '{schedule_name}'. Choose one of {', '.join(SCHEDULERS)}."
+            )
+        self._scheduler_per_batch = schedule_name == "one-cycle"
+        if self._scheduler_per_batch:
+            if not total_steps:
+                raise ValueError("A one-cycle schedule needs the number of training steps.")
+            self.scheduler = torch.optim.lr_scheduler.OneCycleLR(
+                self.optimizer,
+                max_lr=self.learning_rate,
+                total_steps=total_steps,
+                pct_start=schedule.get("pct_start", 0.3),
+                div_factor=schedule.get("div_factor", 25.0),
+                final_div_factor=schedule.get("final_div_factor", 1e4),
+                base_momentum=schedule.get("base_momentum", 0.85),
+                max_momentum=schedule.get("max_momentum", 0.95),
+            )
+        elif self.use_plateau_scheduler:
             self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
                 self.optimizer,
                 mode="min",
@@ -171,7 +279,7 @@ class ECGTrainer:
                 x, y = batch
                 x, y = x.to(self.device), y.to(self.device)
 
-                y_hat = self.model(x)
+                y_hat = self.model(x) if train else self._infer(x)
                 loss = self._calculate_loss(y_hat, y)
 
                 if train:
@@ -184,6 +292,8 @@ class ECGTrainer:
                             self.model.parameters(), self._gradient_clip_val
                         )
                     self.optimizer.step()
+                    if self._scheduler_per_batch:
+                        self.scheduler.step()
 
                 batch_size = len(y)
                 total_loss += loss.item() * batch_size
@@ -197,6 +307,34 @@ class ECGTrainer:
         avg_acc = total_acc / max(n_samples, 1) if self._is_classification else None
         return avg_loss, avg_acc
 
+    def _infer(self, x: torch.Tensor) -> torch.Tensor:
+        """Run the model for evaluation, on overlapping windows when configured.
+
+        With an inference_window in the train_config, an input longer than the
+        window is cut into windows of that length at that stride (a remainder
+        shorter than a window is dropped), the model scores every window, and
+        the window outputs are combined by their maximum or mean. For sigmoid
+        outputs the maximum of the logits is the maximum of the probabilities,
+        which is how the PTB-XL benchmark scores a recording.
+
+        Args:
+            x: Batch shaped (batch, leads, samples)
+
+        Returns:
+            One output row per recording.
+        """
+        window = self.train_config.get("inference_window")
+        if not window or x.shape[-1] <= window["length"]:
+            return self.model(x)
+        length, stride = int(window["length"]), int(window["stride"])
+        windows = x.unfold(-1, length, stride)
+        batch, leads, count = x.shape[0], x.shape[1], windows.shape[2]
+        flat = windows.permute(0, 2, 1, 3).reshape(batch * count, leads, length)
+        outputs = self.model(flat).reshape(batch, count, -1)
+        if window.get("aggregate", "max") == "mean":
+            return outputs.mean(dim=1)
+        return outputs.amax(dim=1)
+
     def fit(
         self,
         data_module: Any,
@@ -208,6 +346,7 @@ class ECGTrainer:
         gradient_clip_val: float | None = None,
         save_top_k: int = 3,
         restore_best: bool = True,
+        keep: str = "best",
     ) -> None:
         """Train the model.
 
@@ -215,6 +354,10 @@ class ECGTrainer:
         so any subsequent test() or validate() call evaluates the selected model
         rather than the final epoch. Requires checkpoint_dir to be set; without it
         no checkpoint exists to restore and the final-epoch weights are kept.
+
+        With keep="last" every epoch is trained, validation loss is only logged,
+        and the final epoch's weights are kept and saved as the run's one
+        checkpoint (``epoch=NN-last.pt``).
 
         Args:
             data_module: ECGDataModule (or any object with train_dataloader/val_dataloader)
@@ -228,15 +371,23 @@ class ECGTrainer:
             gradient_clip_val: Max gradient norm for clipping (None to disable)
             save_top_k: Number of best checkpoints to keep
             restore_best: Reload the best-validation-loss checkpoint when training ends
+            keep: "best" (lowest validation loss, early stopping) or "last"
+                (final epoch, no early stopping)
+
+        Raises:
+            ValueError: If keep is not one of KEEP_CHOICES.
         """
+        if keep not in KEEP_CHOICES:
+            raise ValueError(f"keep must be one of {', '.join(KEEP_CHOICES)}, got '{keep}'.")
         self._gradient_clip_val = gradient_clip_val
-        self._setup_optimizer()
 
         if hasattr(data_module, "setup"):
             data_module.setup(stage="fit")
+        self._adopt_task(data_module)
 
         train_loader = data_module.train_dataloader()
         val_loader = data_module.val_dataloader()
+        self._setup_optimizer(total_steps=epochs * len(train_loader))
         self._describe_run(data_module)
 
         if checkpoint_dir is not None:
@@ -274,9 +425,10 @@ class ECGTrainer:
                 train_loss, train_acc = self._run_epoch(batches, train=True)
                 val_loss, val_acc = self._run_epoch(val_loader, train=False)
 
-                if self.use_plateau_scheduler:
+                # A one-cycle schedule has already stepped once per batch.
+                if self.use_plateau_scheduler and not self._scheduler_per_batch:
                     self.scheduler.step(val_loss)
-                else:
+                elif not self._scheduler_per_batch:
                     self.scheduler.step()
 
                 if use_tqdm:
@@ -297,7 +449,10 @@ class ECGTrainer:
                     csv_writer.writerow(row)
                     csv_file.flush()
 
-                if val_loss < self.best_val_loss:
+                if keep == "last":
+                    # The validation loss of the weights that will be kept.
+                    self.best_val_loss = val_loss
+                elif val_loss < self.best_val_loss:
                     self.best_val_loss = val_loss
                     patience_counter = 0
 
@@ -323,7 +478,12 @@ class ECGTrainer:
             if csv_file is not None:
                 csv_file.close()
 
-        if restore_best:
+        if keep == "last":
+            if checkpoint_dir is not None:
+                ckpt_path = checkpoint_dir / f"epoch={epochs:02d}-last.pt"
+                self.save_checkpoint(str(ckpt_path), epoch=epochs)
+                self.best_checkpoint_path = str(ckpt_path)
+        elif restore_best:
             self.restore_best_checkpoint()
 
     def _describe_run(self, data_module: Any) -> None:
@@ -354,11 +514,7 @@ class ECGTrainer:
         if self.model_config.get("input_channels") is None and described.get("input_channels"):
             self.model_config["input_channels"] = described["input_channels"]
         if self.model_config.get("output_size") is None:
-            from deepecgkit.models.factory import infer_output_size
-
-            output_size = infer_output_size(
-                self.model.state_dict(), getattr(self.model, "HEAD_ATTR", None)
-            )
+            output_size = self._output_size()
             if output_size is not None:
                 self.model_config["output_size"] = output_size
 
@@ -394,6 +550,7 @@ class ECGTrainer:
         """
         if hasattr(data_module, "setup"):
             data_module.setup(stage="test")
+        self._adopt_task(data_module)
 
         test_loader = data_module.test_dataloader()
         return self._evaluate_loader(test_loader)
@@ -409,6 +566,7 @@ class ECGTrainer:
         """
         if hasattr(data_module, "setup"):
             data_module.setup(stage="validate")
+        self._adopt_task(data_module)
 
         val_loader = data_module.val_dataloader()
         return self._evaluate_loader(val_loader, prefix="val")
@@ -428,7 +586,7 @@ class ECGTrainer:
             for batch in dataloader:
                 x, y = batch
                 x, y = x.to(self.device), y.to(self.device)
-                y_hat = self.model(x)
+                y_hat = self._infer(x)
                 loss = self._calculate_loss(y_hat, y)
                 batch_size = len(y)
                 total_loss += loss.item() * batch_size
@@ -529,7 +687,7 @@ class ECGTrainer:
         """Load a trainer from a checkpoint.
 
         Args:
-            path: Path to checkpoint file
+            path: Checkpoint file, or a run directory standing for its best checkpoint
             model: Model instance to load weights into. When omitted, the
                 architecture recorded in the checkpoint is rebuilt.
             device: Device to load onto

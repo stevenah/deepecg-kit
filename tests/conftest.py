@@ -2,6 +2,7 @@
 Pytest configuration and fixtures for deepecgkit tests.
 """
 
+import os
 import tempfile
 from collections.abc import Generator
 from pathlib import Path
@@ -358,6 +359,11 @@ def probe_features_multilabel() -> tuple[
 # up, which is many times slower there. The tests gain nothing from it.
 if hasattr(torch.backends, "nnpack"):
     torch.backends.nnpack.set_flags(False)
+
+# Under pytest-xdist (make test) every worker is a process of its own, and each
+# taking a thread per core would oversubscribe the machine many times over.
+if os.environ.get("PYTEST_XDIST_WORKER"):
+    torch.set_num_threads(1)
 
 
 @pytest.fixture(autouse=True)

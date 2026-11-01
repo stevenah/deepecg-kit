@@ -25,16 +25,69 @@ trainer = ECGTrainer(model, train_config={"learning_rate": 3e-4, "scheduler": {"
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `learning_rate` | float | 1e-3 | Learning rate for Adam optimizer |
-| `scheduler` | dict | `{"factor": 0.5, "patience": 5}` | Settings for ReduceLROnPlateau |
-| `binary_classification` | bool | False | Use BCE loss for binary tasks (single-logit head) |
-| `multi_label` | bool | False | Use BCE loss for multi-label tasks |
+| `learning_rate` | float | 1e-3 | Learning rate; the peak rate under a one-cycle schedule |
+| `optimizer` | dict | `{"name": "adam"}` | `"adam"` or `"adamw"`, with optional `betas` and `weight_decay` (decoupled for AdamW) |
+| `scheduler` | dict | `{"factor": 0.5, "patience": 5}` | ReduceLROnPlateau settings, stepped once per epoch; `{"name": "one-cycle", ...}` uses OneCycleLR (`pct_start`, `div_factor`, `final_div_factor`, `base_momentum`, `max_momentum`), stepped once per batch |
+| `inference_window` | dict | None | `{"length": ..., "stride": ..., "aggregate": "max"}` in samples: evaluation scores overlapping windows and combines their outputs by their maximum or mean |
+| `binary_classification` | bool | from the data | Use BCE loss for binary tasks (single-logit head) |
+| `multi_label` | bool | from the data | Use BCE loss for multi-label tasks |
 | `task_type` | str | `"classification"` | `"classification"` (CrossEntropyLoss) or `"regression"` (MSELoss) |
 | `pos_weight` | list | None | Optional positive class weights for BCE loss |
 
+## Recipes
+
+A recipe fixes a whole training and evaluation protocol under one name, for reproducing a published
+protocol without restating its settings. The package has one, `ptbxl-benchmark`, the protocol of
+the PTB-XL benchmark (Strodthoff et al., 2021); without a recipe, every architecture and dataset is
+trained with the package's own settings. On the command line a recipe is one flag
+(`deepecg train --recipe ptbxl-benchmark`, see [CLI Usage](cli.md#deepecg-train)); in Python its
+parts are passed to the data module, the trainer and `fit()`:
+
+```python
+from deepecgkit.datasets import ECGDataModule
+from deepecgkit.models import build_model
+from deepecgkit.training import ECGTrainer
+from deepecgkit.training.recipes import get_recipe, kaiming_normal_init
+
+recipe = get_recipe("ptbxl-benchmark")
+data = ECGDataModule(
+    "ptbxl",
+    sampling_rate=recipe.sampling_rate,
+    batch_size=recipe.batch_size,
+    normalization_stats="fit",  # the recipe's "global" normalization
+    train_crop_length=round(recipe.crop_seconds * recipe.sampling_rate),
+    dataset_kwargs={"normalization": "none", "use_high_resolution": False},
+)
+model = build_model("fcn-wang", data.input_channels, data.num_classes)
+kaiming_normal_init(model)
+trainer = ECGTrainer(model, {
+    "multi_label": True,
+    "learning_rate": recipe.learning_rate,
+    "optimizer": recipe.optimizer_config(),
+    "scheduler": dict(recipe.scheduler),
+    "inference_window": recipe.inference_window(recipe.sampling_rate),
+})
+trainer.fit(data, epochs=recipe.epochs, keep=recipe.keep, checkpoint_dir="checkpoints/")
+```
+
+`keep="last"` trains every epoch, logs the validation loss without acting on it, and keeps and
+saves the final epoch's weights; the default, `keep="best"`, restores the lowest validation loss
+and stops early. An `inference_window` changes only evaluation: `validate()`, `test()` and the
+validation loss in `fit()` score each recording on overlapping windows, while training sees the
+crops the data module draws.
+
 ## Loss Function Selection
 
-The loss function is determined automatically from the config:
+The loss follows the task. When `train_config` sets none of `multi_label`,
+`binary_classification` and `task_type`, the task is read from the data the trainer is first
+given, which is what makes `ECGTrainer(model)` right for every built-in dataset:
+
+- multi-hot labels (PTB-XL, multi-label by default) → `BCEWithLogitsLoss`, one sigmoid per class
+- a binary dataset feeding a single-logit head → `BCEWithLogitsLoss`
+- otherwise → `CrossEntropyLoss`
+
+The task found is written into `train_config`, so checkpoints record how their outputs are read.
+Stated explicitly, the keys win:
 
 - `multi_label=True` or `binary_classification=True` → `BCEWithLogitsLoss`
 - `task_type="classification"` → `CrossEntropyLoss`
@@ -54,7 +107,7 @@ The `device` parameter accepts `"auto"`, `"cpu"`, `"cuda"`, or `"mps"`. With `"a
 trainer.fit(
     data_module,
     epochs=50,
-    checkpoint_dir="checkpoints/",
+    checkpoint_dir="runs/my-run",
     save_top_k=3,
 )
 ```
@@ -109,7 +162,9 @@ The architecture is rebuilt from the checkpoint's `model_config`. Pass `model=` 
 weights into an instance you built yourself, which is also what a checkpoint without a recorded
 architecture needs. To get just the model, use
 `deepecgkit.models.build_model_from_checkpoint(path)`, which returns the model and the
-checkpoint dictionary.
+checkpoint dictionary; to predict on new recordings, `deepecgkit.predict(recording, path)`.
+Wherever a checkpoint path is taken, the run directory it was written to can be passed instead
+and stands for its checkpoint with the lowest validation loss.
 
 ## Progress
 

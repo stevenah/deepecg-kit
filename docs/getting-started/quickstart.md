@@ -7,31 +7,18 @@ This guide walks through training an ECG classifier from scratch using the Pytho
 ### 1. Set up the dataset
 
 ```python
-from deepecgkit.datasets import ECGDataModule
-from deepecgkit.registry import get_dataset, get_dataset_info
-from deepecgkit.training import ECGTrainer
+from deepecgkit import ECGDataModule, ECGTrainer, build_model, predict
 
 ECGTrainer.seed_everything(42)
 
-dataset_info = get_dataset_info("af-classification")
-dataset_class = get_dataset("af-classification")
-
-data_module = ECGDataModule(
-    dataset_class=dataset_class,
-    batch_size=32,
-    val_split=0.2,
-    test_split=0.1,
-    seed=42,
-    stratify=True,
-    download=True,
-)
-data_module.setup(stage="fit")
+data_module = ECGDataModule("af-classification", batch_size=32, download=True)
 ```
 
 The dataset (about 100 MB) is downloaded on first use into `~/.deepecgkit/datasets`; an
-interrupted download resumes on the next run. `ECGDataModule` handles train/val/test splitting
-and DataLoader construction, and leaves the signals at the dataset's own sampling rate
-(300 Hz here) unless you pass `sampling_rate`.
+interrupted download resumes on the next run. `ECGDataModule` takes any name from
+`deepecg list-datasets`, splits the data 70/20/10 into train, validation and test (by recording,
+and stratified by class), and builds the DataLoaders. It leaves the signals at the dataset's own
+sampling rate (300 Hz here) unless you pass `sampling_rate`.
 
 !!! note "Loader workers"
     The built-in datasets hold their signals in memory, so the default `num_workers=0` is the
@@ -41,16 +28,12 @@ and DataLoader construction, and leaves the signals at the dataset's own samplin
 ### 2. Create a model
 
 ```python
-from deepecgkit.registry import get_model
-
-model_class = get_model("kanres")
-model = model_class(
-    input_channels=dataset_info["input_channels"],
-    output_size=dataset_info["num_classes"],
-)
+model = build_model("kanres", data_module.input_channels, data_module.num_classes)
 ```
 
-All models follow the same interface: `ModelClass(input_channels, output_size, **kwargs)`. Use `get_model_names()` to list all available architectures.
+Every architecture takes the same two shape arguments, the lead count and the number of classes,
+which the data module reports (reading them loads the dataset). Any name from
+`deepecg list-models` can replace `"kanres"`.
 
 ### 3. Train
 
@@ -60,12 +43,14 @@ trainer.fit(
     data_module,
     epochs=50,
     early_stopping_patience=10,
-    checkpoint_dir="runs/kanres-af/checkpoints",
+    checkpoint_dir="runs/kanres-af",
 )
 print(trainer.best_checkpoint_path)
 ```
 
 `train_config` is optional; every key has a default (see [Training](../user-guide/training.md)).
+The task is read from the data: a multi-label dataset such as PTB-XL is trained with a sigmoid
+per class without any setting.
 Training includes early stopping, automatic checkpointing (keeps top 3 by validation loss), and
 tqdm progress bars.
 
@@ -79,33 +64,31 @@ print(f"Test accuracy: {results['test_acc']:.4f}")
 
 ### 5. Predict on a new recording
 
-The checkpoint records the preprocessing its inputs went through, so a raw recording can be
-prepared the same way:
+The checkpoint records the preprocessing its inputs went through, so a raw recording is
+prepared the same way before it reaches the model:
+
+```python
+result = predict("ecg.npy", checkpoint="runs/kanres-af", sampling_rate=250)
+
+print(result.label)          # the predicted class
+print(result.confidence)     # its probability
+print(result.probabilities)  # every class, averaged over the recording's segments
+```
+
+The recording here is one lead of any length, sampled at 250 Hz; it is resampled to the 300 Hz
+the model was trained at and cut into 10 s segments. A run directory stands for its best
+checkpoint, and single-label, binary and multi-label models are all read correctly. To predict
+many recordings, load the checkpoint once:
 
 ```python
 import numpy as np
-import torch
 
-from deepecgkit.datasets import prepare_recording
-from deepecgkit.models import build_model_from_checkpoint
+from deepecgkit import ECGPredictor
 
-model, checkpoint = build_model_from_checkpoint(trainer.best_checkpoint_path)
-data_config = checkpoint["data_config"]
-
-recording = np.load("ecg.npy")  # one lead, any length, sampled at 250 Hz
-prepared = prepare_recording(
-    recording, data_config["preprocessing"], source_sampling_rate=250
-)
-
-model.eval()
-with torch.no_grad():
-    probabilities = torch.softmax(model(torch.from_numpy(prepared.segments)), dim=1).mean(dim=0)
-print(data_config["class_names"][int(probabilities.argmax())])
+predictor = ECGPredictor.from_checkpoint("runs/kanres-af")
+from_file = predictor.predict("ecg.npy", sampling_rate=250)
+from_array = predictor.predict(np.load("ecg.npy"), sampling_rate=250)  # arrays work as well
 ```
-
-The softmax suits this four-class model. A binary model has a single output that needs a sigmoid,
-and a multi-label one a sigmoid per class; `deepecg predict` and `examples/inference.py` handle all
-three.
 
 ## CLI Workflow
 

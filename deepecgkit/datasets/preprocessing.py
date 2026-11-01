@@ -23,9 +23,16 @@ class ECGStandardizer:
             with target_duration_seconds, None leaves lengths unchanged
         target_duration_seconds: Fixed output duration; converted to samples
             at the target rate
-        normalization: "zscore", "minmax", or "none"
+        normalization: "zscore" or "minmax" (each lead of each signal on its
+            own), "global" (one mean and standard deviation for all signals,
+            given as normalization_stats), or "none"
         clip_method: Where clipping/padding takes place: "center", "start",
             or "end"
+        normalization_stats: (mean, standard deviation) for "global"
+            normalisation, as ECGDataModule fits them on a training partition
+
+    Raises:
+        ValueError: If "global" normalisation is asked for without its statistics.
     """
 
     def __init__(
@@ -35,9 +42,17 @@ class ECGStandardizer:
         target_duration_seconds: float | None = None,
         normalization: str = "zscore",
         clip_method: str = "center",
+        normalization_stats: tuple[float, float] | None = None,
     ):
+        if normalization == "global" and normalization_stats is None:
+            raise ValueError(
+                "'global' normalisation needs the mean and standard deviation of the "
+                "training data. ECGDataModule(normalization_stats='fit') fits them; build "
+                "the dataset with normalization='none'."
+            )
         self.target_sampling_rate = target_sampling_rate
         self.normalization = normalization
+        self.normalization_stats = normalization_stats
         self.clip_method = clip_method
 
         if target_length is not None and target_duration_seconds is not None:
@@ -78,6 +93,10 @@ class ECGStandardizer:
             return np.where(
                 range_val > 1e-8, (ecg_signal - min_val) / range_val, ecg_signal - min_val
             )
+
+        elif self.normalization == "global":
+            mean, std = self.normalization_stats
+            return (ecg_signal - mean) / std
 
         elif self.normalization == "none":
             return ecg_signal

@@ -8,6 +8,10 @@ Top-level exports from the DeepECG-Kit package.
       members:
         - ECGDataModule
         - ECGTrainer
+        - ECGPredictor
+        - Prediction
+        - build_model
+        - predict
         - FeatureExtractor
         - FeatureSet
         - KanResWideX

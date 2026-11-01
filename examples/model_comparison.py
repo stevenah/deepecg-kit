@@ -14,7 +14,8 @@ import time
 
 import torch
 
-from deepecgkit.registry import get_model, get_model_info, get_model_names
+from deepecgkit import build_model
+from deepecgkit.registry import get_model_info, get_model_names
 
 
 def benchmark_model(
@@ -27,9 +28,7 @@ def benchmark_model(
     warmup_runs: int = 5,
 ) -> dict:
     """Benchmark a single model on synthetic input."""
-    model_class = get_model(model_name)
-    model = model_class(input_channels=input_channels, output_size=output_size)
-    model = model.to(device)
+    model = build_model(model_name, input_channels, output_size).to(device)
     model.eval()
 
     x = torch.randn(1, input_channels, signal_length, device=device)

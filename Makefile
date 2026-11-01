@@ -15,11 +15,11 @@ install: ## Install package + dev tools (uv)
 install-pip: ## Editable install for non-uv users
 	pip install -e ".[dev]"
 
-test: ## Run test suite
-	uv run pytest
+test: ## Run test suite (in parallel; plain `uv run pytest <path>` for one file)
+	uv run pytest -n auto
 
 test-cov: ## Run tests with coverage report
-	uv run pytest --cov --cov-report=term-missing
+	uv run pytest -n auto --cov --cov-report=term-missing
 
 lint: ## Ruff lint + format check (read-only)
 	uv run ruff check .

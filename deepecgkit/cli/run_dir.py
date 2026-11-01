@@ -20,18 +20,15 @@ Filenames are shared with deepecgkit.analysis.aggregation, the consumer.
 """
 
 import json
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from deepecgkit.analysis.aggregation import METADATA_FILENAME, SPLIT_INFO_FILENAME
 from deepecgkit.cli.logger import CLILogger
+from deepecgkit.utils.checkpoints import resolve_checkpoint
 
 RUN_METADATA_SCHEMA_VERSION = 3
-
-CHECKPOINT_DIRNAME = "checkpoints"
-_VAL_LOSS_PATTERN = re.compile(r"val_loss=([0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)")
 
 __all__ = [
     "RunContext",
@@ -41,42 +38,6 @@ __all__ = [
     "verify_split",
     "write_run_metadata",
 ]
-
-
-def resolve_checkpoint(path: str | Path) -> Path:
-    """Turn a checkpoint argument into a checkpoint file.
-
-    A file is returned as it is. A directory stands for the best checkpoint
-    inside it: a run directory is searched in its ``checkpoints/`` folder,
-    and the checkpoint with the lowest validation loss in its file name wins
-    (ties and unnamed files fall back to the most recently written).
-
-    Args:
-        path: A checkpoint file, a run directory, or a checkpoints directory
-
-    Returns:
-        Path of the checkpoint file to load.
-
-    Raises:
-        FileNotFoundError: If the path is a directory holding no checkpoints.
-    """
-    target = Path(path)
-    if not target.is_dir():
-        return target
-
-    folder = target / CHECKPOINT_DIRNAME if (target / CHECKPOINT_DIRNAME).is_dir() else target
-    candidates = sorted(
-        candidate for pattern in ("*.pt", "*.ckpt") for candidate in folder.glob(pattern)
-    )
-    if not candidates:
-        raise FileNotFoundError(f"No checkpoint files (*.pt, *.ckpt) found in {folder}")
-
-    def rank(candidate: Path) -> tuple[float, float]:
-        match = _VAL_LOSS_PATTERN.search(candidate.name)
-        loss = float(match.group(1)) if match else float("inf")
-        return loss, -candidate.stat().st_mtime
-
-    return min(candidates, key=rank)
 
 
 def write_run_metadata(output_dir: str | Path, payload: dict[str, Any]) -> None:

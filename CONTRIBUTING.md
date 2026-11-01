@@ -21,7 +21,7 @@ Python 3.10+ is required.
 All common tasks go through the Makefile (run bare `make` for the full list):
 
 ```bash
-make test        # run the test suite
+make test        # run the test suite, in parallel across the CPU cores
 make test-cov    # tests with coverage report
 make check       # read-only gate: ruff lint + format check + tests (mirrors CI)
 make fix         # auto-fix lint issues and format code
@@ -49,6 +49,9 @@ wheels fail to load on macOS 27; published metadata is unaffected.
 
 - The suite is offline and uses synthetic fixtures — no dataset downloads.
   Download behaviour is tested against a local HTTP server.
+- `make test` spreads the suite over every core with pytest-xdist, about a
+  minute on a laptop. For a single file or test, `uv run pytest <path>` runs
+  serially and starts faster.
 - `tests/test_state_dict_compat.py` snapshots every registered model's
   state_dict keys. If it fails, your change renamed a module attribute and
   would break loading of existing checkpoints; only regenerate the fixture

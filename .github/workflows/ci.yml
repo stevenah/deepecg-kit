@@ -108,7 +108,7 @@ jobs:
       run: uv sync --dev --python-preference system
 
     - name: Run tests
-      run: uv run pytest ${{ matrix.python-version == '3.12' && '--cov --cov-report=term-missing' || '' }}
+      run: uv run pytest -n auto ${{ matrix.python-version == '3.12' && '--cov --cov-report=term-missing' || '' }}
 
   build:
     runs-on: ubuntu-latest

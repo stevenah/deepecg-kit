@@ -1,0 +1,32 @@
+# PTB-XL BENCHMARK REPRODUCTION: the architectures of the PTB-XL benchmark
+# (Strodthoff et al., IEEE JBHI 2021) that the kit implements, trained under that
+# benchmark's own protocol with `deepecg train --recipe ptbxl-benchmark`: 100 Hz,
+# one mean and standard deviation fitted on folds 1-8, random 2.5 s training
+# crops, AdamW under a one-cycle schedule peaking at 1e-2, batch 128, 50 epochs
+# with the final epoch kept,
+# an unweighted loss, and the maximum over 2.5 s windows at test time.
+#
+# Compare the macro AUROC on fold 10 with the published superdiagnostic values:
+# fcn-wang with fcn_wang, resnet-wang with resnet1d_wang, xresnet1d101 with
+# xresnet1d101, and inception-time with inception1d. The bidirectional LSTM of
+# the benchmark is left out with the kit's lstm, which the article grid dropped.
+#
+# The article grid (experiments.yaml) trains the same architectures under the
+# kit's own recipe. Keep these runs in their own --runs-dir.
+
+defaults:
+  seeds: [42]
+
+experiments:
+  - model: fcn-wang
+    dataset: ptbxl
+    recipe: ptbxl-benchmark
+  - model: resnet-wang
+    dataset: ptbxl
+    recipe: ptbxl-benchmark
+  - model: xresnet1d101
+    dataset: ptbxl
+    recipe: ptbxl-benchmark
+  - model: inception-time
+    dataset: ptbxl
+    recipe: ptbxl-benchmark

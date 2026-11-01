@@ -68,8 +68,23 @@ ExplainInput = np.ndarray | torch.Tensor | str | Path | Dataset | DataLoader | E
 TargetSpec = int | str | np.ndarray | torch.Tensor | None
 
 
+#: Methods that take input gradients; occlusion only runs the model forward.
+_GRADIENT_METHODS = frozenset({"saliency", "integrated-gradients"})
+
+
+def _needs_generic_rnn(model: nn.Module, device: torch.device, gradients: bool) -> bool:
+    """Whether cuDNN must be off: a backward pass through a recurrent layer on CUDA."""
+    return (
+        gradients
+        and device.type == "cuda"
+        and any(isinstance(module, nn.RNNBase) for module in model.modules())
+    )
+
+
 @contextmanager
-def _gradient_ready(model: nn.Module, device: torch.device) -> Iterator[None]:
+def _gradient_ready(
+    model: nn.Module, device: torch.device, gradients: bool = True
+) -> Iterator[None]:
     """Put a model into a state where input gradients can be taken safely.
 
     Feature extraction can wrap its whole loop in ``torch.no_grad()``.
@@ -84,11 +99,15 @@ def _gradient_ready(model: nn.Module, device: torch.device) -> Iterator[None]:
     cuDNN is disabled for the four recurrent architectures on CUDA, where its
     fused kernel refuses to run a backward pass outside training mode. Calling
     ``train()`` would satisfy cuDNN and reintroduce dropout, so the fused path
-    is turned off instead and the slower generic one is used.
+    is turned off instead and the slower generic one is used. Occlusion takes
+    no gradients, and cuDNN runs a recurrent layer forward in evaluation mode,
+    so it keeps the fused kernel; on 12-lead input, occlusion through the
+    generic path took most of the LSTM's attribution time.
 
     Args:
         model: The model attribution will run against
         device: The device the attribution will run on
+        gradients: Whether input gradients will be taken
 
     Yields:
         None, with the model prepared and its previous state restored on exit.
@@ -97,12 +116,8 @@ def _gradient_ready(model: nn.Module, device: torch.device) -> Iterator[None]:
     model.eval()
     model.to(device)
 
-    needs_generic_rnn = device.type == "cuda" and any(
-        isinstance(module, nn.RNNBase) for module in model.modules()
-    )
-
     try:
-        if needs_generic_rnn:
+        if _needs_generic_rnn(model, device, gradients):
             with torch.backends.cudnn.flags(enabled=False):
                 yield
         else:
@@ -716,7 +731,7 @@ class ECGExplainer:
         crop_offset = 0
         seen = 0
 
-        with _gradient_ready(self.model, device):
+        with _gradient_ready(self.model, device, gradients=self.method in _GRADIENT_METHODS):
             iterator: Any = loader
             if self.progress and tqdm is not None:
                 iterator = tqdm(loader, desc=f"Attributing ({self.method})")

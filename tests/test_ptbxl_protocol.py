@@ -23,23 +23,27 @@ STATEMENTS = pd.DataFrame(
 
 
 def _write_corpus(root, records):
-    """Write one 12-lead 10 s record per (scp_codes, strat_fold) pair."""
+    """Write one 12-lead 10 s record per (scp_codes, strat_fold) pair, at 500 and 100 Hz."""
     rows = []
     rng = np.random.default_rng(0)
     for ecg_id, (scp_codes, fold) in enumerate(records, start=1):
         name = f"{ecg_id:05d}_hr"
-        directory = root / "records500" / "00000"
-        directory.mkdir(parents=True, exist_ok=True)
         signal = rng.standard_normal((5000, 12)) * 0.1
-        wfdb.wrsamp(
-            name,
-            fs=500,
-            units=["mV"] * 12,
-            sig_name=PTBXLDataset.LEADS,
-            p_signal=signal,
-            fmt=["16"] * 12,
-            write_dir=str(directory),
-        )
+        for folder, suffix, rate, samples in (
+            ("records500", "hr", 500, signal),
+            ("records100", "lr", 100, signal[::5]),
+        ):
+            directory = root / folder / "00000"
+            directory.mkdir(parents=True, exist_ok=True)
+            wfdb.wrsamp(
+                f"{ecg_id:05d}_{suffix}",
+                fs=rate,
+                units=["mV"] * 12,
+                sig_name=PTBXLDataset.LEADS,
+                p_signal=samples,
+                fmt=["16"] * 12,
+                write_dir=str(directory),
+            )
         rows.append(
             {
                 "ecg_id": ecg_id,

@@ -14,9 +14,8 @@ from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
-import torch
 
-from deepecgkit.datasets import ECGDataModule
+from deepecgkit import ECGDataModule, ECGTrainer, build_model
 from deepecgkit.evaluation.metrics import (
     calculate_classification_metrics,
     confusion_matrix_analysis,
@@ -26,8 +25,8 @@ from deepecgkit.evaluation.visualization import (
     plot_confusion_matrix,
     plot_training_curves,
 )
-from deepecgkit.registry import get_dataset, get_dataset_info, get_model
-from deepecgkit.training import ECGTrainer
+from deepecgkit.models.pretrained import load_matching_weights
+from deepecgkit.utils.checkpoints import load_checkpoint_file
 from deepecgkit.utils.weights import load_pretrained_weights
 
 
@@ -52,36 +51,33 @@ def main():
     args = parse_args()
     ECGTrainer.seed_everything(args.seed)
 
-    dataset_info = get_dataset_info(args.dataset)
-    input_channels = dataset_info["input_channels"]
-    num_classes = dataset_info["num_classes"]
-
-    dataset_class = get_dataset(args.dataset)
     data_module = ECGDataModule(
-        dataset_class=dataset_class,
+        args.dataset,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         val_split=0.2,
         test_split=0.1,
         seed=args.seed,
-        stratify=True,
         download=args.download,
     )
     data_module.setup(stage="fit")
     data_module.print_metadata()
 
-    model_class = get_model(args.model)
-    model = model_class(input_channels=input_channels, output_size=num_classes)
+    model = build_model(args.model, data_module.input_channels, data_module.num_classes)
 
     if args.weights:
         print(f"\nLoading pretrained weights: {args.weights}")
         if Path(args.weights).exists():
-            # A weights file, or a checkpoint written by an earlier training run.
-            loaded = torch.load(args.weights, map_location="cpu", weights_only=True)
-            state_dict = loaded.get("model_state_dict", loaded)
+            # A weights file, a checkpoint, or the run directory of an earlier run.
+            loaded = load_checkpoint_file(args.weights)
         else:
-            state_dict = load_pretrained_weights(args.weights, map_location="cpu")
-        model.load_state_dict(state_dict, strict=False)
+            loaded = load_pretrained_weights(args.weights, map_location="cpu")
+        # Everything whose shape fits is loaded; a head sized for another
+        # number of classes is left as initialised, to be trained here.
+        report = load_matching_weights(model, loaded)
+        print(f"Loaded {len(report['loaded'])} weight tensors")
+        if report["mismatched"]:
+            print(f"Left as initialised (shape differs): {', '.join(report['mismatched'])}")
 
     if args.freeze_backbone:
         print("Freezing backbone parameters (training classifier head only)")
@@ -96,7 +92,6 @@ def main():
     train_config = {
         "learning_rate": args.lr,
         "scheduler": {"factor": 0.5, "patience": 5},
-        "task_type": "classification",
     }
 
     if args.output_dir is None:

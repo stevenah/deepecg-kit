@@ -210,7 +210,8 @@ def prepare_recording(
         recording: Signal of shape (leads, samples)
         preprocessing: Mapping as returned by BaseECGDataset.get_preprocessing
             and recorded in checkpoints, with sampling_rate,
-            segment_duration_seconds and normalization. None leaves the
+            segment_duration_seconds and normalization (with
+            normalization_stats when it is "global"). None leaves the
             recording untouched and returns it as a single segment.
         source_sampling_rate: Rate the recording was sampled at, in Hz. None
             assumes it is already at the training rate.
@@ -234,8 +235,11 @@ def prepare_recording(
     target_rate = preprocessing.get("sampling_rate")
     normalization = preprocessing.get("normalization") or "none"
     duration = preprocessing.get("segment_duration_seconds")
+    stats = preprocessing.get("normalization_stats")
     standardizer = ECGStandardizer(
-        target_sampling_rate=target_rate or 0, normalization=normalization
+        target_sampling_rate=target_rate or 0,
+        normalization=normalization,
+        normalization_stats=tuple(stats) if stats else None,
     )
 
     if target_rate and source_sampling_rate and source_sampling_rate != target_rate:

@@ -9,7 +9,7 @@
 # DeepECG-Kit
 
 A deep learning library for ECG analysis and arrhythmia classification. Provides a CLI for
-training, evaluation, inference, feature extraction, and explainability across 26 model
+training, evaluation, inference, feature extraction, and explainability across 30 model
 architectures and 5 ECG datasets.
 
 **Documentation:** https://stevenah.github.io/deepecg-kit/
@@ -41,45 +41,24 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow.
 
 ## Quick Start
 
-Load a dataset, train any architecture on it, predict on a raw recording, and explain the
-predictions, in a few lines of Python. Datasets download from PhysioNet on first use into
+Train any architecture on any dataset, predict on a raw recording, and explain the predictions,
+in a few lines of Python. Datasets download from PhysioNet on first use into
 `~/.deepecgkit/datasets`; the same steps from the shell are under [Usage](#usage).
 
-### Load a dataset and iterate batches
+### Train and test a model
 
 ```python
-from deepecgkit.datasets import ECGDataModule
-from deepecgkit.registry import get_dataset, get_dataset_info
-from deepecgkit.training import ECGTrainer
+from deepecgkit import ECGDataModule, ECGTrainer, build_model
 
 ECGTrainer.seed_everything(42)
 
-# PhysioNet 2017 (about 100 MB) as 10 s single-lead segments, resampled
-# from 300 Hz to the 500 Hz the benchmark uses for every dataset. The
-# 70/20/10 split is by recording and stratified by class, so no recording
-# has segments in both train and test.
-info = get_dataset_info("af-classification")
-data = ECGDataModule(
-    dataset_class=get_dataset("af-classification"),
-    sampling_rate=500,
-    batch_size=32,
-    download=True,
-)
-data.setup(stage="fit")
+# PhysioNet 2017 (about 100 MB) as 10 s single-lead segments, resampled from
+# 300 Hz to the 500 Hz the benchmark uses. The 70/20/10 split is by recording
+# and stratified by class, so no recording has segments in both train and test.
+data = ECGDataModule("af-classification", sampling_rate=500, download=True)
 
-signals, labels = next(iter(data.train_dataloader()))
-# signals: (32, 1, 5000) float32, each segment normalised on its own
-# labels:  (32,) class indices
-```
-
-### Train and test any architecture
-
-```python
-from deepecgkit.models import build_model
-
-# Every architecture takes the same two shape arguments, so any name from
-# `deepecg list-models` can replace "kanres" with nothing else changed.
-model = build_model("kanres", info["input_channels"], info["num_classes"])
+# Any name from `deepecg list-models` can replace "kanres".
+model = build_model("kanres", data.input_channels, data.num_classes)
 
 # Training ends by restoring the epoch with the lowest validation loss.
 trainer = ECGTrainer(model)
@@ -91,43 +70,34 @@ The figures in this Quick Start come from the benchmark's KanRes run with this s
 best epoch 50 of 50), which also scores macro F1 0.453, MCC 0.317 and AUROC 0.795 on the
 same test split. A new run differs slightly with hardware and library version.
 
+The trainer reads the task from the data: multi-label datasets such as PTB-XL train with a
+sigmoid per class, with no setting to change. For a training loop of your own,
+`data.train_dataloader()` yields batches of signals shaped `(32, 1, 5000)` with their labels.
+
 ### Predict on a raw recording
 
 ```python
-import numpy as np
-import torch
+from deepecgkit import predict
 
-from deepecgkit.datasets import prepare_recording
-from deepecgkit.models import build_model_from_checkpoint
-
-# The checkpoint records its architecture, class names and preprocessing,
-# so a recording at another rate and length is resampled, cut and
-# normalised to match.
-model, checkpoint = build_model_from_checkpoint(trainer.best_checkpoint_path)
-config = checkpoint["data_config"]
-prepared = prepare_recording(
-    np.load("ecg.npy"), config["preprocessing"], source_sampling_rate=250
-)
-
-# Softmax suits a single-label head like this one; `deepecg predict` also
-# handles binary and multi-label heads.
-model.eval()
-with torch.no_grad():
-    logits = model(torch.from_numpy(prepared.segments))
-probabilities = torch.softmax(logits, dim=1).mean(dim=0)  # over segments
-print(config["class_names"][int(probabilities.argmax())])
+# The checkpoint records its architecture, class names and preprocessing, so a
+# recording at another rate and length is resampled, cut and normalised to match.
+result = predict("ecg.npy", checkpoint="runs/kanres-af", sampling_rate=250)
+print(result.label, result.confidence)
+print(result.probabilities)  # every class, averaged over the recording's segments
 ```
+
+A run directory stands for its best checkpoint wherever a checkpoint is expected. To predict
+many recordings, load the model once with `ECGPredictor.from_checkpoint("runs/kanres-af")` and
+call its `predict` method for each.
 
 ### Explain the predictions
 
 ```python
-from deepecgkit.explainability import explain
+from deepecgkit import explain
 
 # Saliency for every test segment, averaged over R-peak-aligned beats. The
 # checkpoint does not record the rate the beat windows assume, so state it.
-result = explain(
-    data, checkpoint=trainer.best_checkpoint_path, sampling_rate=500
-)
+result = explain(data, checkpoint="runs/kanres-af", sampling_rate=500)
 
 # Share of the average beat's attribution in each region
 result.pqrst_fractions   # P 0.315, QRS 0.082, T 0.343, baseline 0.260
@@ -146,7 +116,7 @@ deepecg evaluate --checkpoint runs/<run> -d af-classification
 deepecg predict --checkpoint runs/<run> --input ecg.npy --sampling-rate 300
 deepecg extract-features --checkpoint runs/<run> -d af-classification -o features.npz
 deepecg explain --checkpoint runs/<run> --input ecg.npy -o explanations/
-deepecg list-models                                  # all 26 architectures
+deepecg list-models                                  # all 30 architectures
 deepecg list-datasets                                # sizes, signal shape, local status
 deepecg info -m kanres
 ```
@@ -178,9 +148,11 @@ physionet.org, and resume if interrupted.
 Experiment sweeps are defined in YAML files and run via
 `python scripts/run_experiments.py --config <file>`, one run per architecture, dataset and seed,
 saved to `runs/{model}-{dataset}-seed{seed}/`. `experiments.yaml` holds the benchmark of the
-journal article: 24 architectures on PTB-XL and PhysioNet 2017 with seed 42 (48 runs);
-`experiments-longterm.yaml` holds the long-term AF tasks for the benchmark website. A `seeds:`
-list in either file, or `--seeds` at launch, repeats every pairing.
+journal article: 27 architectures on PTB-XL and PhysioNet 2017 with seed 42 (54 runs);
+`experiments-longterm.yaml` holds the long-term AF tasks for the benchmark website, and
+`experiments-ptbxl-benchmark.yaml` trains four architectures under the PTB-XL benchmark's own
+protocol (`--recipe ptbxl-benchmark`) for comparison with its published scores. A `seeds:`
+list in any of them, or `--seeds` at launch, repeats every pairing.
 
 Aggregate and analyse finished runs with:
 

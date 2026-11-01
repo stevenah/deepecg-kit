@@ -62,6 +62,7 @@ nav:
       - datasets: api/datasets.md
       - models: api/models.md
       - training: api/training.md
+      - prediction: api/prediction.md
       - evaluation: api/evaluation.md
       - analysis: api/analysis.md
       - features: api/features.md

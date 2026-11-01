@@ -17,40 +17,30 @@ python examples/train_basic.py --model tcn --dataset af-classification --batch-s
 ### 1. Set up the data
 
 ```python
-from deepecgkit.datasets import ECGDataModule
-from deepecgkit.registry import get_dataset, get_dataset_info, get_model
-from deepecgkit.training import ECGTrainer
+from deepecgkit import ECGDataModule, ECGTrainer, build_model
 
 ECGTrainer.seed_everything(42)
 
-dataset_info = get_dataset_info("af-classification")
-input_channels = dataset_info["input_channels"]
-num_classes = dataset_info["num_classes"]
-
-dataset_class = get_dataset("af-classification")
 data_module = ECGDataModule(
-    dataset_class=dataset_class,
+    "af-classification",
     batch_size=32,
     val_split=0.2,
     test_split=0.1,
     seed=42,
-    stratify=True,
     download=True,
 )
 data_module.setup(stage="fit")
 data_module.print_metadata()
 ```
 
-The registry provides input channel count and number of classes, so the model can be configured automatically.
-
 ### 2. Create the model
 
 ```python
-model_class = get_model("kanres")
-model = model_class(input_channels=input_channels, output_size=num_classes)
+model = build_model("kanres", data_module.input_channels, data_module.num_classes)
 ```
 
-Swap `"kanres"` for any registered model name — the rest of the code stays the same.
+The data module reports the lead count and the number of classes, so the model is shaped to
+fit. Swap `"kanres"` for any registered model name — the rest of the code stays the same.
 
 ### 3. Configure training
 
@@ -58,11 +48,11 @@ Swap `"kanres"` for any registered model name — the rest of the code stays the
 train_config = {
     "learning_rate": 1e-3,
     "scheduler": {"factor": 0.5, "patience": 5},
-    "task_type": "classification",
 }
 ```
 
-Every key is optional; `ECGTrainer(model)` uses these same values.
+Every key is optional; `ECGTrainer(model)` uses these same values. The loss follows the data:
+cross-entropy here, BCE for a multi-label dataset such as PTB-XL.
 
 ### 4. Train and evaluate
 
@@ -72,7 +62,7 @@ trainer.fit(
     data_module,
     epochs=50,
     early_stopping_patience=10,
-    checkpoint_dir="runs/kanres-af/checkpoints",
+    checkpoint_dir="runs/kanres-af",
 )
 results = trainer.test(data_module)
 print(f"Test loss: {results['test_loss']:.4f}  Test accuracy: {results['test_acc']:.4f}")

@@ -50,7 +50,12 @@ PARAM_KEYS = set(DEFAULTS.keys()) | {
     "segment_duration",
     "binary_classification",
     "normalization",
+    "recipe",
 }
+
+#: Settings a recipe fixes; a recipe experiment passes them only when its own
+#: entry or the file's defaults set them, never from the package defaults.
+RECIPE_SETTINGS = ("epochs", "batch_size", "learning_rate", "early_stopping_patience")
 
 SEEDS_KEY = "seeds"
 RUNS_DIR_DEFAULT = "runs"
@@ -168,6 +173,10 @@ def load_experiments(
         for key in PARAM_KEYS:
             if key in exp:
                 params[key] = exp[key]
+        if params.get("recipe"):
+            for key in RECIPE_SETTINGS:
+                if key not in exp and key not in file_defaults:
+                    params.pop(key, None)
 
         seeds = resolve_seeds(exp, file_defaults, params["seed"], seeds_override)
         experiments.append({"model": model, "dataset": dataset, SEEDS_KEY: seeds, **params})
@@ -190,17 +199,20 @@ def params_fingerprint(experiment: dict[str, Any]) -> str:
     return hashlib.md5(encoded).hexdigest()[:FINGERPRINT_LENGTH]
 
 
-def run_key(model: str, dataset: str, seed: int) -> str:
+def run_key(model: str, dataset: str, seed: int, recipe: str | None = None) -> str:
     """Build the stable identifier for one expanded run.
 
     Args:
         model: Model name.
         dataset: Dataset name.
         seed: Seed for this run.
+        recipe: Training recipe, None for the package's own.
 
     Returns:
         The key used in the progress cache.
     """
+    if recipe:
+        return f"{model}|{dataset}|{recipe}|{seed}"
     return f"{model}|{dataset}|{seed}"
 
 
@@ -224,7 +236,8 @@ def _output_dir_for(experiment: dict[str, Any], seed: int, n_seeds: int, runs_di
     explicit = experiment.get("output_dir")
     if explicit:
         return str(explicit) if n_seeds == 1 else f"{explicit}-seed{seed}"
-    stem = f"{experiment['model']}-{experiment['dataset']}-seed{seed}"
+    recipe = f"-{experiment['recipe']}" if experiment.get("recipe") else ""
+    stem = f"{experiment['model']}-{experiment['dataset']}{recipe}-seed{seed}"
     return str(Path(runs_dir) / stem)
 
 
@@ -263,7 +276,9 @@ def expand_runs(
             run["experiment_index"] = index
             run["params_fingerprint"] = fingerprint
             run["output_dir"] = _output_dir_for(experiment, seed, len(seeds), runs_dir)
-            run["key"] = run_key(experiment["model"], experiment["dataset"], seed)
+            run["key"] = run_key(
+                experiment["model"], experiment["dataset"], seed, experiment.get("recipe")
+            )
             runs.append(run)
 
     _disambiguate_output_dirs(runs)
@@ -479,12 +494,17 @@ def build_command(exp: dict[str, Any]) -> list[str]:
         exp["model"],
         "--dataset",
         exp["dataset"],
-        "--epochs",
-        str(exp["epochs"]),
-        "--batch-size",
-        str(exp["batch_size"]),
-        "--learning-rate",
-        str(exp["learning_rate"]),
+    ]
+    if exp.get("recipe"):
+        cmd.extend(["--recipe", exp["recipe"]])
+    for key, flag in (
+        ("epochs", "--epochs"),
+        ("batch_size", "--batch-size"),
+        ("learning_rate", "--learning-rate"),
+    ):
+        if key in exp:
+            cmd.extend([flag, str(exp[key])])
+    cmd += [
         "--val-split",
         str(exp["val_split"]),
         "--test-split",
@@ -495,11 +515,10 @@ def build_command(exp: dict[str, Any]) -> list[str]:
         str(exp["accelerator"]),
         "--devices",
         str(exp["devices"]),
-        "--early-stopping-patience",
-        str(exp["early_stopping_patience"]),
-        "--seed",
-        str(exp["seed"]),
     ]
+    if "early_stopping_patience" in exp:
+        cmd.extend(["--early-stopping-patience", str(exp["early_stopping_patience"])])
+    cmd.extend(["--seed", str(exp["seed"])])
 
     if exp.get("data_dir"):
         cmd.extend(["--data-dir", exp["data_dir"]])

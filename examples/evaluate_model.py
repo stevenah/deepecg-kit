@@ -25,7 +25,6 @@ from deepecgkit.evaluation.visualization import (
     plot_roc_curve,
 )
 from deepecgkit.models import build_model_from_checkpoint
-from deepecgkit.registry import get_dataset
 from deepecgkit.training import ECGTrainer
 
 
@@ -80,7 +79,7 @@ def main():
         # Options that decide labels and split, such as PTB-XL's folds.
         dataset_kwargs.update(data_config.get("dataset_options") or {})
     data_module = ECGDataModule(
-        dataset_class=get_dataset(dataset_name),
+        dataset_name,
         sampling_rate=preprocessing.get("sampling_rate"),
         batch_size=args.batch_size,
         num_workers=args.num_workers,

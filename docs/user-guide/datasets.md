@@ -59,12 +59,10 @@ AF and everything else, which is what that grouping amounts to.
 `ECGDataModule` handles dataset creation, train/val/test splitting, and DataLoader construction:
 
 ```python
-from deepecgkit.datasets import ECGDataModule
-from deepecgkit.registry import get_dataset
+from deepecgkit import ECGDataModule
 
-dataset_class = get_dataset("af-classification")
 data_module = ECGDataModule(
-    dataset_class=dataset_class,
+    "af-classification",
     batch_size=32,
     val_split=0.2,
     test_split=0.1,
@@ -76,13 +74,19 @@ data_module.setup(stage="fit")
 
 train_loader = data_module.train_dataloader()
 val_loader = data_module.val_dataloader()
+
+# The shapes a model for this data needs
+print(data_module.input_channels, data_module.num_classes, data_module.class_names)
 ```
+
+The first argument is a name from `deepecg list-datasets`, a dataset class, or a dataset
+instance of your own.
 
 Options specific to one dataset go in `dataset_kwargs`:
 
 ```python
 data_module = ECGDataModule(
-    dataset_class=get_dataset("ltafdb"),
+    "ltafdb",
     dataset_kwargs={"binary_classification": True, "segment_duration_seconds": 30.0},
     download=True,
 )
@@ -92,8 +96,7 @@ data_module = ECGDataModule(
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `dataset_class` | None | Dataset class to instantiate |
-| `dataset` | None | Pre-instantiated dataset (alternative to `dataset_class`) |
+| `dataset` | None | Registered dataset name, dataset class, or dataset instance |
 | `data_dir` | None | Data directory (uses dataset default if None) |
 | `batch_size` | 32 | Batch size for DataLoaders |
 | `val_split` | 0.2 | Validation fraction |
@@ -104,17 +107,30 @@ data_module = ECGDataModule(
 | `download` | False | Download dataset if not present |
 | `sampling_rate` | None | Sampling rate to resample to (Hz); None keeps the dataset's own default |
 | `dataset_kwargs` | None | Extra keyword arguments for the dataset class |
+| `normalization_stats` | None | `"fit"` standardises every partition with one mean and standard deviation fitted on the training partition; a `(mean, std)` pair applies given ones |
+| `train_crop_length` | None | Cut every training sample to a random window of this many samples, drawn anew each epoch |
 
 A dataset that names a recommended partition for every sample (`predefined_partition()`, as
 PTB-XL does by default) is split that way, and `val_split`, `test_split` and `stratify` are then
 unused. Otherwise the split is drawn from `seed`, grouped by recording or patient and stratified by
 label.
 
-After `setup()`, `data_module.sampling_rate` holds the rate in effect, `data_module.split_protocol`
+`input_channels`, `num_classes` and `class_names` describe the data a model has to fit; reading
+any of them loads the dataset if `setup()` has not run yet. After `setup()`,
+`data_module.sampling_rate` holds the rate in effect, `data_module.split_protocol`
 says which split was used (`"predefined"` or `"seeded"`), and `data_module.describe()` returns
 everything a checkpoint records about the data: dataset name, preprocessing, class names, sample
 shape, labelling mode, the dataset options that decide labels and split (`dataset_options`), the
 split protocol (`split_protocol`) and the split settings (`split`).
+
+`normalization_stats` is the global standardisation of the PTB-XL benchmark: one mean and one
+standard deviation over every value of every lead of the training partition, so that a signal keeps
+its amplitude relative to the training data, which per-signal z-scoring removes. Build the dataset
+with `normalization="none"` when using it. After `setup()` the attribute holds the statistics in
+effect, and `describe()` records them as `"normalization": "global"` with `normalization_stats`, so
+a checkpoint applies the same values to new data. `train_crop_length` leaves validation and test
+samples whole; a trainer with an `inference_window` scores them on overlapping windows (see
+[Training](training.md#recipes)).
 
 `num_workers` defaults to 0 because the built-in datasets keep their signals in memory, which
 makes worker processes pure overhead. If you raise it in a script on macOS or Windows, guard the
@@ -189,6 +205,9 @@ standardizer = ECGStandardizer(target_sampling_rate=500, normalization="zscore")
 signal = standardizer(raw_signal, original_sampling_rate=360)
 ```
 
+`normalization` is `"zscore"` or `"minmax"` (each lead of each signal on its own), `"none"`, or
+`"global"`, which takes the training data's `normalization_stats=(mean, std)` from a checkpoint.
+
 ### ECGSegmenter
 
 Segments long ECG recordings into fixed-length windows:
@@ -261,5 +280,6 @@ A dataset distributed with a fixed split can override `predefined_partition()` t
 partition of every sample, and `get_dataset_options()` to name the constructor options that
 produced its labels and split, so that a checkpoint rebuilds it the same way.
 
-The class works with `ECGDataModule(dataset_class=MyDataset, data_dir=...)` straight away, and
+The class works with `ECGDataModule(MyDataset, data_dir=...)`, or by its registered name, straight
+away, and
 with the CLI through [`--import`](cli.md#using-your-own-models-and-datasets).

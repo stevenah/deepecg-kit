@@ -2,7 +2,7 @@
 
 A deep learning library for ECG analysis and arrhythmia classification.
 
-DeepECG-Kit provides **26 model architectures**, **5 ECG datasets**, and a complete training/evaluation pipeline — all without framework dependencies beyond PyTorch.
+DeepECG-Kit provides **30 model architectures**, **5 ECG datasets**, and a complete training/evaluation pipeline — all without framework dependencies beyond PyTorch.
 
 ## Quick Install
 
@@ -13,24 +13,17 @@ pip install deepecgkit
 ## Quick Start
 
 ```python
-from deepecgkit.datasets import ECGDataModule
-from deepecgkit.registry import get_dataset, get_dataset_info, get_model
-from deepecgkit.training import ECGTrainer
+from deepecgkit import ECGDataModule, ECGTrainer, build_model, predict
 
-dataset_info = get_dataset_info("af-classification")
-dataset_class = get_dataset("af-classification")
-data_module = ECGDataModule(dataset_class=dataset_class, batch_size=32, download=True)
-data_module.setup(stage="fit")
-
-model_class = get_model("kanres")
-model = model_class(
-    input_channels=dataset_info["input_channels"],
-    output_size=dataset_info["num_classes"],
-)
+data = ECGDataModule("af-classification", download=True)
+model = build_model("kanres", data.input_channels, data.num_classes)
 
 trainer = ECGTrainer(model)
-trainer.fit(data_module, epochs=50, checkpoint_dir="runs/kanres-af/checkpoints")
-trainer.test(data_module)
+trainer.fit(data, epochs=50, checkpoint_dir="runs/kanres-af")
+trainer.test(data)
+
+result = predict("ecg.npy", checkpoint="runs/kanres-af", sampling_rate=250)
+print(result.label, result.confidence)
 ```
 
 Or use the CLI:
@@ -43,7 +36,7 @@ The first run downloads the dataset (about 100 MB) into `~/.deepecgkit/datasets`
 
 ## Features
 
-- **26 model architectures** — CNNs, ResNets, RNNs, Transformers, Mamba, and hybrids
+- **30 model architectures** — CNNs, ResNets, RNNs, Transformers, state space models (S4, Mamba), and hybrids
 - **5 ECG datasets** — PhysioNet 2017, PTB-XL, MIT-BIH AFDB, LTAFDB, and unified AF
 - **Pure PyTorch** — No framework dependencies beyond PyTorch itself
 - **CLI & Python API** — Train, evaluate, and predict from the command line or code
@@ -61,6 +54,6 @@ The first run downloads the dataset (about 100 MB) into `~/.deepecgkit/datasets`
 
 - [Installation](getting-started/installation.md) — Detailed installation instructions
 - [Quick Start Guide](getting-started/quickstart.md) — Step-by-step walkthrough
-- [Model Zoo](user-guide/model-zoo.md) — Browse all 26 model architectures
+- [Model Zoo](user-guide/model-zoo.md) — Browse all 30 model architectures
 - [CLI Usage](user-guide/cli.md) — Command-line reference
 - [API Reference](api/index.md) — Full API documentation

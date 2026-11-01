@@ -17,7 +17,7 @@ import numpy as np
 
 from deepecgkit.datasets import ECGDataModule
 from deepecgkit.evaluation.visualization import plot_ecg_signals
-from deepecgkit.registry import get_dataset, get_dataset_info, get_dataset_names
+from deepecgkit.registry import get_dataset_info, get_dataset_names
 
 
 def parse_args():
@@ -73,9 +73,8 @@ def main():
     if dataset_info.get("description"):
         print(f"  Description: {dataset_info['description']}")
 
-    dataset_class = get_dataset(args.dataset)
     data_module = ECGDataModule(
-        dataset_class=dataset_class,
+        args.dataset,
         batch_size=args.batch_size,
         val_split=0.2,
         test_split=0.1,

@@ -6,6 +6,46 @@ versions follow [SemVer](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Four networks built for ECG analysis, each ported from its published
+  source and added to the article grid:
+  `resnet-ribeiro`, the 12-lead network of Ribeiro et al. (2020), from its
+  released Keras code, with the released model's dropout of 0.8;
+  `resnet-attia`, the AI-ECG atrial fibrillation network of Attia et al.
+  (2019), from the paper's supplementary appendix; `cnn-acharya`, the
+  nine-layer heartbeat CNN of Acharya et al. (2017); and `s4`, the
+  bidirectional S4 classifier of Mehari and Strodthoff (2022), with the S4
+  layer ported from state-spaces/s4 (Apache-2.0) as their code vendors it and
+  its Cauchy kernel evaluated in plain PyTorch, so it needs neither a CUDA
+  extension nor pykeops. Networks that flatten a fixed-length feature map
+  average it over time to the original length first, so they accept any
+  input and are unchanged at their original input length.
+  `tests/test_literature_ports.py` checks each against its source: the
+  parameter counts of the released Ribeiro weights and of the published S4
+  configuration, the layer sizes of
+  the Attia and Acharya papers, and the S4 kernel against the impulse
+  response of the discretized system.
+- `deepecgkit.predict(recording, checkpoint, sampling_rate=...)` and
+  `ECGPredictor`: one call from a raw recording (a file, or an array) to a
+  `Prediction` with its `label`, `confidence` and per-class `probabilities`,
+  averaged over the recording's segments. The recording is prepared with the
+  checkpoint's preprocessing, and softmax, single-logit and multi-label heads
+  are each read the right way. `deepecg predict` and `examples/inference.py`
+  now share this code instead of keeping copies of it.
+- `ECGDataModule` takes a registered dataset name or class as its first
+  argument (`ECGDataModule("af-classification")`), and reports
+  `input_channels`, `num_classes` and `class_names`, so a model is built with
+  `build_model(name, data.input_channels, data.num_classes)` and no registry
+  lookups.
+- A run directory stands for its best checkpoint in the Python API as it
+  already did on the command line: `build_model_from_checkpoint`,
+  `ECGTrainer.load_checkpoint`, `explain`, `extract_features` and `predict`
+  all accept one. `resolve_checkpoint` moved to `deepecgkit.utils.checkpoints`
+  (still importable from `deepecgkit.cli.run_dir`).
+- `make test` runs the suite in parallel with pytest-xdist, now a dev
+  dependency: about a minute instead of three.
+- The README's Quick Start is run by `tests/test_docs.py` with the other
+  documentation pages.
+
 - `deepecg bootstrap` and `deepecgkit.analysis.bootstrap` (`read_predictions`,
   `bootstrap_intervals`, `paired_bootstrap_difference`): percentile intervals
   of the test metrics from a run's stored `predictions.txt`, resampling whole
@@ -163,8 +203,52 @@ versions follow [SemVer](https://semver.org/).
   before a sweep does.
 - Tests that run every script in `examples/` and the Python snippets of the
   documentation on a synthetic dataset.
+- Training recipes: `deepecg train --recipe ptbxl-benchmark` trains and
+  evaluates under the protocol of the PTB-XL benchmark (Strodthoff et al.,
+  2021), for comparison with its published scores: 100 Hz input, global
+  normalization, random 2.5 s training crops, AdamW under a one-cycle schedule
+  at 0.01 (0.001 with clipping at 0.25 for LSTM and GRU), batch size 128, 50
+  epochs with the final epoch kept, no class weights, Kaiming-normal
+  initialisation, and the maximum over 2.5 s windows at test time. Flags given
+  beside it win and are recorded as `recipe_deviations` in
+  `run_metadata.json`. `deepecgkit.training.recipes` holds the recipe
+  (`get_recipe`, `get_recipe_names`, `kaiming_normal_init`), and
+  `experiments-ptbxl-benchmark.yaml` trains the five benchmark architectures
+  under it; `scripts/run_experiments.py` takes a `recipe:` key and gives
+  recipe runs their own directory and key.
+- The parts of a recipe, each usable alone: `--normalization global` and
+  `ECGDataModule(normalization_stats="fit")` (one mean and standard deviation
+  fitted on the training partition and recorded in checkpoints, which apply it
+  to new data; `ECGStandardizer(normalization="global")` for raw recordings);
+  `ECGDataModule(train_crop_length=...)` (random training crops);
+  `ECGTrainer` `train_config` keys `optimizer` (`adam` or `adamw`, with betas
+  and weight decay), `scheduler` `{"name": "one-cycle", ...}` (stepped every
+  batch), and `inference_window` (evaluation on overlapping windows combined
+  by their maximum or mean, kept in checkpoints so `deepecg evaluate` repeats
+  it); and `fit(keep="last")`, which trains every epoch and keeps the final
+  weights as `epoch=NN-last.pt`.
 
 ### Changed
+- `lstm` left the article grid and the PTB-XL benchmark reproduction, which
+  now hold 27 architectures (54 runs) and four architectures. It stays
+  registered, and the `ptbxl-benchmark` recipe keeps its LSTM settings.
+- Occlusion keeps cuDNN for recurrent models on CUDA. Only saliency and
+  integrated gradients need a backward pass, which cuDNN refuses outside
+  training mode; occlusion runs the model forward only, and through the
+  generic path it took most of the LSTM's attribution time on 12-lead input.
+- **Breaking: ResNet-Wang downsamples like the PTB-XL benchmark's
+  `resnet1d_wang`.** Its second and third stages now run at stride 2
+  (`stage_stride=2`, with a strided 1x1 shortcut), where earlier releases kept
+  stride 1 throughout; it has 439,685 parameters for 12 leads and 5 outputs
+  (406,405 before). Trained under the benchmark's protocol, the stride-1
+  version scored below the published AUROC. Checkpoints from earlier releases
+  still load: stages 2 and 3 are rebuilt at stride 1 while loading, with a
+  warning, and give the outputs they gave before.
+- `deepecg train`'s `--epochs`, `--batch-size`, `--learning-rate` and
+  `--early-stopping-patience`, and the matching arguments of
+  `deepecgkit.cli.train()`, default to None, which means the package default
+  (50, 32, 0.001, 10) or the recipe's value. The values in effect are recorded
+  as before; runs without a recipe train exactly as they did.
 - **Breaking: PTB-XL uses its recommended folds by default.**
   `PTBXLDataset(use_recommended_folds=True)` assigns folds 1-8 to training,
   9 to validation and 10 to testing, the same for every seed; the split is
@@ -268,6 +352,12 @@ versions follow [SemVer](https://semver.org/).
   irreproducible and frozen into the cache.
 
 ### Fixed
+- `ECGTrainer` reads the task from the data when `train_config` does not state
+  it. A multi-label dataset such as PTB-XL (multi-label by default in the
+  Python API) failed under the default cross-entropy with a PyTorch dtype
+  error, and a binary dataset feeding a single-logit head failed on its first
+  positive label. Both now train with BCE loss, and the task is recorded in
+  the checkpoint's `train_config`.
 - The prediction-distribution plot that `deepecg train` and
   `deepecg evaluate` write bins probabilities on fixed edges over [0, 1].
   Edges fitted to the data raised "Too many bins for data range" when a

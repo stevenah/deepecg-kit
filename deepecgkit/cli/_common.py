@@ -20,6 +20,7 @@ from deepecgkit.cli.logger import CLILogger
 from deepecgkit.cli.registry import _get_dataset_registry, _get_model_registry
 from deepecgkit.cli.run_dir import resolve_checkpoint
 from deepecgkit.datasets import ECGDataModule
+from deepecgkit.datasets.modules import FIT_STATS
 from deepecgkit.models.factory import recorded_model_name
 from deepecgkit.models.pretrained import model_name_for_weights
 from deepecgkit.registry import get_dataset_names, get_model_info, get_model_names
@@ -45,6 +46,11 @@ _OPTION_FLAGS = {
     "label_rule": "--label-rule",
     "use_recommended_folds": "--seeded-split",
 }
+
+#: The dataset_kwargs key that build_data_module hands to ECGDataModule rather
+#: than to the dataset: "global" normalisation is one mean and standard
+#: deviation over the training partition, which only the data module can fit.
+NORMALIZATION_STATS_KEY = "normalization_stats"
 
 #: Label and split options of checkpoints that predate dataset_options. PTB-XL
 #: was labelled at likelihood 50 and split by the seeded grouped split until 1.0.
@@ -282,6 +288,10 @@ def dataset_kwargs_for(
         label_rule: How multi-label targets are derived (PTB-XL)
         recommended_folds: Use the dataset's recommended split (PTB-XL)
 
+    "global" normalisation leaves each sample as the dataset loads it and
+    asks the data module, through NORMALIZATION_STATS_KEY, to fit one mean
+    and standard deviation on the training partition.
+
     Raises:
         ValueError: If an option is set that the dataset does not accept.
     """
@@ -310,6 +320,9 @@ def dataset_kwargs_for(
                 f"{_OPTION_FLAGS[option]} does not apply to the '{dataset_name}' dataset."
             )
         kwargs[option] = value
+    if kwargs.get("normalization") == "global":
+        kwargs["normalization"] = "none"
+        kwargs[NORMALIZATION_STATS_KEY] = FIT_STATS
 
     # The labelling mode is always stated for the datasets that have one, so
     # their own defaults (PTB-XL's is multi-label) never decide it.
@@ -407,6 +420,9 @@ def checkpoint_dataset_kwargs(
         **accepted,
     )
     kwargs.update(_recorded_dataset_options(dataset_name, data_config))
+    if kwargs.get(NORMALIZATION_STATS_KEY) == FIT_STATS:
+        # The statistics the model was trained with, never refitted on new data.
+        kwargs[NORMALIZATION_STATS_KEY] = tuple(preprocessing["normalization_stats"])
     return kwargs, multi_label
 
 
@@ -460,12 +476,15 @@ def build_data_module(
         test_split: Test fraction
         seed: Split seed
         stratify: Stratify the split by label
-        dataset_kwargs: Constructor kwargs from dataset_kwargs_for
+        dataset_kwargs: Constructor kwargs from dataset_kwargs_for; its
+            NORMALIZATION_STATS_KEY entry goes to the data module
         stage: Optional setup stage ("fit" restricts to train/val)
         logger: CLI logger for the progress line
     """
     if logger is not None:
         logger.info(f"Creating data module with {dataset_name} dataset...")
+    dataset_kwargs = dict(dataset_kwargs or {})
+    normalization_stats = dataset_kwargs.pop(NORMALIZATION_STATS_KEY, None)
     data_module = ECGDataModule(
         dataset_class=_get_dataset_registry()[dataset_name],
         batch_size=batch_size,
@@ -475,7 +494,8 @@ def build_data_module(
         seed=seed,
         stratify=stratify,
         download=True,
-        dataset_kwargs=dataset_kwargs or {},
+        dataset_kwargs=dataset_kwargs,
+        normalization_stats=normalization_stats,
     )
     if stage is not None:
         data_module.setup(stage=stage)

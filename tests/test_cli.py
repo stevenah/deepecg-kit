@@ -642,12 +642,7 @@ class TestPredictFunction:
         input_file = temp_dir / "input.xyz"
         input_file.write_text("data")
 
-        with (
-            patch.object(predict_module, "torch") as mock_torch,
-            patch.object(predict_module, "require_model", return_value=None),
-        ):
-            mock_torch.load.return_value = {"model_state_dict": {}}
-
+        with patch.object(predict_module, "require_model", return_value=None):
             result = predict(
                 checkpoint=str(checkpoint_file),
                 input_path=str(input_file),
@@ -688,15 +683,17 @@ class TestCLIParserDefaults:
             main(["train", "-m", "kanres", "-d", "af-classification"])
 
             call_kwargs = mock_train.call_args[1]
-            assert call_kwargs["epochs"] == 50
-            assert call_kwargs["batch_size"] == 32
-            assert call_kwargs["learning_rate"] == 1e-3
+            # Left unset so that a recipe can fill them; train() then applies 50, 32, 1e-3, 10.
+            assert call_kwargs["epochs"] is None
+            assert call_kwargs["batch_size"] is None
+            assert call_kwargs["learning_rate"] is None
+            assert call_kwargs["recipe"] is None
             assert call_kwargs["val_split"] == 0.2
             assert call_kwargs["test_split"] == 0.1
             assert call_kwargs["num_workers"] == 0
             assert call_kwargs["accelerator"] == "auto"
             assert call_kwargs["devices"] == 1
-            assert call_kwargs["early_stopping_patience"] == 10
+            assert call_kwargs["early_stopping_patience"] is None
             assert call_kwargs["seed"] == 42
             assert call_kwargs["sampling_rate"] is None
             assert call_kwargs["segment_duration"] is None

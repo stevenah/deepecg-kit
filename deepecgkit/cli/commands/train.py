@@ -29,8 +29,9 @@ from deepecgkit.cli.run_dir import resolve_checkpoint, write_run_metadata
 from deepecgkit.evaluation.report import save_evaluation
 from deepecgkit.evaluation.visualization import plot_training_curves
 from deepecgkit.models.pretrained import load_matching_weights
-from deepecgkit.registry import get_dataset_names, get_model_names
+from deepecgkit.registry import get_dataset_names, get_model_info, get_model_names
 from deepecgkit.training import ECGTrainer
+from deepecgkit.training.recipes import Recipe, get_recipe, get_recipe_names, kaiming_normal_init
 from deepecgkit.utils.device import resolve_device
 from deepecgkit.utils.provenance import dataset_fingerprint, environment_summary, git_commit
 from deepecgkit.utils.weights import load_pretrained_weights
@@ -113,22 +114,82 @@ def _log_data_summary(data_config: dict[str, Any], logger: CLILogger) -> None:
     logger.info(f"Input: {', '.join(parts)}")
 
 
+def _resolve_recipe(
+    recipe: Recipe | None, model_name: str, given: dict[str, Any], logger: CLILogger
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Fill in the settings left unset from the recipe, or from the package defaults.
+
+    Args:
+        recipe: The recipe asked for, if any
+        model_name: Registered model name, for the recipe's per-model settings
+        given: The flag values as passed, None where a flag was not given
+        logger: CLI logger
+
+    Returns:
+        Tuple of (settings in effect, settings that deviate from the recipe).
+    """
+    if recipe is None:
+        base: dict[str, Any] = {
+            "epochs": defaults.EPOCHS,
+            "batch_size": defaults.BATCH_SIZE,
+            "learning_rate": defaults.LEARNING_RATE,
+            "sampling_rate": None,
+            "normalization": None,
+        }
+    else:
+        base = recipe.settings_for(model_name)
+    settings = {key: base[key] if value is None else value for key, value in given.items()}
+    deviations = {}
+    if recipe is not None:
+        deviations = {
+            key: value for key, value in given.items() if value is not None and value != base[key]
+        }
+        for key, value in deviations.items():
+            logger.warning(
+                f"--{key.replace('_', '-')} {value} deviates from the {recipe.name} recipe, "
+                f"which uses {base[key]}; the run records the deviation."
+            )
+    return settings, deviations
+
+
+def _log_recipe(
+    recipe: Recipe, settings: dict[str, Any], model_name: str, logger: CLILogger
+) -> None:
+    """Say in one line what the recipe does beyond the usual flags."""
+    parts = [f"{settings['sampling_rate']} Hz", f"{settings['normalization']} normalisation"]
+    if recipe.crop_seconds:
+        parts.append(f"{recipe.crop_seconds:g} s training crops")
+    parts.append(
+        f"{recipe.optimizer['name']} with a {recipe.scheduler['name']} schedule at "
+        f"{settings['learning_rate']:g}"
+    )
+    if recipe.gradient_clip_val(model_name):
+        parts.append(f"gradients clipped at {recipe.gradient_clip_val(model_name):g}")
+    parts.append("final epoch kept" if recipe.keep == "last" else "best epoch kept")
+    if recipe.window:
+        parts.append(
+            f"{recipe.window['aggregate']} over {recipe.window['length_seconds']:g} s windows "
+            f"at test time"
+        )
+    logger.info(f"Recipe {recipe.name}: {', '.join(parts)}")
+
+
 def train(
     model_name: str,
     dataset_name: str,
     data_dir: str | None = None,
     output_dir: str | None = None,
     weights: str | None = None,
-    epochs: int = defaults.EPOCHS,
-    batch_size: int = defaults.BATCH_SIZE,
-    learning_rate: float = defaults.LEARNING_RATE,
+    epochs: int | None = None,
+    batch_size: int | None = None,
+    learning_rate: float | None = None,
     val_split: float = defaults.VAL_SPLIT,
     test_split: float = defaults.TEST_SPLIT,
     num_workers: int = defaults.NUM_WORKERS,
     accelerator: str = "auto",
     devices: int = 1,
     force_download: bool = False,
-    early_stopping_patience: int = defaults.EARLY_STOPPING_PATIENCE,
+    early_stopping_patience: int | None = None,
     seed: int = defaults.SEED,
     multi_label: bool = False,
     sampling_rate: int | None = None,
@@ -137,14 +198,60 @@ def train(
     segment_duration: float | None = None,
     label_rule: str | None = None,
     seeded_split: bool = False,
+    recipe: str | None = None,
     logger: CLILogger | None = None,
 ) -> int:
-    """Train a model on a dataset."""
+    """Train a model on a dataset.
+
+    Epochs, batch size, learning rate, sampling rate and normalisation left as
+    None take the recipe's values when a recipe is named, and otherwise the
+    package defaults (deepecgkit.cli.defaults) and the dataset's own.
+    """
     logger = logger or CLILogger()
 
     for code in (require_model(model_name, logger), require_dataset(dataset_name, logger)):
         if code is not None:
             return code
+
+    chosen: Recipe | None = None
+    if recipe is not None:
+        try:
+            chosen = get_recipe(recipe)
+        except KeyError as error:
+            logger.error(str(error.args[0]))
+            return 1
+        if dataset_name not in chosen.datasets:
+            logger.error(
+                f"The {chosen.name} recipe is defined for {', '.join(chosen.datasets)}, "
+                f"not '{dataset_name}'."
+            )
+            return 1
+        multi_label = multi_label or chosen.multi_label
+        if early_stopping_patience is not None and chosen.keep == "last":
+            logger.warning(
+                f"--early-stopping-patience has no effect: the {chosen.name} recipe trains "
+                f"every epoch and keeps the last."
+            )
+    settings, deviations = _resolve_recipe(
+        chosen,
+        model_name,
+        {
+            "epochs": epochs,
+            "batch_size": batch_size,
+            "learning_rate": learning_rate,
+            "sampling_rate": sampling_rate,
+            "normalization": normalization,
+        },
+        logger,
+    )
+    epochs, batch_size, learning_rate = (
+        settings["epochs"],
+        settings["batch_size"],
+        settings["learning_rate"],
+    )
+    sampling_rate, normalization = settings["sampling_rate"], settings["normalization"]
+    if early_stopping_patience is None:
+        early_stopping_patience = defaults.EARLY_STOPPING_PATIENCE
 
     code = check_dataset_options(
         dataset_name,
@@ -220,6 +327,21 @@ def train(
     input_channels = data_config["input_channels"]
     _log_data_summary(data_config, logger)
 
+    inference_window = None
+    if chosen is not None:
+        _log_recipe(chosen, settings, model_name, logger)
+        rate = preprocessing.get("sampling_rate") or sampling_rate
+        if chosen.crop_seconds:
+            data_module.train_crop_length = round(chosen.crop_seconds * rate)
+            minimum = get_model_info(model_name).get("min_input_length")
+            if minimum is not None and data_module.train_crop_length < minimum:
+                logger.error(
+                    f"'{model_name}' needs at least {minimum} samples per lead, but the "
+                    f"{chosen.name} recipe trains on crops of {data_module.train_crop_length}."
+                )
+                return 1
+        inference_window = chosen.inference_window(rate)
+
     # Nothing is written until the run can actually start, so a run that
     # fails on its inputs leaves no directory behind.
     if output_dir is None:
@@ -250,6 +372,11 @@ def train(
             "epochs": epochs,
             "batch_size": batch_size,
             "learning_rate": learning_rate,
+            **(
+                {"recipe": chosen.describe(), "recipe_deviations": deviations}
+                if chosen is not None
+                else {}
+            ),
             "deepecgkit_version": _package_version(),
             "git": git_commit(),
             "environment": environment_summary(resolve_device(accelerator)),
@@ -261,7 +388,7 @@ def train(
     _write_split_info(data_module, output_path, seed, logger)
 
     pos_weight = None
-    if multi_label:
+    if multi_label and (chosen is None or chosen.class_weights):
         try:
             train_ds = data_module.train_dataset
             all_labels = torch.stack([train_ds[i][1] for i in range(len(train_ds))])
@@ -277,6 +404,8 @@ def train(
         f"Creating {model_name} model with {input_channels} input channel(s) and {num_classes} output classes..."
     )
     model = model_class(input_channels=input_channels, output_size=model_output_size)
+    if chosen is not None and chosen.init == "kaiming-normal":
+        kaiming_normal_init(model)
 
     if weights:
         try:
@@ -322,6 +451,10 @@ def train(
         "task_type": "classification",
         "pos_weight": pos_weight,
     }
+    if chosen is not None:
+        train_config["optimizer"] = chosen.optimizer_config()
+        train_config["scheduler"] = dict(chosen.scheduler)
+        train_config["inference_window"] = inference_window
 
     trainer = ECGTrainer(model=model, train_config=train_config, device=accelerator)
     trainer.model_config = {
@@ -343,6 +476,8 @@ def train(
             checkpoint_dir=str(checkpoint_dir),
             log_dir=str(log_dir),
             progress_bar=not logger.quiet,
+            gradient_clip_val=chosen.gradient_clip_val(model_name) if chosen else None,
+            keep=chosen.keep if chosen else "best",
         )
 
         val_targets = None
@@ -485,25 +620,35 @@ def add_parser(subparsers: Any) -> Any:
         help="Path to weights file or pretrained weight name",
     )
     parser.add_argument(
+        "--recipe",
+        type=str,
+        default=None,
+        choices=get_recipe_names(),
+        metavar="RECIPE",
+        help="Train and evaluate under a named protocol, which sets the flags below that "
+        f"are not given: {', '.join(get_recipe_names())} (the PTB-XL benchmark's "
+        "protocol). Default: the package's own recipe",
+    )
+    parser.add_argument(
         "--epochs",
         "-e",
         type=int,
-        default=defaults.EPOCHS,
-        help=f"Number of training epochs (default: {defaults.EPOCHS})",
+        default=None,
+        help=f"Number of training epochs (default: {defaults.EPOCHS}, or the recipe's)",
     )
     parser.add_argument(
         "--batch-size",
         "-b",
         type=int,
-        default=defaults.BATCH_SIZE,
-        help=f"Batch size (default: {defaults.BATCH_SIZE})",
+        default=None,
+        help=f"Batch size (default: {defaults.BATCH_SIZE}, or the recipe's)",
     )
     parser.add_argument(
         "--learning-rate",
         "--lr",
         type=float,
-        default=defaults.LEARNING_RATE,
-        help=f"Learning rate (default: {defaults.LEARNING_RATE})",
+        default=None,
+        help=f"Learning rate (default: {defaults.LEARNING_RATE}, or the recipe's)",
     )
     parser.add_argument(
         "--val-split",
@@ -544,7 +689,7 @@ def add_parser(subparsers: Any) -> Any:
     parser.add_argument(
         "--early-stopping-patience",
         type=int,
-        default=defaults.EARLY_STOPPING_PATIENCE,
+        default=None,
         help=f"Early stopping patience (default: {defaults.EARLY_STOPPING_PATIENCE})",
     )
     parser.add_argument(
@@ -584,8 +729,10 @@ def add_parser(subparsers: Any) -> Any:
         "--normalization",
         type=str,
         default=None,
-        choices=["zscore", "minmax", "none"],
-        help="Normalization method for ECG signals (default: the dataset's own, zscore)",
+        choices=["zscore", "minmax", "global", "none"],
+        help="Normalization method for ECG signals: 'zscore' and 'minmax' scale each lead "
+        "of each signal, 'global' uses one mean and standard deviation fitted on the "
+        "training partition (default: the dataset's own, zscore, or the recipe's)",
     )
     parser.add_argument(
         "--label-rule",
@@ -632,4 +779,5 @@ def _to_kwargs(args: Any) -> dict[str, Any]:
         "segment_duration": args.segment_duration,
         "label_rule": args.label_rule,
         "seeded_split": args.seeded_split,
+        "recipe": args.recipe,
     }

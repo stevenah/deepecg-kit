@@ -22,6 +22,19 @@ The long-term AF tasks (MIT-BIH AFDB, LTAFDB and Unified AF) are trained from
 `experiments-longterm.yaml` for the benchmark website and are not part of the analyses described
 here.
 
+## Reproduction of the PTB-XL benchmark
+
+The grid's shared configuration differs from the protocol of the PTB-XL benchmark (Strodthoff et
+al., 2021), so its PTB-XL scores are not the scores that benchmark publishes for the same
+architectures. To test the implementations rather than the configuration, the four architectures
+of the grid that correspond to models of that benchmark are trained once more, with seed 42, under its own
+protocol (`experiments-ptbxl-benchmark.yaml`, `--recipe ptbxl-benchmark`): 100 Hz input, one mean
+and standard deviation fitted on folds 1 to 8, random 2.5 s training crops, a one-cycle AdamW
+schedule over 50 epochs with the final epoch kept, and the maximum over 2.5 s windows at test time.
+Their macro AUROC on fold 10 is set beside the published values. These runs are kept in their own
+directory and enter no other analysis. One difference remains: the package reads PTB-XL 1.0.3, which
+holds 38 records fewer than the version 1.0.1 the benchmark used.
+
 ## Order of the stages
 
 1. Obtaining the software and the datasets.

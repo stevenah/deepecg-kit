@@ -17,19 +17,23 @@ python examples/train_advanced.py --weights runs/my-run/checkpoints/my-checkpoin
 ### Loading Existing Weights
 
 ```python
-import torch
+from deepecgkit import build_model
+from deepecgkit.models.pretrained import load_matching_weights
+from deepecgkit.utils.checkpoints import load_checkpoint_file
 
-model_class = get_model("kanres")
-model = model_class(input_channels=input_channels, output_size=num_classes)
+model = build_model("kanres", input_channels, num_classes)
 
-loaded = torch.load("runs/my-run/checkpoints/my-checkpoint.pt", map_location="cpu", weights_only=True)
-model.load_state_dict(loaded.get("model_state_dict", loaded), strict=False)
+loaded = load_checkpoint_file("runs/my-run/checkpoints/my-checkpoint.pt")
+report = load_matching_weights(model, loaded)
+print(report["mismatched"])  # the weights left as initialised, such as a resized head
 ```
 
-`--weights` takes a weights file or a checkpoint from an earlier run. `strict=False` allows
-loading weights even when the classifier head dimensions differ (e.g., different number of
-output classes). A registered weight name works too, once weights have been published or
-registered with `register_weights()`; none ship with the package yet.
+`--weights` takes a weights file, a checkpoint, or the run directory of an earlier run.
+`load_matching_weights` loads every tensor whose shape fits and leaves the rest as initialised,
+so a model trained on another number of classes still lends its backbone; a plain
+`load_state_dict` would refuse the resized head, even with `strict=False`. A registered weight
+name works too, once weights have been published or registered with `register_weights()`; none
+ship with the package yet.
 
 ### Freezing the Backbone
 
