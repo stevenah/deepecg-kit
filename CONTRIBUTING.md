@@ -73,9 +73,17 @@ make release-patch    # or release-minor / release-major
 
 This runs `make check`, bumps the version in `pyproject.toml`, refreshes
 `uv.lock`, commits, tags `vX.Y.Z`, and pushes. The `release.yml` workflow then
-creates the GitHub release and publishes to PyPI via trusted publishing
-(one-time setup: a PyPI trusted publisher for this repo/workflow and a `pypi`
-environment in the GitHub repository settings).
+creates the GitHub release.
+
+A tag does not publish to PyPI. Publish a released tag by hand when it is ready:
+
+```bash
+gh workflow run release.yml --ref vX.Y.Z
+```
+
+This publishes via trusted publishing (one-time setup: a PyPI trusted publisher
+for this repo/workflow and a `pypi` environment in the GitHub repository
+settings).
 
 Record notable changes in `CHANGELOG.md` under `[Unreleased]` as you go; the
 release commit moves them under the new version heading.
