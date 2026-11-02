@@ -38,9 +38,10 @@ order. On PTB-XL 1.0.3 the partitions hold 17,084, 2,146 and 2,158 records.
 patient-grouped split with `val_split` and `test_split`. From the command line:
 
 ```bash
-deepecg train -m resnet -d ptbxl --multi-label                  # recommended folds, benchmark labels
-deepecg train -m resnet -d ptbxl --multi-label --seeded-split   # seeded 70/20/10 split by patient
-deepecg train -m resnet -d ptbxl --multi-label --label-rule likelihood
+deepecg train -m resnet -d ptbxl                  # multi-label, recommended folds, benchmark labels
+deepecg train -m resnet -d ptbxl --seeded-split   # seeded 70/20/10 split by patient
+deepecg train -m resnet -d ptbxl --label-rule likelihood
+deepecg train -m resnet -d ptbxl --no-multi-label # one label per record, the primary diagnosis
 ```
 
 Checkpoints record both options (see [Checkpointing](training.md#checkpointing)), and the commands

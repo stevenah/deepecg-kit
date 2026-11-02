@@ -61,13 +61,13 @@ bump-patch bump-minor bump-major: bump-%: ## Bump version and refresh lockfile
 	sed -i.bak "s/^version = \"$$V\"/version = \"$$NEW\"/" pyproject.toml && rm pyproject.toml.bak && \
 	uv lock && echo "$$V -> $$NEW"
 
-release-patch release-minor release-major: release-%: check bump-% ## Tag and push a release (CI publishes)
+release-patch release-minor release-major: release-%: check bump-% ## Tag and push a release (CI creates the GitHub release)
 	@V=$$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2) && \
 	git add pyproject.toml uv.lock && \
 	git commit -m "Release v$$V" && \
 	git tag -a "v$$V" -m "Release v$$V" && \
 	git push && git push --tags && \
-	echo "Released v$$V — release workflow publishes the GitHub release and PyPI package"
+	echo "Released v$$V — to publish it to PyPI: gh workflow run release.yml --ref v$$V"
 
 docs-serve: ## Serve docs locally with live reload
 	uv run --group docs mkdocs serve

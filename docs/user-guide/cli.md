@@ -70,7 +70,7 @@ deepecg train -m kanres -d af-classification --epochs 50
 | `--sampling-rate` | the dataset's own | Sampling rate in Hz the signals are resampled to |
 | `--segment-duration` | the dataset's own (10) | Length of each training segment in seconds |
 | `--normalization` | the dataset's own (`zscore`), or the recipe's | Normalization method: `zscore` or `minmax` per signal, `global` (one mean and standard deviation fitted on the training partition), `none` |
-| `--multi-label` | false | Multi-label classification with BCE loss (`ptbxl`) |
+| `--multi-label`, `--no-multi-label` | the dataset's own (`ptbxl`: multi-label) | Multi-label classification with BCE loss, or one label per record (`ptbxl`) |
 | `--binary-classification` | false | Collapse labels to AF vs Non-AF (`mitbih-afdb`, `ltafdb`, `unified-af`) |
 | `--label-rule` | `benchmark` | How PTB-XL labels are derived: `benchmark` (every statement counts) or `likelihood` (likelihood at least 50) |
 | `--seeded-split` | false | Split PTB-XL by `--seed`, `--val-split` and `--test-split` instead of the recommended folds |

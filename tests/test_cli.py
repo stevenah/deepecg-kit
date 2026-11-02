@@ -683,6 +683,7 @@ class TestCLIParserDefaults:
             main(["train", "-m", "kanres", "-d", "af-classification"])
 
             call_kwargs = mock_train.call_args[1]
+            assert call_kwargs["multi_label"] is None
             # Left unset so that a recipe can fill them; train() then applies 50, 32, 1e-3, 10.
             assert call_kwargs["epochs"] is None
             assert call_kwargs["batch_size"] is None
@@ -1789,6 +1790,37 @@ class TestDatasetOptionValidation:
         error = capsys.readouterr().err
         assert f"{expected} does not apply to the '{dataset}' dataset" in error
         assert not (temp_dir / "runs").exists()
+
+    @pytest.mark.parametrize(
+        ("flags", "expected"),
+        [([], True), (["--multi-label"], True), (["--no-multi-label"], False)],
+    )
+    def test_ptbxl_is_multi_label_unless_told_otherwise(
+        self, flags, expected, temp_dir, monkeypatch
+    ):
+        built = {}
+
+        def stop_before_loading(_name, **kwargs):
+            built.update(kwargs["dataset_kwargs"])
+            raise RuntimeError("stop")
+
+        monkeypatch.chdir(temp_dir)
+        monkeypatch.setattr(
+            sys.modules["deepecgkit.cli.commands.train"],
+            "build_data_module",
+            stop_before_loading,
+        )
+        main(["train", "-m", "simple-cnn", "-d", "ptbxl", *flags])
+
+        assert built["multi_label"] is expected
+
+    def test_a_recipe_refuses_no_multi_label(self, temp_dir, capsys, monkeypatch):
+        monkeypatch.chdir(temp_dir)
+        arguments = "train -m fcn-wang -d ptbxl --recipe ptbxl-benchmark --no-multi-label"
+        result = main(arguments.split())
+
+        assert result == 1
+        assert "--no-multi-label does not apply" in capsys.readouterr().err
 
     def test_every_dataset_accepts_a_sampling_rate(self):
         from deepecgkit.cli._common import dataset_kwargs_for

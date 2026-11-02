@@ -95,6 +95,9 @@ class ResNetRibeiro(ECGModelBase):
     downsampling by 4, with kernel size 16, "same" padding as in the original
     Keras model, Keras batch-normalization settings, and dropout of 0.8, the
     rate of the released model. Convolutions use He-normal initialization.
+    The weights on Zenodo store a Keras Dropout rate of 0.8, as the
+    tensorflow-v1 code gives; the repository's later master branch reads the
+    same 0.8 as a keep probability, which would be a rate of 0.2.
 
     The original flattens a 16-step feature map, which a 4096-sample input
     produces; here the final feature map is averaged over time to 16 steps

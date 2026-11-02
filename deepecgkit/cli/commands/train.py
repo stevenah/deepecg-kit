@@ -1,5 +1,6 @@
 """Train command."""
 
+import argparse
 import json
 import traceback
 from datetime import datetime
@@ -15,6 +16,7 @@ from deepecgkit.cli._common import (
     build_data_module,
     check_dataset_options,
     check_input_length,
+    dataset_default,
     dataset_kwargs_for,
     describe_data,
     report_data_error,
@@ -191,7 +193,7 @@ def train(
     force_download: bool = False,
     early_stopping_patience: int | None = None,
     seed: int = defaults.SEED,
-    multi_label: bool = False,
+    multi_label: bool | None = None,
     sampling_rate: int | None = None,
     binary_classification: bool = False,
     normalization: str | None = None,
@@ -205,7 +207,9 @@ def train(
 
     Epochs, batch size, learning rate, sampling rate and normalisation left as
     None take the recipe's values when a recipe is named, and otherwise the
-    package defaults (deepecgkit.cli.defaults) and the dataset's own.
+    package defaults (deepecgkit.cli.defaults) and the dataset's own. So does
+    multi_label: PTB-XL, whose constructor defaults to it, trains multi-label
+    unless told otherwise.
     """
     logger = logger or CLILogger()
 
@@ -226,12 +230,19 @@ def train(
                 f"not '{dataset_name}'."
             )
             return 1
+        if multi_label is False and chosen.multi_label:
+            logger.error(
+                f"--no-multi-label does not apply: the {chosen.name} recipe is multi-label."
+            )
+            return 1
         multi_label = multi_label or chosen.multi_label
         if early_stopping_patience is not None and chosen.keep == "last":
             logger.warning(
                 f"--early-stopping-patience has no effect: the {chosen.name} recipe trains "
                 f"every epoch and keeps the last."
             )
+    if multi_label is None:
+        multi_label = bool(dataset_default(dataset_name, "multi_label"))
     settings, deviations = _resolve_recipe(
         chosen,
         model_name,
@@ -700,9 +711,11 @@ def add_parser(subparsers: Any) -> Any:
     )
     parser.add_argument(
         "--multi-label",
-        action="store_true",
-        default=False,
-        help="Multi-label classification with BCE loss, for datasets that support it (ptbxl)",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Multi-label classification with BCE loss, or one label per record with "
+        "--no-multi-label, for datasets that support it (default: the dataset's own, "
+        "multi-label for ptbxl)",
     )
     parser.add_argument(
         "--sampling-rate",

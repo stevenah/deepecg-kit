@@ -199,6 +199,23 @@ def dataset_accepts(dataset_name: str, option: str) -> bool:
     return option in inspect.signature(_get_dataset_registry()[dataset_name]).parameters
 
 
+def dataset_default(dataset_name: str, option: str) -> Any:
+    """Read a dataset constructor's default for an option.
+
+    Args:
+        dataset_name: Registered dataset name
+        option: Constructor parameter name, such as "multi_label"
+
+    Returns:
+        The default, or None when the dataset does not take the option or
+        declares no default for it.
+    """
+    parameter = inspect.signature(_get_dataset_registry()[dataset_name]).parameters.get(option)
+    if parameter is None or parameter.default is inspect.Parameter.empty:
+        return None
+    return parameter.default
+
+
 def check_dataset_options(
     dataset_name: str,
     logger: CLILogger,
