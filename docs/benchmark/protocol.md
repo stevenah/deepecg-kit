@@ -10,8 +10,8 @@ description given here.
 ## The grid
 
 The grid trains every architecture of the benchmark set on two tasks, PTB-XL and PhysioNet 2017,
-each pairing once with seed 42, under one shared configuration; with the current 24 architectures
-that is 48 runs. Every run uses the same optimiser, learning rate, batch size, epoch cap,
+each pairing once with seed 42, under one shared configuration; with the current 27 architectures
+that is 54 runs. Every run uses the same optimiser, learning rate, batch size, epoch cap,
 early-stopping patience and input sampling rate (500 Hz). Only the labelling mode follows the task:
 multi-label for PTB-XL and multi-class for PhysioNet 2017. PTB-XL is split along its recommended
 folds and labelled with the rule of the PTB-XL benchmark; PhysioNet 2017 is split by recording with
@@ -32,8 +32,9 @@ protocol (`experiments-ptbxl-benchmark.yaml`, `--recipe ptbxl-benchmark`): 100 H
 and standard deviation fitted on folds 1 to 8, random 2.5 s training crops, a one-cycle AdamW
 schedule over 50 epochs with the final epoch kept, and the maximum over 2.5 s windows at test time.
 Their macro AUROC on fold 10 is set beside the published values. These runs are kept in their own
-directory and enter no other analysis. One difference remains: the package reads PTB-XL 1.0.3, which
-holds 38 records fewer than the version 1.0.1 the benchmark used.
+directory and enter no other analysis. Three differences remain: the package reads PTB-XL 1.0.3, which
+holds 38 records fewer than the version 1.0.1 the benchmark used; the classification heads are those of
+the package's implementations; and the last incomplete training batch is kept rather than dropped.
 
 ## Order of the stages
 
@@ -65,8 +66,7 @@ stage only.
 ## Readiness checks and provenance capture
 
 Two checks precede the grid. First, each architecture–task pairing is built and fed a single batch
-at the input shape its task uses (`scripts/preflight_experiments.py`), which catches shape and
-head mismatches before any training time is spent. Second, the two architectures that attend over
+at the input shape its task uses, which catches shape and head mismatches before any training time is spent. Second, the two architectures that attend over
 all 5000 samples of an input are each trained for a single epoch, one on a 12-lead task and one on
 a single-lead task, to confirm that they fit in memory and complete an epoch.
 
@@ -111,18 +111,21 @@ definitions of the stored test metrics, and the 2.5th and 97.5th percentiles for
 For every task, the architecture with the highest F1 is the reference, and the difference of every
 other architecture from it is bootstrapped on the same resampled recordings. These intervals
 describe the test set; the variation between training runs is not measured, because each pairing
-is trained once.
+is trained once. On PTB-XL, whose test fold holds 2,158 records of 1,877 patients, resampling
+patients instead of records changed the half-widths of the F1 intervals by at most 8% and those of
+the AUROC intervals by at most 10%, and the paired F1 intervals of the same architectures included
+zero.
 
 ## Representation probing
 
 Every trained encoder is probed on its own task (`deepecg probe --in-domain`). The dataset is
-rebuilt from the checkpoint with the preprocessing, leads, labels and split of the training run,
+rebuilt from the checkpoint and its run metadata with the preprocessing, leads, labels and split of the training run,
 and the rebuilt partition sizes are checked against those recorded. A linear probe (embeddings
 standardised with statistics of the training partition alone, L2-regularised logistic regression
 with inverse regularisation strength 1, at most 5000 solver iterations) is fitted on the
-penultimate-layer embeddings of the training partition and scored as macro AUROC on the test
-partition. An untrained encoder of the same architecture, built under seed 42, is probed
-identically on the same split. Whether each fit converged is recorded with its result. The probe
+embeddings of the training partition and scored as macro AUROC on the test partition. An untrained
+encoder of the same architecture, built under seed 42, is probed identically on the same split, and
+its batch-normalisation layers keep their initial running statistics. Whether each fit converged is recorded with its result. The probe
 fits run with the BLAS and OpenMP libraries limited to four threads, which made them several times
 faster beside other jobs.
 
@@ -134,8 +137,8 @@ package but is not part of this protocol.
 For each task, 64 test inputs (whole records for PTB-XL, 10-second windows for PhysioNet 2017) are
 drawn once with seed 42, stratified by reference label (for PTB-XL, by the first positive
 superclass), from the test partition of the ResNet1D run, which every architecture of the task
-shares. The draw is made by a script that rebuilds the partition from the checkpoint and verifies
-it against the recorded one. Every architecture is explained on these inputs with three methods
+shares. The draw rebuilds the partition from the checkpoint and verifies it against the recorded
+one. Every architecture is explained on these inputs with three methods
 (saliency, integrated gradients with 64 steps, and occlusion with a 100-sample window advanced in
 steps of 50 samples), using the checkpoint with the lowest validation loss. The explained class is
 fixed rather than taken from the prediction: AF for PhysioNet 2017, and each PTB-XL superclass in
@@ -188,13 +191,8 @@ of these is part of its protocol.
 
 Each figure is drawn by its own plotting code and reads only the outputs named above. No plotting
 code writes into a working copy of the repository, and none reuses the framework's own table
-output, whose captions and sort order follow the framework and not the article. The plotting code
-is part of the replication package deposited with the results.
+output, whose captions and sort order follow the framework and not the article.
 
-## Open items
+## Release
 
-These are recorded when the grid is released and are not yet filled in:
-
-- the release tag of the software and the commit from which the grid was run;
-- the archive location of the downloaded datasets or of their checksums;
-- the commit that produced each figure.
+This protocol describes DeepECG-Kit version 1.0.0, tagged `v1.0.0` in the public repository.
